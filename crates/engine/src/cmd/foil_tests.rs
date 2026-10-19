@@ -115,3 +115,19 @@ fn loft_through_coplanar_sections_is_refused() {
     assert!(e.contains("same plane"), "{e}");
     assert!(s.model.state().bodies.is_empty());
 }
+
+#[test]
+fn foil_wing_station_sweep_drop_and_twist_move_the_sections() {
+    let mut s = Session::default();
+    let p = json!({"span": 800, "root_chord": 100, "tip_chord": 50, "mirror": false, "x_offset": 500, "z_offset": -20, "twist": -1,
+        "stations": [{"fraction": 0}, {"fraction": 1, "sweep": 40, "drop": 30, "twist": -2}]});
+    let r = run(&mut s, "foil.wing", p);
+    let tip = &r["stations"][1];
+    assert_eq!(tip["pivot"], json!([540.0, -50.0]));
+    let m = solidcraft_kernel::measure(&s.model.state().body("Wing").unwrap().body).unwrap();
+    // The root's leading edge is 25 mm ahead of its pivot at x 500 (turned 1° nose down); the tip 30 mm lower.
+    assert!((m.bbox.min.x - 475.0).abs() < 0.5 && (m.bbox.max.x - 577.5).abs() < 1.0, "{:?}", m.bbox);
+    assert!(m.bbox.min.z < -50.0 && m.bbox.min.z > -56.0, "{:?}", m.bbox);
+    assert!(volume(&s, "Wing") > 0.0);
+    assert!(s.execute("foil.wing", &json!({"span": 800, "root_chord": 100, "tip_chord": 50, "twist": 60})).is_err());
+}

@@ -16,9 +16,11 @@ use crate::{Result, Session};
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("foil.wing", "Foil Wing", wing).at("SOLID", "CREATE").icon("loft").enabled(not_in_sketch).params(
     "span: expr (tip to tip, mm; a parameter name keeps the station planes following it); \
      root_chord, tip_chord: mm (the chord at fraction 0 and 1, interpolated for a station without `chord`); \
-     stations?: [{fraction: 0…1 (of the half span, increasing), chord?: mm, camber?: % of chord, camber_pos?: % of chord, thickness?: % of chord}] \
+     stations?: [{fraction: 0…1 (of the half span, increasing), chord?: mm, camber?: % of chord, camber_pos?: % of chord, thickness?: % of chord, \
+     sweep?: mm the pivot moves aft at this station, drop?: mm it moves down, twist?: degrees nose up}] \
      (default: root and tip); camber?, camber_pos?, thickness?: the station defaults (3, 40, 12); \
-     te_thickness?: mm (default 0.6); sweep?: degrees the pivot line sweeps back (default 0); pivot?: chord fraction on the sweep line (default 0.25); \
+     te_thickness?: mm (default 0.6, at most 3 % of the chord); sweep?: degrees the pivot line sweeps back (default 0); pivot?: chord fraction on the sweep line (default 0.25); \
+     twist?: degrees nose up for every station (incidence); x_offset?, z_offset?: mm the whole wing moves (its root pivot is at the origin); \
      points?: per surface (default 50); mirror?: bool (default true: one body across XZ); name?, body_name?",
 )];
 
@@ -79,6 +81,22 @@ struct Station {
     camber: f64,
     camber_pos: f64,
     thickness: f64,
+    /// The pivot's shift aft and down at this station (mm) and the section's twist (radians, nose up).
+    sweep: f64,
+    drop: f64,
+    twist: f64,
+}
+
+/// A millimetre or degree value from `key`, or 0; within ±`limit`.
+fn shift(v: &Value, key: &str, limit: f64, cmd: &str, what: &str) -> Result<f64> {
+    let x = match v.get(key) {
+        None | Some(Value::Null) => 0.0,
+        Some(_) => num(v, key).ok_or_else(|| bad(cmd, format!("{what} `{key}` must be a number")))?,
+    };
+    if x.abs() > limit {
+        return Err(bad(cmd, format!("{what} `{key}` is out of range (within ±{limit})")));
+    }
+    Ok(x)
 }
 
 /// A percentage of the chord from `key`, or `default`; camber may be 0, the rest must be positive.
@@ -140,6 +158,9 @@ fn stations(p: &Value, cmd: &str, root: f64, tip: f64) -> Result<Vec<Station>> {
             camber: percent(st, "camber", camber, cmd, &what)?,
             camber_pos: percent(st, "camber_pos", camber_pos, cmd, &what)?,
             thickness: percent(st, "thickness", thickness, cmd, &what)?,
+            sweep: shift(st, "sweep", 1e4, cmd, &what)?,
+            drop: shift(st, "drop", 1e4, cmd, &what)?,
+            twist: shift(st, "twist", 45.0, cmd, &what)?.to_radians(),
         });
     }
     Ok(out)
@@ -175,6 +196,9 @@ fn wing(s: &mut Session, p: &Value) -> Result<Value> {
     if !(8..=200).contains(&n) {
         return Err(bad(cmd, "`points` must be 8…200 per surface"));
     }
+    let incidence = shift(p, "twist", 45.0, cmd, "the wing")?.to_radians();
+    let x_offset = shift(p, "x_offset", 1e5, cmd, "the wing")?;
+    let z_offset = shift(p, "z_offset", 1e5, cmd, "the wing")?;
     let mirror = bool_(p, "mirror").unwrap_or(true);
     let name = str_(p, "name").map(str::trim).filter(|t| !t.is_empty()).unwrap_or("Wing").to_string();
     let body = str_(p, "body_name").map(str::trim).filter(|t| !t.is_empty()).unwrap_or(&name).to_string();
@@ -199,15 +223,26 @@ fn wing(s: &mut Session, p: &Value) -> Result<Value> {
         let offset = if span_literal { format!("{}", y) } else { format!("{} * ({})", st.fraction / 2.0, span.as_str()) };
         let sketch_name = format!("{name} S{i}");
         let made = run(s, "sketch.create", json!({"plane": "XZ", "offset": offset, "flip": "x", "name": sketch_name}))?;
-        let x0 = slope * y - pivot * st.chord;
-        let pts = section_loop(st.chord, st.camber / 100.0, st.camber_pos / 100.0, st.thickness / 100.0, te, n);
+        // The station's pivot, and its section turned about it (nose up for a positive twist).
+        let (px, pz) = (x_offset + slope * y + st.sweep, z_offset - st.drop);
+        let x0 = px - pivot * st.chord;
+        // A trailing edge no thicker than 3 % of the chord, so a tip of a few millimetres keeps its shape.
+        let te_local = te.min(0.03 * st.chord);
+        let pts = section_loop(st.chord, st.camber / 100.0, st.camber_pos / 100.0, st.thickness / 100.0, te_local, n);
         areas.push(polygon_area(&pts));
-        let points: Vec<Value> = pts.iter().map(|q| json!([x0 + q[0], q[1]])).collect();
+        let (sin, cos) = (incidence + st.twist).sin_cos();
+        let points: Vec<Value> = pts
+            .iter()
+            .map(|q| {
+                let (u, v) = (q[0] - pivot * st.chord, q[1]);
+                json!([px + u * cos + v * sin, pz - u * sin + v * cos])
+            })
+            .collect();
         run(s, "sketch.spline.fit_point", json!({"points": points, "periodic": true}))?;
         run(s, "sketch.finish", json!({}))?;
         sketches.push(made.get("sketch").cloned().unwrap_or(Value::Null));
         report.push(
-            json!({"sketch": made.get("sketch"), "name": made.get("name"), "y": y, "chord": st.chord, "leading_edge_x": x0, "area_mm2": areas[i]}),
+            json!({"sketch": made.get("sketch"), "name": made.get("name"), "y": y, "chord": st.chord, "pivot": [px, pz], "leading_edge_x": x0, "area_mm2": areas[i]}),
         );
     }
     let sections: Vec<Value> = sketches.iter().map(|id| json!({"sketch": id})).collect();

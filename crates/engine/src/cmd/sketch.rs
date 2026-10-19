@@ -29,7 +29,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.create", "Create Sketch", create_sketch)
         .at("SOLID", "CREATE")
         .icon("sketch")
-        .params("plane: XY|XZ|YZ | construction plane name or id | {origin?: [x,y,z] numbers in mm, default [0,0,0] (not an expression), x_dir, y_dir} | {face: [world x,y,z], body?: exact world body, index?: face index, path?: complete occurrence ids, fixed?: bool}; new face attachments require a unique certified source (a flat face of a sheet metal body attaches to its panel instead, in the flat pattern's coordinates), fixed:true explicitly freezes the selected plane; offset?: expr, flip?: bool | \"x\" | \"y\" (not on a face: sketch the plane from its other side, so the normal and the default extrude direction are reversed; a half turn about the plane's own x or y axis, true picks the one keeping the sketch's y axis upward; offset still moves along the unflipped normal), project_edges?: bool, name?"),
+        .params("plane: XY|XZ|YZ | construction plane name or id | {origin?: [x,y,z] in mm, numbers or length expressions (an expression makes the plane follow its parameters), default [0,0,0], x_dir, y_dir} | {face: [world x,y,z], body?: exact world body, index?: face index, path?: complete occurrence ids, fixed?: bool}; new face attachments require a unique certified source (a flat face of a sheet metal body attaches to its panel instead, in the flat pattern's coordinates), fixed:true explicitly freezes the selected plane; offset?: expr, flip?: bool | \"x\" | \"y\" (not on a face: sketch the plane from its other side, so the normal and the default extrude direction are reversed; a half turn about the plane's own x or y axis, true picks the one keeping the sketch's y axis upward; offset still moves along the unflipped normal), project_edges?: bool, name?"),
     CommandSpec::new("sketch.edit", "Edit Sketch", edit_sketch).noundo().icon("sketch").params("sketch: id or name"),
     CommandSpec::new("sketch.finish", "Finish Sketch", finish_sketch).at("SKETCH", "FINISH SKETCH").icon("finish").enabled(in_sketch).noundo(),
     CommandSpec::new("sketch.line", "Line", draw_line)
@@ -626,16 +626,24 @@ pub(super) fn plane_ref(s: &Session, p: &Value, cmd: &str) -> Result<PlaneRef> {
             if o.contains_key("face") {
                 face::capture(s, v, cmd)?
             } else {
-                // A missing origin is the world origin; one that is given but is not three numbers
-                // (an expression, a number with a unit) is an error, not a silent [0, 0, 0].
+                // The origin's coordinates are numbers or length expressions. An expression is
+                // kept (`Placed`, as `solid.mirror` keeps it), so the plane follows its parameters.
+                // A missing or null origin is the world origin; one that is neither three numbers
+                // nor three length expressions is refused (#3248), never read as 0.
                 let origin = match v.get("origin") {
-                    None | Some(Value::Null) => Vec3::ZERO,
-                    Some(o) => vec3(o)
-                        .ok_or_else(|| bad(cmd, "plane `origin` must be three numbers [x, y, z] in mm (expressions are not evaluated here)"))?,
+                    None | Some(Value::Null) => solidcraft_doc::point_expr(Vec3::ZERO),
+                    Some(_) => super::features::point_param(s, v, "origin", cmd)?.unwrap_or_else(|| solidcraft_doc::point_expr(Vec3::ZERO)),
                 };
+                let at = |e: &solidcraft_doc::Expr| s.doc.eval(e, Kind::Length).unwrap_or(0.0);
+                let here = Vec3::new(at(&origin[0]), at(&origin[1]), at(&origin[2]));
                 let x = v.get("x_dir").and_then(vec3).ok_or_else(|| bad(cmd, "plane needs x_dir"))?;
                 let y = v.get("y_dir").and_then(vec3).ok_or_else(|| bad(cmd, "plane needs y_dir"))?;
-                PlaneRef::Custom { plane: Plane::new(origin, x, y).ok_or_else(|| bad(cmd, "degenerate plane"))? }
+                let plane = Plane::new(here, x, y).ok_or_else(|| bad(cmd, "degenerate plane"))?;
+                if origin.iter().all(|e| solidcraft_doc::expr::is_literal(e)) {
+                    PlaneRef::Custom { plane }
+                } else {
+                    PlaneRef::Placed { origin, x_dir: plane.x, y_dir: plane.y }
+                }
             }
         }
         _ => return Err(bad(cmd, "`plane` must be XY, XZ, YZ, a construction plane name or id, or an object")),

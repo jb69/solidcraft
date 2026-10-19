@@ -694,3 +694,23 @@ fn flipped_offset_sketch_plane_follows_its_parameter() {
     run(&mut s, "parameters.change", json!({"name": "d", "expression": "50 mm"}));
     assert!((volume(&mut s) - 400.0 * 50.0).abs() < 1e-6, "{}", volume(&mut s));
 }
+
+/// A sketch plane whose origin names a parameter follows it (the origin used to be read as 0
+/// without a word, so a loft between two such planes collapsed).
+#[test]
+fn sketch_plane_origin_expressions_follow_their_parameter() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "h", "expression": "30 mm"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Base"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-10, -10], "p1": [10, 10]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, "h"], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Top"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-10, -10], "p1": [10, 10]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.loft", json!({"sections": [{"sketch": "Base"}, {"sketch": "Top"}]}));
+    assert!((volume(&mut s) - 400.0 * 30.0).abs() < 1e-6);
+    run(&mut s, "parameters.change", json!({"name": "h", "expression": "50 mm"}));
+    assert!((volume(&mut s) - 400.0 * 50.0).abs() < 1e-6);
+    // An expression that does not evaluate is refused, not read as 0.
+    assert!(s.execute("sketch.create", &json!({"plane": {"origin": [0, 0, "nope"], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}})).is_err());
+}

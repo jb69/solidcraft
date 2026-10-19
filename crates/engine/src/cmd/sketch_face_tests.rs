@@ -699,15 +699,17 @@ fn a_face_next_to_plane_is_refused_not_ignored() {
     assert_eq!(r["attachment"], "exact_face", "{r}");
 }
 
-/// #3248: a custom plane's `origin` that is present but not three numbers (an expression such as
-/// "w/2", a number with a unit, too few values) became [0, 0, 0] without a word. It is refused,
-/// like a bad `x_dir`, and nothing is added. A missing origin is still the world origin.
+/// #3248: a custom plane's `origin` that is present but is neither three numbers nor three length
+/// expressions (too few values, a bare string, a null coordinate) became [0, 0, 0] without a word. It
+/// is refused, like a bad `x_dir`, and nothing is added. Length expressions ("w/2", "20 mm") are
+/// evaluated instead (see `sketch_plane_origin_expressions_follow_their_parameter`). A missing origin
+/// is still the world origin.
 #[test]
 fn a_custom_plane_origin_that_is_not_numbers_is_refused_not_zeroed() {
     let mut s = Session::default();
     run(&mut s, "parameters.add", json!({"name": "w", "expression": "40 mm"}));
     let features = s.doc.features.len();
-    for origin in [json!(["w/2", 0, 0]), json!(["20 mm", 0, 0]), json!([20, 0]), json!("w"), json!([20, 0, null])] {
+    for origin in [json!([20, 0]), json!("w"), json!([20, 0, null]), json!(["nope", 0, 0])] {
         let p = json!({"plane": {"origin": origin, "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}});
         let e = s.execute("sketch.create", &p).unwrap_err().to_string();
         assert!(e.contains("origin"), "{p}: {e}");
@@ -722,4 +724,6 @@ fn a_custom_plane_origin_that_is_not_numbers_is_refused_not_zeroed() {
     };
     assert_eq!(origin_of(&mut s, json!({"origin": [20, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]})), json!([20.0, 0.0, 0.0]));
     assert_eq!(origin_of(&mut s, json!({"x_dir": [0, 1, 0], "y_dir": [0, 0, 1]})), json!([0.0, 0.0, 0.0]));
+    assert_eq!(origin_of(&mut s, json!({"origin": ["w/2", 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]})), json!([20.0, 0.0, 0.0]));
+    assert_eq!(origin_of(&mut s, json!({"origin": ["20 mm", 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]})), json!([20.0, 0.0, 0.0]));
 }

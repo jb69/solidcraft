@@ -333,3 +333,13 @@ fn foil_features_round_trip_through_a_saved_design() {
     assert!(t.model.state().body("Stabiliser").is_some());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn foil_commands_refuse_parameters_they_do_not_take() {
+    let mut s = Session::default();
+    let e = s.execute("foil.wing_feature", &json!({"value": {"targetArea": 900}})).unwrap_err().to_string();
+    assert!(e.contains("unknown parameter `value`"), "{e}");
+    assert!(s.doc.features.is_empty());
+    let e = s.execute("foil.fields", &json!({"tool": "wing", "distance": 3})).unwrap_err().to_string();
+    assert!(e.contains("unknown parameter `distance`"), "{e}");
+}

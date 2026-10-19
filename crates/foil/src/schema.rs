@@ -339,20 +339,7 @@ pub fn not_built(tool: Tool, f: &Field) -> bool {
         Tool::Stabiliser => (matches!(f.group, "Mount pad" | "Mount bolts" | "Section polar") && f.key != "invertSection") || f.key == "logInputs",
         Tool::Propeller => {
             matches!(f.group, "Folding" | "Operating check")
-                || matches!(
-                    f.key,
-                    "hubType"
-                        | "rootFillet"
-                        | "hubCore"
-                        | "coreSkin"
-                        | "pocketDia"
-                        | "pocketFloor"
-                        | "dishAngle"
-                        | "keepSections"
-                        | "debugPrint"
-                        | "sectionsOnly"
-                )
-                || (f.group == "Mount" && f.key != "mountType" && f.key != "boreDia")
+                || matches!(f.key, "rootFillet" | "hubCore" | "coreSkin" | "keepSections" | "debugPrint" | "sectionsOnly")
         }
     }
 }

@@ -13,7 +13,7 @@ use super::{CommandSpec, not_in_sketch};
 use crate::params::{bad, bool_, expr, num, str_};
 use crate::{EngineError, Result, Session};
 
-pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("foil.wing", "Foil Wing", wing).at("SOLID", "CREATE").icon("loft").enabled(not_in_sketch).params(
+pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("foil.wing", "Foil Wing from Stations", wing).at("SOLID", "CREATE").icon("loft").enabled(not_in_sketch).params(
     "span: expr (tip to tip, mm; a parameter name keeps the station planes following it); \
      root_chord, tip_chord: mm (the chord at fraction 0 and 1, interpolated for a station without `chord`); \
      stations?: [{fraction: 0…1 (of the half span, increasing), chord?: mm, camber?: % of chord, camber_pos?: % of chord, thickness?: % of chord, \
@@ -311,7 +311,19 @@ fn tool_of(name: &str) -> Option<Tool> {
     }
 }
 
+/// Refuse parameters a foil command does not take: a misspelt `values` would otherwise build the
+/// tool's defaults without a word.
+fn known_keys(p: &Value, cmd: &str, keys: &[&str]) -> Result<()> {
+    if let Some(m) = p.as_object()
+        && let Some(k) = m.keys().find(|k| !keys.contains(&k.as_str()))
+    {
+        return Err(bad(cmd, format!("unknown parameter `{k}` (takes {})", keys.join(", "))));
+    }
+    Ok(())
+}
+
 fn params_from(tool: Tool, p: &Value, cmd: &str) -> Result<FoilParams> {
+    known_keys(p, cmd, &["values", "name", "body_name", "body_names", "operation", "targets", "participants"])?;
     let mut fp = FoilParams::defaults(tool);
     match p.get("values") {
         None | Some(Value::Null) => {}
@@ -389,6 +401,7 @@ fn foil_feature(s: &Session, p: &Value, cmd: &str) -> Result<(u64, FoilParams)> 
 
 fn set_values(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "foil.set";
+    known_keys(p, cmd, &["feature", "values"])?;
     let (id, mut values) = foil_feature(s, p, cmd)?;
     let Some(Value::Object(m)) = p.get("values") else { return Err(bad(cmd, format!("`values` must be an object of fields; {VALUES_DOC}"))) };
     for (k, v) in m {
@@ -414,6 +427,7 @@ fn set_values(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn fields(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "foil.fields";
+    known_keys(p, cmd, &["tool", "feature"])?;
     let (tool, current) = if p.get("feature").is_some() {
         let (id, values) = foil_feature(s, p, cmd)?;
         (values.tool, Some((id, values)))

@@ -796,7 +796,7 @@ impl Dialog {
             Kind::SketchModify(k) => return k.previews(),
             Kind::Plastic(k) => return k.previews(),
             Kind::Part(_) => return true,
-            // A propeller takes a minute to build: no preview of every keystroke.
+            // A plugin that takes many seconds to build says so: no preview of every keystroke.
             Kind::Plugin(k) => return k.previews(),
             _ => {}
         }

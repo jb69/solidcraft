@@ -1741,7 +1741,7 @@ fn bezier_chain(pieces: &[[Vec3; 4]]) -> Option<mt::BSplineCurve<mt::Point3>> {
 }
 
 /// A smooth loft through sections given as chains of cubic Béziers in 3D: a section needs no
-/// plane (a propeller blade's lies on a cylinder), only the first and the last, which are the
+/// plane (it may be wrapped on a cylinder), only the first and the last, which are the
 /// caps. Every section has the same number of edges and each edge the same number of pieces;
 /// each edge becomes one face through all the sections. The sections must run the same way
 /// round. Refused: fewer than 3 or more than [`MAX_BEZIER_LOFT_SECTIONS`] sections, sections
@@ -1781,7 +1781,8 @@ pub fn loft_beziers(sections: &[BezierSection]) -> Result<Body> {
         }
         let numbers: Vec<Vec<Vec<usize>>> = sections.iter().map(|s| (0..s.len()).map(|i| vec![i]).collect()).collect();
         // Across the sections by how far their pieces' joints move on average: a section's
-        // few edge corners (a foil's trailing edge) say little about how far the whole moved.
+        // few edge corners (two, for a profile closed by a short straight edge) say little about
+        // how far the whole moved.
         let joints = |s: &BezierSection| -> Vec<Vec3> { s.iter().flatten().map(|b| b[0]).collect() };
         let mut along = vec![0.0];
         for w in sections.windows(2) {

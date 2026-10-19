@@ -97,8 +97,6 @@ pub(crate) fn icon_of(k: &FeatureKind) -> &'static str {
         FeatureKind::Torus { .. } => "torus",
         FeatureKind::Plugin { display, .. } => plugin_icon(&display.icon_id),
         FeatureKind::LoftPoints { .. } => "loft",
-        FeatureKind::FoilWing { .. } | FeatureKind::FoilStabiliser { .. } => "loft",
-        FeatureKind::Propeller { .. } => "revolve",
         FeatureKind::Combine { .. } => "combine",
         FeatureKind::Pattern { pattern: solidcraft_engine::doc::PatternKind::Rectangular { .. }, .. } => "pattern_rect",
         FeatureKind::Pattern { pattern: solidcraft_engine::doc::PatternKind::Path { .. }, .. } => "pattern_path",

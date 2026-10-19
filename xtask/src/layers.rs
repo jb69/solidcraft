@@ -59,6 +59,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
+    // this fork's foil and propeller plugins (on the plugin contract; their tests run the engine)
+    ("plugin-foil", Class::Exempt),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).

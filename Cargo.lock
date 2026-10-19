@@ -4100,6 +4100,7 @@ dependencies = [
  "serde_json",
  "solidcraft-3dx-client",
  "solidcraft-engine",
+ "solidcraft-plugin-foil",
  "solidcraft-space-mouse",
  "solidcraft-ui-egui",
  "ureq",
@@ -4120,6 +4121,7 @@ dependencies = [
  "solidcraft-engine",
  "solidcraft-gpu",
  "solidcraft-mcp",
+ "solidcraft-plugin-foil",
 ]
 
 [[package]]
@@ -4140,7 +4142,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solidcraft-derive",
- "solidcraft-foil",
  "solidcraft-geom",
  "solidcraft-kernel",
  "solidcraft-plugin",
@@ -4167,10 +4168,6 @@ dependencies = [
  "thiserror 2.0.21",
  "web-time",
 ]
-
-[[package]]
-name = "solidcraft-foil"
-version = "0.16.2"
 
 [[package]]
 name = "solidcraft-geom"
@@ -4253,6 +4250,16 @@ version = "0.16.2"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "solidcraft-plugin-foil"
+version = "0.16.2"
+dependencies = [
+ "serde_json",
+ "solidcraft-engine",
+ "solidcraft-kernel",
+ "solidcraft-plugin",
 ]
 
 [[package]]

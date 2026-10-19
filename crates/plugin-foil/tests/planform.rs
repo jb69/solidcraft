@@ -1,7 +1,7 @@
 //! The planform laws against the Python port of the same FeatureScript (dialog_to_stations.py)
 //! and the FeatureScript's own numbers.
 
-use solidcraft_foil::{Tool, Val, Values, wing};
+use solidcraft_plugin_foil::{Tool, Val, Values, wing};
 
 fn set(v: &mut Values, kv: &[(&str, Val)]) {
     for (k, x) in kv {

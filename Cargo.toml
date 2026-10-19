@@ -26,7 +26,7 @@ solidcraft-ui-egui = { path = "crates/ui-egui" }
 solidcraft-space-mouse = { path = "crates/space-mouse" }
 solidcraft-mcp = { path = "crates/mcp" }
 solidcraft-derive = { path = "crates/derive" }
-solidcraft-foil = { path = "crates/foil" }
+solidcraft-plugin-foil = { path = "crates/plugin-foil" }
 solidcraft-plugin = { path = "crates/plugin" }
 solidcraft-3dx-client = { path = "crates/threedx-client" }
 

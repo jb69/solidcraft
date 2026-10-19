@@ -22,6 +22,8 @@ neg_cmp_op_on_partial_ord = "allow"
 
 [dependencies]
 solidcraft-engine = { workspace = true }
+# This fork's foil and propeller plugins.
+solidcraft-plugin-foil = { workspace = true }
 solidcraft-ui-egui = { workspace = true }
 solidcraft-space-mouse = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links"] }

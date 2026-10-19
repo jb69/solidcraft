@@ -3822,9 +3822,6 @@ fn feature_tools_with_constructor(
                 sections.0.iter().map(|s| s.iter().map(|e| e.iter().map(|p| Vec3::new(p[0], p[1], p[2])).collect()).collect()).collect();
             Ok(unnamed(vec![kernel::loft_points(&secs)?]))
         }
-        FeatureKind::FoilWing { .. } | FeatureKind::FoilStabiliser { .. } | FeatureKind::Propeller { .. } => {
-            Ok(unnamed(crate::foil::build(doc, vals, f)?.bodies))
-        }
         _ => Err(DocError::Invalid(format!("{} cannot be patterned or mirrored yet", f.name))),
     }
 }
@@ -4105,9 +4102,6 @@ fn feature_op(f: &Feature) -> (Operation, Vec<String>) {
         | FeatureKind::LoftPoints { operation, targets, .. }
         | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Coil { operation, targets, .. } => (*operation, crate::plain(targets)),
-        FeatureKind::FoilWing { operation, targets, .. }
-        | FeatureKind::FoilStabiliser { operation, targets, .. }
-        | FeatureKind::Propeller { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Plugin { operation, targets, .. } => (*operation, crate::plain(targets)),
         _ => (Operation::NewBody, Vec::new()),
     }
@@ -5299,15 +5293,6 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             }
             if let Some(p) = built.result.get("publish").filter(|p| !p.is_null()) {
                 st.plugin_vars.insert(plugin_id.clone(), p.to_string());
-            }
-            apply_op(st, f, built.bodies, *operation, &crate::plain(targets))
-        }
-        FeatureKind::FoilWing { operation, targets, .. }
-        | FeatureKind::FoilStabiliser { operation, targets, .. }
-        | FeatureKind::Propeller { operation, targets, .. } => {
-            let built = crate::foil::build(doc, vals, f)?;
-            if !built.warnings.is_empty() {
-                *warning = Some(built.warnings.join("; "));
             }
             apply_op(st, f, built.bodies, *operation, &crate::plain(targets))
         }

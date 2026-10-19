@@ -1,0 +1,17 @@
+[package]
+name = "solidcraft-plugin-foil"
+description = "Hydrofoil and propeller plugins for SolidCraft: the Onshape Foil design tool's Foil wing and Foil stabiliser and the B-Series Propeller, ported from their FeatureScript, as parametric plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+solidcraft-plugin = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+solidcraft-engine = { workspace = true }
+solidcraft-kernel = { workspace = true }

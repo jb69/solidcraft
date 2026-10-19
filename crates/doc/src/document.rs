@@ -675,35 +675,6 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<BodyName>,
     },
-    /// Foil wing, from the Onshape Foil design tool: every value of its dialog (see
-    /// `crate::foil`), rebuilt on each evaluation; a new body unless `operation` says otherwise.
-    FoilWing {
-        #[serde(deserialize_with = "crate::foil::read_wing")]
-        values: crate::foil::FoilParams,
-        #[serde(default)]
-        operation: Operation,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        targets: Vec<BodyName>,
-    },
-    /// Foil stabiliser, from the Onshape Foil design tool (its arm and height place it; linked,
-    /// it follows the last Foil wing above it).
-    FoilStabiliser {
-        #[serde(deserialize_with = "crate::foil::read_stab")]
-        values: crate::foil::FoilParams,
-        #[serde(default)]
-        operation: Operation,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        targets: Vec<BodyName>,
-    },
-    /// B-Series Propeller (Wageningen B-series blades on a hub), from the Onshape propeller tool.
-    Propeller {
-        #[serde(deserialize_with = "crate::foil::read_prop")]
-        values: crate::foil::FoilParams,
-        #[serde(default)]
-        operation: Operation,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        targets: Vec<BodyName>,
-    },
     Combine {
         target: BodyName,
         tools: Vec<BodyName>,
@@ -2141,9 +2112,6 @@ impl FeatureKind {
             FeatureKind::Sphere { .. } => "SphereFeature",
             FeatureKind::Torus { .. } => "TorusFeature",
             FeatureKind::Plugin { .. } => "PluginFeature",
-            FeatureKind::FoilWing { .. } => "FoilWingFeature",
-            FeatureKind::FoilStabiliser { .. } => "FoilStabiliserFeature",
-            FeatureKind::Propeller { .. } => "PropellerFeature",
             FeatureKind::Combine { .. } => "CombineFeature",
             FeatureKind::Pattern { pattern: PatternKind::Rectangular { .. }, .. } => "RectangularPatternFeature",
             FeatureKind::Pattern { pattern: PatternKind::Path { .. }, .. } => "PathPatternFeature",
@@ -2226,9 +2194,6 @@ impl FeatureKind {
             FeatureKind::Sphere { .. } => "Sphere",
             FeatureKind::Torus { .. } => "Torus",
             FeatureKind::Plugin { .. } => "Plugin",
-            FeatureKind::FoilWing { .. } => "FoilWing",
-            FeatureKind::FoilStabiliser { .. } => "FoilStabiliser",
-            FeatureKind::Propeller { .. } => "Propeller",
             FeatureKind::Combine { .. } => "Combine",
             FeatureKind::Pattern { pattern: PatternKind::Rectangular { .. }, .. } => "RectangularPattern",
             FeatureKind::Pattern { pattern: PatternKind::Path { .. }, .. } => "PathPattern",

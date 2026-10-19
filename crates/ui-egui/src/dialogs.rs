@@ -237,8 +237,6 @@ pub enum Kind {
         cs_angle: String,
         opts: HoleOpts,
     },
-    /// Foil wing, Foil stabiliser or B-Series Propeller: the Onshape feature's whole dialog.
-    Foil(crate::dialogs_foil::FoilDialog),
     /// A plugin's feature, its dialog drawn from the plugin's parameter schema.
     Plugin(Box<crate::dialogs_plugin::PluginDialog>),
     Primitive {
@@ -599,9 +597,6 @@ impl Dialog {
             "solid.move" => Dialog::new(crate::dialogs_move::kind(0), crate::dialogs_move::inputs(0)),
             "solid.hole" => Dialog::new(hole_defaults(), vec![SelInput::new("Face", HOLE_FACES, true)]),
             "plugin.add" => Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::PluginDialog::new(None)?)), vec![]),
-            "foil.wing_feature" | "foil.stabiliser_feature" | "foil.propeller_feature" => {
-                Dialog::new(Kind::Foil(crate::dialogs_foil::FoilDialog::new(crate::dialogs_foil::tool_of_command(id)?)), vec![])
-            }
             "solid.box" => Dialog::new(
                 Kind::Primitive {
                     cmd: "solid.box",
@@ -802,7 +797,6 @@ impl Dialog {
             Kind::Plastic(k) => return k.previews(),
             Kind::Part(_) => return true,
             // A propeller takes a minute to build: no preview of every keystroke.
-            Kind::Foil(k) => return k.tool != solidcraft_engine::doc::foil::Tool::Propeller,
             Kind::Plugin(k) => return k.previews(),
             _ => {}
         }
@@ -835,7 +829,6 @@ impl Dialog {
                 | Kind::Move { .. }
                 | Kind::Hole { .. }
                 | Kind::Primitive { .. }
-                | Kind::Foil(_)
                 | Kind::Plugin(_)
                 | Kind::Combine { .. }
                 | Kind::BoundaryFill { .. }
@@ -1484,7 +1477,6 @@ fn title(k: &Kind) -> &'static str {
             "solid.coil" => "COIL",
             _ => "TORUS",
         },
-        Kind::Foil(k) => crate::dialogs_foil::title(k.tool),
         Kind::Plugin(k) => intern_title(k.title()),
         Kind::Combine { .. } => "COMBINE",
         Kind::Params { .. } => "PARAMETERS",
@@ -2358,11 +2350,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Kind::Motion(k @ crate::dialogs_motion::Mo::Configurations { .. }) = &mut d.kind {
                 enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs);
             }
-            // The foil dialogs lay out their own groups (collapsible, as Onshape's are).
+            // A plugin's dialog lays out its own groups (collapsible, as its schema says).
             let editing = d.editing.map(|(id, _)| id);
-            if let Kind::Foil(k) = &mut d.kind {
-                enter |= crate::dialogs_foil::rows(app, ui, k, editing);
-            }
             if let Kind::Plugin(k) = &mut d.kind {
                 enter |= crate::dialogs_plugin::rows(app, ui, k, editing);
             }
@@ -2375,7 +2364,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 if matches!(&d.kind, Kind::Motion(crate::dialogs_motion::Mo::Configurations { .. })) {
                     return;
                 }
-                if matches!(&d.kind, Kind::Foil(_) | Kind::Plugin(_)) {
+                if matches!(&d.kind, Kind::Plugin(_)) {
                     error_rows(app, ctx, &mut d, ui, false);
                     return;
                 }
@@ -2396,7 +2385,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 }
                 input_rows(&mut d, ui, &app.session);
                 match &mut d.kind {
-                    Kind::Foil(_) | Kind::Plugin(_) => {}
+                    Kind::Plugin(_) => {}
                     Kind::Sketch => {
                         if d.error.is_some()
                             && let Some(selection @ Sel::Face { .. }) = d.inputs.first().and_then(|i| i.items.first())
@@ -4373,13 +4362,6 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             ("plugin.add", p)
         }
-        Kind::Foil(k) => {
-            let mut p = k.params();
-            if let (Value::Object(m), Some(t)) = (&mut p, d.extra.get("targets")) {
-                m.insert("targets".into(), t.clone());
-            }
-            (crate::dialogs_foil::command(k.tool), p)
-        }
         Kind::Primitive { cmd, fields, operation, at } => {
             let mut p = serde_json::Map::new();
             for (k, v) in fields {
@@ -5286,16 +5268,6 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
         }
         FeatureKind::Plugin { operation, targets, .. } => {
             let mut d = Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::for_feature(&f.kind, op_index(operation))?)), vec![]);
-            if !targets.is_empty() {
-                d.extra.insert("targets".into(), json!(targets));
-            }
-            d
-        }
-        FeatureKind::FoilWing { values, operation, targets }
-        | FeatureKind::FoilStabiliser { values, operation, targets }
-        | FeatureKind::Propeller { values, operation, targets } => {
-            let mut d = start(crate::dialogs_foil::command(values.tool))?;
-            d.kind = Kind::Foil(crate::dialogs_foil::FoilDialog::from_params(values, op_index(operation)));
             if !targets.is_empty() {
                 d.extra.insert("targets".into(), json!(targets));
             }

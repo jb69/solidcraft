@@ -65,6 +65,8 @@ loft
   remap_bodies: targets[0]
 plugin
   remap_bodies: targets[0]
+loft_points
+  remap_bodies: targets[0]
 sweep
   sketches: [1, 2]
   remap_refs: path_sketch, sketch

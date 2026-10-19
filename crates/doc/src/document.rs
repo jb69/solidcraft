@@ -767,6 +767,16 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "RailFit::is_scale")]
         rail_fit: RailFit,
     },
+    /// Smooth loft through sections given as points (`solid.loft_points`): each section a closed
+    /// chain of edges, each edge the points a fit spline passes through; one face per edge, the
+    /// first and last sections planar caps.
+    LoftPoints {
+        sections: PointSections,
+        #[serde(default)]
+        operation: Operation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyName>,
+    },
     /// Sweep profiles along a chain of sketch curves.
     Sweep {
         sketch: SketchId,
@@ -1906,6 +1916,11 @@ pub struct Component {
     pub properties: std::collections::BTreeMap<String, String>,
 }
 
+/// The sections of a [`FeatureKind::LoftPoints`]: by section, by edge, the points (mm).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PointSections(pub Vec<Vec<Vec<Vec3>>>);
+
 /// One loft section: profiles of a sketch.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 pub struct LoftSection {
@@ -2162,6 +2177,7 @@ impl FeatureKind {
             FeatureKind::Hole { .. } => "HoleFeature",
             FeatureKind::Thread { .. } => "ThreadFeature",
             FeatureKind::Loft { .. } => "LoftFeature",
+            FeatureKind::LoftPoints { .. } => "LoftPointsFeature",
             FeatureKind::Sweep { .. } => "SweepFeature",
             FeatureKind::Shell { .. } => "ShellFeature",
             FeatureKind::Draft { .. } => "DraftFeature",
@@ -2243,6 +2259,7 @@ impl FeatureKind {
             FeatureKind::Hole { .. } => "Hole",
             FeatureKind::Thread { .. } => "Thread",
             FeatureKind::Loft { .. } => "Loft",
+            FeatureKind::LoftPoints { .. } => "LoftPoints",
             FeatureKind::Sweep { .. } => "Sweep",
             FeatureKind::Shell { .. } => "Shell",
             FeatureKind::Draft { .. } => "Draft",

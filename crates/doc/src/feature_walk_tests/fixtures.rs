@@ -80,6 +80,7 @@ pub(super) fn fixtures() -> Vec<(&'static str, Value)> {
                 "inputs": [{"key": "a", "label": "Length A", "unit": "length"}, {"key": "b", "label": "Angle B", "unit": "angle"}],
                 "values": {"a": "plugin.a", "b": "plugin.b", "on": true}}}),
         ),
+        ("loft_points", json!({"type": "loft_points", "sections": [[[[0, 0, 0], [1, 0, 0]], [[1, 0, 0], [0, 0, 0]]]]})),
         ("sweep", json!({"type": "sweep", "sketch": 1, "profiles": {"type": "all"}, "path_sketch": 2, "path": ["l1"]})),
         (
             "sweep_options",
@@ -223,7 +224,9 @@ pub(super) fn with_refs(name: &str, mut v: Value) -> Value {
     let o = [0, 0, 0];
     let tool = json!({"body": "B", "point": o});
     let extra = match name {
-        "extrude" | "extrude_thin" | "revolve" | "sweep" | "sweep_options" | "pipe" | "coil" | "thicken" | "plugin" => json!({"targets": ["B"]}),
+        "extrude" | "extrude_thin" | "revolve" | "sweep" | "sweep_options" | "pipe" | "coil" | "thicken" | "plugin" | "loft_points" => {
+            json!({"targets": ["B"]})
+        }
         "fillet_constant" | "fillet_chord" | "fillet_curvature" | "fillet_variable" | "fillet_spline" | "chamfer" | "shell" | "draft"
         | "offset_face" | "delete_face" | "replace_face" | "sheet_flange" | "sheet_hem" | "sheet_perforate" | "sheet_unfold" | "boss" | "lip"
         | "snap_fit" | "rest" | "surface_offset" => {

@@ -4143,6 +4143,7 @@ fn feature_tools_with_constructor(
         }
         FeatureKind::Hole { .. } => Ok(hole_feature_tools(vals, st, f)?.into_iter().map(|(tool, _)| tool).collect()),
         FeatureKind::Plugin { .. } => Ok(unnamed(crate::plugin_feature::build(doc, vals, f, &st.plugin_vars)?.bodies)),
+        FeatureKind::LoftPoints { sections, .. } => Ok(unnamed(vec![kernel::loft_points(&sections.0)?])),
         _ => Err(DocError::Invalid(format!("{} cannot be patterned or mirrored yet", f.name))),
     }
 }
@@ -4431,7 +4432,9 @@ fn feature_op(f: &Feature) -> (Operation, Vec<String>) {
         | FeatureKind::Torus { operation, .. } => (*operation, Vec::new()),
         FeatureKind::Hole { .. } => (Operation::Cut, Vec::new()),
         FeatureKind::Pipe { operation, targets, .. } => (*operation, crate::plain(targets)),
-        FeatureKind::Loft { operation, targets, .. } | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
+        FeatureKind::Loft { operation, targets, .. }
+        | FeatureKind::LoftPoints { operation, targets, .. }
+        | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Coil { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Plugin { operation, targets, .. } => (*operation, crate::plain(targets)),
         _ => (Operation::NewBody, Vec::new()),
@@ -5161,6 +5164,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         | FeatureKind::Pipe { operation, targets, .. }
         | FeatureKind::Revolve { operation, targets, .. }
         | FeatureKind::Loft { operation, targets, .. }
+        | FeatureKind::LoftPoints { operation, targets, .. }
         | FeatureKind::Coil { operation, targets, .. }
         | FeatureKind::Sweep { operation, targets, .. } => {
             let mut constructor = None;

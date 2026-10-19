@@ -140,6 +140,7 @@ plugin
     Length A = plugin.a (Length)
     Angle B = plugin.b (Angle)
   expressions: plugin.a, plugin.b
+loft_points
 sweep
 sweep_options
   inputs:

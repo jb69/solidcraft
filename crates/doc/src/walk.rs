@@ -60,6 +60,15 @@ impl Walk for crate::document::ExtendMode {}
 impl Walk for crate::document::RuledMode {}
 impl Walk for crate::document::RuledCorners {}
 impl Walk for crate::document::ExtrudeConvention {}
+/// A loft's points move and turn with the feature.
+impl Walk for crate::document::PointSections {
+    fn walk_geometry<'a>(&'a self, f: &mut dyn FnMut(GeoItem<'a>)) {
+        self.0.iter().flatten().flatten().for_each(|p| f(Geo::Pos(p)));
+    }
+    fn walk_geometry_mut<'a>(&'a mut self, f: &mut dyn FnMut(GeoItemMut<'a>)) {
+        self.0.iter_mut().flatten().flatten().for_each(|p| f(Geo::Pos(p)));
+    }
+}
 
 /// A reference walks itself: a sketch, a feature or a body.
 macro_rules! reference {

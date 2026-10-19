@@ -135,6 +135,7 @@ fn choose_fillet_type(extra: &mut serde_json::Map<String, Value>, index: usize, 
 pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: &mut egui::Ui) -> bool {
     let t = Tokens::get();
     let mut enter = false;
+    let editing = d.editing.map(|(id, _)| id);
     if matches!(d.kind, Kind::Appearance(_)) {
         ui.spacing_mut().item_spacing.y = t.space_10;
     }
@@ -181,6 +182,8 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         }
         Kind::Appearance(k) => enter |= crate::dialogs_appearance::rows(app, ui, k, &mut d.inputs),
         Kind::Motion(k) => enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs),
+        // A plugin's dialog lays out its own groups (collapsible, as its schema says).
+        Kind::Plugin(k) => enter |= crate::dialogs_plugin::rows(app, ui, k, editing),
         Kind::Part(k) => enter |= crate::dialogs_parts::rows(app, ui, k, &d.inputs),
         Kind::PartSize(k) => enter |= crate::dialogs_part_size::rows(app, ui, k),
         Kind::SaveMesh(k) => enter |= crate::dialogs_save_mesh::rows(app, ui, k),

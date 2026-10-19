@@ -659,6 +659,24 @@ pub enum FeatureKind {
         #[serde(default)]
         operation: Operation,
     },
+    /// A plugin's feature (docs/plugins.md): the plugin rebuilds it from `params` on every
+    /// evaluation; `display` is its timeline row; `fallback` what happens without the plugin
+    /// (the last result is kept in [`Document::plugin_results`] for the `recorded_mesh` one).
+    Plugin {
+        plugin_id: String,
+        api_version: u32,
+        params: crate::plugin_feature::PluginParams,
+        #[serde(default)]
+        display: solidcraft_plugin::Display,
+        #[serde(default)]
+        provenance: crate::plugin_feature::PluginProvenance,
+        #[serde(default)]
+        fallback: solidcraft_plugin::FallbackPolicy,
+        #[serde(default)]
+        operation: Operation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyName>,
+    },
     Combine {
         target: BodyName,
         tools: Vec<BodyName>,
@@ -2134,6 +2152,7 @@ impl FeatureKind {
             FeatureKind::Cylinder { .. } => "CylinderFeature",
             FeatureKind::Sphere { .. } => "SphereFeature",
             FeatureKind::Torus { .. } => "TorusFeature",
+            FeatureKind::Plugin { .. } => "PluginFeature",
             FeatureKind::Combine { .. } => "CombineFeature",
             FeatureKind::Pattern { pattern: PatternKind::Rectangular { .. }, .. } => "RectangularPatternFeature",
             FeatureKind::Pattern { pattern: PatternKind::Path { .. }, .. } => "PathPatternFeature",
@@ -2214,6 +2233,7 @@ impl FeatureKind {
             FeatureKind::Cylinder { .. } => "Cylinder",
             FeatureKind::Sphere { .. } => "Sphere",
             FeatureKind::Torus { .. } => "Torus",
+            FeatureKind::Plugin { .. } => "Plugin",
             FeatureKind::Combine { .. } => "Combine",
             FeatureKind::Pattern { pattern: PatternKind::Rectangular { .. }, .. } => "RectangularPattern",
             FeatureKind::Pattern { pattern: PatternKind::Path { .. }, .. } => "PathPattern",
@@ -2372,6 +2392,11 @@ pub struct DesignLink {
 /// The document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// The last result of each plugin feature whose fallback is a recorded mesh (by feature id),
+    /// shown when the plugin is not installed. Kept outside the features so that recording a
+    /// result does not change what the feature is (and rebuild it).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub plugin_results: std::collections::BTreeMap<u64, Vec<MeshData>>,
     /// Named, renderer-independent setups. Device/job state is never saved here.
     #[serde(default, skip_serializing_if = "crate::render_settings::RenderSettings::is_empty")]
     pub render: std::sync::Arc<crate::render_settings::RenderSettings>,
@@ -2603,6 +2628,7 @@ impl Default for Document {
 impl Document {
     pub fn new(name: &str) -> Self {
         Document {
+            plugin_results: Default::default(),
             render: Default::default(),
             format: default_format(),
             format_pending: crate::format::pending_names(),

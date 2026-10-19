@@ -37,6 +37,7 @@ pub mod dialogs_move;
 pub mod dialogs_part_size;
 pub mod dialogs_parts;
 pub mod dialogs_plastic;
+pub mod dialogs_plugin;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
@@ -148,6 +149,8 @@ pub(crate) mod open_meshing;
 pub mod params_dialog;
 pub(crate) mod pick_buffer;
 pub(crate) mod pick_index;
+#[cfg(test)]
+mod plugin_dialog_tests;
 pub(crate) mod plugins;
 pub mod prefs;
 pub mod prefs_notice;

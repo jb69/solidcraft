@@ -74,8 +74,18 @@ pub(crate) fn choice_row(ui: &mut Ui, label: &str, id: &str, selected: &mut usiz
     row(ui, label, |ui| super::dropdown(ui, id, selected, options))
 }
 
+/// Aligned label/control row whose label's tooltip says what the field does (`help`), not only
+/// its name: a plugin's dialog fields carry their schema's help. Tokens: `row`.
+pub(crate) fn help_row<R>(ui: &mut Ui, text: &str, help: &str, control: impl FnOnce(&mut Ui) -> R) -> R {
+    described_row(ui, text, Some(help), row_height(), control)
+}
+
 /// Internal form geometry for controls which need several lines (e.g. text areas).
 pub(super) fn sized_row<R>(ui: &mut Ui, text: &str, height: f32, control: impl FnOnce(&mut Ui) -> R) -> R {
+    described_row(ui, text, None, height, control)
+}
+
+fn described_row<R>(ui: &mut Ui, text: &str, help: Option<&str>, height: f32, control: impl FnOnce(&mut Ui) -> R) -> R {
     let t = Tokens::get();
     let width = dimension(ui.available_width());
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
@@ -84,7 +94,7 @@ pub(super) fn sized_row<R>(ui: &mut Ui, text: &str, height: f32, control: impl F
     ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         // Left aligned in the label column, as in the design.
         ui.add(egui::Label::new(RichText::new(crate::i18n::tr_label(text)).size(t.font_label).color(t.dialog_label)).truncate())
-            .on_hover_text(crate::i18n::tr_label(text));
+            .on_hover_text(help.filter(|h| !h.trim().is_empty()).unwrap_or(crate::i18n::tr_label(text)));
     });
     let control_rect = egui::Rect::from_min_max(egui::pos2((label_rect.right() + label_gap(width)).min(rect.right()), rect.top()), rect.max);
     let result = ui

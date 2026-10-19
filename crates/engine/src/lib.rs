@@ -16,6 +16,7 @@ pub mod fuzz;
 pub mod licences;
 pub mod occurrences;
 pub mod params;
+mod plugin_host;
 pub mod product_scene;
 pub mod recovery;
 pub mod render_jobs;
@@ -378,6 +379,8 @@ impl Session {
     /// `doc`'s evaluation ([`Model::adopt`]); otherwise the timeline is evaluated.
     /// `SOLIDCRAFT_NO_MODEL_CACHE` set always evaluates.
     pub fn opened(mut doc: Document, saved: Option<&solidcraft_doc::SavedModel>) -> Self {
+        // Plugin features evaluate through this process's engine.
+        plugin_host::install();
         // The session keeps what is hidden (not an undo step); the design file carries it.
         let visibility = std::mem::take(&mut doc.visibility);
         let doc = Arc::new(doc);

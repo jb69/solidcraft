@@ -138,6 +138,8 @@ crate::dialog_descriptor::dialog_descriptors! {
         ; custom {
             /// Pick a plane or planar face; the sketch starts on it at once.
             Sketch,
+            /// A plugin's feature, its dialog drawn from the plugin's parameter schema.
+            Plugin(Box<crate::dialogs_plugin::PluginDialog>),
             Extrude {
                 distance: String,
                 direction: usize,
@@ -675,6 +677,7 @@ impl Dialog {
             }),
             "solid.move" => Dialog::new(crate::dialogs_move::kind(0), crate::dialogs_move::inputs(0)),
             "solid.hole" => Dialog::new(hole_defaults(), vec![SelInput::new("Face", HOLE_FACES, true)]),
+            "plugin.add" => Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::PluginDialog::new(None)?)), vec![]),
             "solid.box" => Dialog::new(
                 Kind::Primitive {
                     cmd: "solid.box",
@@ -874,6 +877,8 @@ impl Dialog {
             Kind::Part(_) | Kind::PartSize(_) => return true,
             // Web previews run synchronously; a modelled thread can take seconds.
             Kind::Thread { .. } => return !cfg!(target_arch = "wasm32") && self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false),
+            // A plugin that takes many seconds to build says so: no preview of every keystroke.
+            Kind::Plugin(k) => return k.previews(),
             _ => {}
         }
         matches!(
@@ -906,6 +911,7 @@ impl Dialog {
                 | Kind::Move { .. }
                 | Kind::Hole { .. }
                 | Kind::Primitive { .. }
+                | Kind::Plugin(_)
                 | Kind::Combine { .. }
                 | Kind::BoundaryFill { .. }
         )
@@ -1548,6 +1554,19 @@ fn publish_check(ui: &egui::Ui, response: &egui::Response, selected: bool) {
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), selected, tr(crate::ui_kit::row_label(ui))));
 }
 
+/// A title made at run time (a plugin's name), kept for the program's life: there are only as
+/// many as there are plugins.
+fn intern_title(t: String) -> &'static str {
+    static TITLES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
+    let Ok(mut m) = TITLES.get_or_init(Default::default).lock() else { return "PLUGIN" };
+    if let Some(t) = m.get(&t) {
+        return t;
+    }
+    let leaked: &'static str = Box::leak(t.clone().into_boxed_str());
+    m.insert(t, leaked);
+    leaked
+}
+
 fn title(k: &Kind) -> &'static str {
     match k {
         Kind::Sketch => "CREATE SKETCH",
@@ -1587,6 +1606,7 @@ fn title(k: &Kind) -> &'static str {
             _ => "TORUS",
         },
         Kind::Combine { .. } => "COMBINE",
+        Kind::Plugin(k) => intern_title(k.title()),
         Kind::EditParam { .. } => "EDIT DIMENSION",
         Kind::Rename { .. } => "RENAME",
         Kind::ConfirmDelete { .. } => "DELETE FEATURE",
@@ -3520,6 +3540,13 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             return Ok(out);
         }
+        Kind::Plugin(k) => {
+            let mut p = k.params();
+            if let (Value::Object(m), Some(t)) = (&mut p, d.extra.get("targets")) {
+                m.insert("targets".into(), t.clone());
+            }
+            ("plugin.add", p)
+        }
         Kind::Primitive { cmd, fields, operation, at } => {
             let mut p = serde_json::Map::new();
             for (k, v) in fields {
@@ -4442,6 +4469,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 } else {
                     inp.items = bodies;
                 }
+            }
+            d
+        }
+        FeatureKind::Plugin { operation, targets, .. } => {
+            let mut d = Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::for_feature(&f.kind, op_index(operation))?)), vec![]);
+            if !targets.is_empty() {
+                d.extra.insert("targets".into(), json!(targets));
             }
             d
         }

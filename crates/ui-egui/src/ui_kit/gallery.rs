@@ -463,6 +463,9 @@ const ELEMENTS: &[Element] = &[
     element!("expr_row", "dialog:row:Gallery", Some("dialog:Gallery"), |ui, s| {
         expr_row(ui, "Gallery", &mut s.value);
     }),
+    element!("help_row", "dialog:row:Gallery", Some("dialog:Gallery"), |ui, s| {
+        help_row(ui, "Gallery", "What the gallery value does.", |ui| field(ui, &mut s.value));
+    }),
     element!("hint_row", "dialog:row:Gallery", Some("dialog:Gallery"), |ui, s| {
         hint_row(ui, "Gallery", &mut s.value, "Value");
     }),

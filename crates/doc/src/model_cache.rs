@@ -187,6 +187,13 @@ impl Writer {
             "blend_edges": serde_json::to_value(&st.blend_edges).ok()?, "fitted": serde_json::to_value(&st.fitted).ok()?,
             "tapered": serde_json::to_value(&st.tapered).ok()?,
         });
+        let mut r = r;
+        // What plugin features published and said: written only when there is any, so a design
+        // without plugin features saves as before.
+        if !st.plugin_vars.is_empty() || !st.plugin_outputs.is_empty() {
+            r["plugin_vars"] = serde_json::to_value(&st.plugin_vars).ok()?;
+            r["plugin_outputs"] = serde_json::to_value(&st.plugin_outputs).ok()?;
+        }
         self.states.push(r);
         self.state_index.insert(id, self.states.len() - 1);
         Some(self.states.len() - 1)
@@ -327,6 +334,8 @@ impl SavedModel {
                 blend_edges: serde_json::from_value(field("blend_edges")?).map_err(invalid)?,
                 fitted: serde_json::from_value(field("fitted")?).map_err(invalid)?,
                 tapered: serde_json::from_value(field("tapered")?).map_err(invalid)?,
+                plugin_vars: s.get("plugin_vars").map(|v| serde_json::from_value(v.clone()).map_err(invalid)).transpose()?.unwrap_or_default(),
+                plugin_outputs: s.get("plugin_outputs").map(|v| serde_json::from_value(v.clone()).map_err(invalid)).transpose()?.unwrap_or_default(),
             };
             held = held.saturating_add(st.bodies.len()).saturating_add(st.sketches.len());
             if held > MAX_HELD {

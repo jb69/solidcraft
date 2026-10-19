@@ -33,6 +33,7 @@ pub mod dialogs_motion;
 pub mod dialogs_move;
 pub mod dialogs_parts;
 pub mod dialogs_plastic;
+pub mod dialogs_plugin;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
@@ -125,6 +126,8 @@ pub mod palette;
 pub mod params_dialog;
 pub(crate) mod pick_buffer;
 pub(crate) mod pick_index;
+#[cfg(test)]
+mod plugin_dialog_tests;
 pub mod prefs;
 #[cfg(test)]
 mod preselect_tests;

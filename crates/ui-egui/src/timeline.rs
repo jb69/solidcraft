@@ -37,6 +37,40 @@ impl TimelineKind {
     }
 }
 
+/// A plugin feature's icon: one of the host's by name, or the generic one. Plugins name icons
+/// from the host's set and bring none of their own.
+fn plugin_icon(name: &str) -> &'static str {
+    const KNOWN: &[&str] = &[
+        "box",
+        "cylinder",
+        "sphere",
+        "torus",
+        "extrude",
+        "revolve",
+        "loft",
+        "sweep",
+        "pipe",
+        "coil",
+        "gear",
+        "screw",
+        "thread",
+        "hole",
+        "fastener",
+        "spun",
+        "surface",
+        "pattern",
+        "mirror",
+        "shell",
+        "rib",
+        "boss",
+        "body",
+        "component",
+        "spline",
+        "star",
+    ];
+    KNOWN.iter().find(|k| **k == name).copied().unwrap_or("include")
+}
+
 pub(crate) fn icon_of(k: &FeatureKind) -> &'static str {
     match k {
         FeatureKind::Sketch { .. } => "sketch",
@@ -61,6 +95,8 @@ pub(crate) fn icon_of(k: &FeatureKind) -> &'static str {
         FeatureKind::Cylinder { .. } => "cylinder",
         FeatureKind::Sphere { .. } => "sphere",
         FeatureKind::Torus { .. } => "torus",
+        FeatureKind::Plugin { display, .. } => plugin_icon(&display.icon_id),
+        FeatureKind::LoftPoints { .. } => "loft",
         FeatureKind::FoilWing { .. } | FeatureKind::FoilStabiliser { .. } => "loft",
         FeatureKind::Propeller { .. } => "revolve",
         FeatureKind::Combine { .. } => "combine",

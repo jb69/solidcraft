@@ -1797,6 +1797,59 @@ pub fn loft_beziers(sections: &[BezierSection]) -> Result<Body> {
     })
 }
 
+/// The cubic Béziers of the natural cubic spline through `p` by chord length (the sketch fit
+/// spline's maths, in 3D): exact through every point, second derivative zero at both ends.
+pub fn fit_chain_3d(p: &[Vec3]) -> Vec<[Vec3; 4]> {
+    let n = p.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let h: Vec<f64> = p.windows(2).map(|w| w[0].dist(w[1]).max(1e-9)).collect();
+    if n == 2 {
+        return vec![[p[0], p[0] + (p[1] - p[0]) * (1.0 / 3.0), p[0] + (p[1] - p[0]) * (2.0 / 3.0), p[1]]];
+    }
+    // Second derivatives (natural ends) by the tridiagonal solve.
+    let m = n - 2;
+    let (mut diag, mut up, mut low, mut rhs) = (vec![0.0; m], vec![0.0; m], vec![0.0; m], vec![Vec3::ZERO; m]);
+    for i in 0..m {
+        let (h0, h1) = (h[i], h[i + 1]);
+        diag[i] = 2.0 * (h0 + h1);
+        low[i] = h0;
+        up[i] = h1;
+        rhs[i] = ((p[i + 2] - p[i + 1]) * (1.0 / h1) - (p[i + 1] - p[i]) * (1.0 / h0)) * 6.0;
+    }
+    for i in 1..m {
+        let w = low[i] / diag[i - 1];
+        diag[i] -= w * up[i - 1];
+        rhs[i] = rhs[i] - rhs[i - 1] * w;
+    }
+    let mut sol = vec![Vec3::ZERO; m];
+    for i in (0..m).rev() {
+        let next = if i + 1 < m { sol[i + 1] * up[i] } else { Vec3::ZERO };
+        sol[i] = (rhs[i] - next) * (1.0 / diag[i]);
+    }
+    let mm = |i: usize| if i == 0 || i == n - 1 { Vec3::ZERO } else { sol[i - 1] };
+    (0..n - 1)
+        .map(|i| {
+            let hi = h[i];
+            let slope = (p[i + 1] - p[i]) * (1.0 / hi);
+            // First derivatives (per unit chord) at both ends of the span, as Hermite tangents.
+            let d0 = (slope - (mm(i) * 2.0 + mm(i + 1)) * (hi / 6.0)) * hi;
+            let d1 = (slope + (mm(i) + mm(i + 1) * 2.0) * (hi / 6.0)) * hi;
+            [p[i], p[i] + d0 * (1.0 / 3.0), p[i + 1] - d1 * (1.0 / 3.0), p[i + 1]]
+        })
+        .collect()
+}
+
+/// [`loft_beziers`] through sections given as points: each section a closed chain of edges,
+/// each edge the points it passes through from its start to its end (the next edge starts
+/// where it ends, the last ends at the first's start), fitted with [`fit_chain_3d`]. An edge of
+/// two points is straight.
+pub fn loft_points(sections: &[Vec<Vec<Vec3>>]) -> Result<Body> {
+    let secs: Vec<BezierSection> = sections.iter().map(|s| s.iter().map(|e| fit_chain_3d(e)).collect()).collect();
+    loft_beziers(&secs)
+}
+
 /// Ruled loft through two or more planar sections (outer loops only). The sections and the
 /// same sections in reverse order give the same body.
 pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {

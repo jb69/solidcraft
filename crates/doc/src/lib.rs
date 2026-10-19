@@ -25,6 +25,7 @@ pub mod face_anchor;
 mod feature_geometry;
 mod feature_refs;
 pub mod foil;
+pub mod plugin_feature;
 pub use face_anchor::{FaceAnchor, FaceAttachmentStatus};
 pub mod format;
 mod format_offsets;

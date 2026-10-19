@@ -657,6 +657,24 @@ pub enum FeatureKind {
         #[serde(default)]
         operation: Operation,
     },
+    /// A plugin's feature (docs/plugins.md): the plugin rebuilds it from `params` on every
+    /// evaluation; `display` is its timeline row; `fallback` what happens without the plugin,
+    /// `recorded` its last result for the `recorded_mesh` fallback.
+    Plugin {
+        plugin_id: String,
+        api_version: u32,
+        params: crate::plugin_feature::PluginParams,
+        #[serde(default)]
+        display: solidcraft_plugin::Display,
+        #[serde(default)]
+        provenance: crate::plugin_feature::PluginProvenance,
+        #[serde(default)]
+        fallback: solidcraft_plugin::FallbackPolicy,
+        #[serde(default)]
+        operation: Operation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyName>,
+    },
     /// Foil wing, from the Onshape Foil design tool: every value of its dialog (see
     /// `crate::foil`), rebuilt on each evaluation; a new body unless `operation` says otherwise.
     FoilWing {
@@ -765,6 +783,16 @@ pub enum FeatureKind {
     /// Ruled loft through profiles of several sketches, in order.
     Loft {
         sections: Vec<LoftSection>,
+        #[serde(default)]
+        operation: Operation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyName>,
+    },
+    /// Smooth loft through sections given as points (`solid.loft_points`): each section a closed
+    /// chain of edges, each edge the points a fit spline passes through; one face per edge, the
+    /// first and last sections planar caps.
+    LoftPoints {
+        sections: PointSections,
         #[serde(default)]
         operation: Operation,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1862,6 +1890,11 @@ pub struct Component {
 }
 
 /// One loft section: profiles of a sketch.
+/// The sections of a [`FeatureKind::LoftPoints`]: by section, by edge, the points (mm).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PointSections(pub Vec<Vec<Vec<[f64; 3]>>>);
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 pub struct LoftSection {
     pub sketch: SketchId,
@@ -2107,6 +2140,7 @@ impl FeatureKind {
             FeatureKind::Cylinder { .. } => "CylinderFeature",
             FeatureKind::Sphere { .. } => "SphereFeature",
             FeatureKind::Torus { .. } => "TorusFeature",
+            FeatureKind::Plugin { .. } => "PluginFeature",
             FeatureKind::FoilWing { .. } => "FoilWingFeature",
             FeatureKind::FoilStabiliser { .. } => "FoilStabiliserFeature",
             FeatureKind::Propeller { .. } => "PropellerFeature",
@@ -2119,6 +2153,7 @@ impl FeatureKind {
             FeatureKind::Hole { .. } => "HoleFeature",
             FeatureKind::Thread { .. } => "ThreadFeature",
             FeatureKind::Loft { .. } => "LoftFeature",
+            FeatureKind::LoftPoints { .. } => "LoftPointsFeature",
             FeatureKind::Sweep { .. } => "SweepFeature",
             FeatureKind::Shell { .. } => "ShellFeature",
             FeatureKind::Draft { .. } => "DraftFeature",
@@ -2190,6 +2225,7 @@ impl FeatureKind {
             FeatureKind::Cylinder { .. } => "Cylinder",
             FeatureKind::Sphere { .. } => "Sphere",
             FeatureKind::Torus { .. } => "Torus",
+            FeatureKind::Plugin { .. } => "Plugin",
             FeatureKind::FoilWing { .. } => "FoilWing",
             FeatureKind::FoilStabiliser { .. } => "FoilStabiliser",
             FeatureKind::Propeller { .. } => "Propeller",
@@ -2202,6 +2238,7 @@ impl FeatureKind {
             FeatureKind::Hole { .. } => "Hole",
             FeatureKind::Thread { .. } => "Thread",
             FeatureKind::Loft { .. } => "Loft",
+            FeatureKind::LoftPoints { .. } => "LoftPoints",
             FeatureKind::Sweep { .. } => "Sweep",
             FeatureKind::Shell { .. } => "Shell",
             FeatureKind::Draft { .. } => "Draft",
@@ -2351,6 +2388,11 @@ pub struct DesignLink {
 /// The document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// The last result of each plugin feature whose fallback is a recorded mesh (by feature id),
+    /// shown when the plugin is not installed. Kept outside the features so that recording a
+    /// result does not change what the feature is (and rebuild it).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub plugin_results: std::collections::BTreeMap<u64, Vec<MeshData>>,
     /// Named, renderer-independent setups. Device/job state is never saved here.
     #[serde(default, skip_serializing_if = "crate::render_settings::RenderSettings::is_empty")]
     pub render: std::sync::Arc<crate::render_settings::RenderSettings>,
@@ -2582,6 +2624,7 @@ impl Default for Document {
 impl Document {
     pub fn new(name: &str) -> Self {
         Document {
+            plugin_results: Default::default(),
             render: Default::default(),
             format: default_format(),
             format_pending: crate::format::pending_names(),

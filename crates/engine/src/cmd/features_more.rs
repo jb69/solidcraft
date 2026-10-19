@@ -15,6 +15,12 @@ use crate::params::{bad, bool_, expr, req_expr, str_, string_list, vec3};
 use crate::{Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("solid.loft_points", "Loft Through Points", loft_points).at("SOLID", "CREATE").icon("loft").params(
+        "sections: [[[[x,y,z], …] edge, …] section, …] (3 or more, each a closed chain of edges: an edge lists the points a fit \
+         spline passes through from its start to its end, the next edge starts where it ends and the last ends at the first's \
+         start; every section has as many edges, each of as many points; the first and last sections are planar, the caps); \
+         operation?, targets?: [body], name?, body_name? → one smooth face per edge through every section",
+    ),
     CommandSpec::new("solid.boundary_fill", "Boundary Fill", boundary_fill).at("SOLID", "CREATE").icon("boundary_fill").params(
         "tools: [bodies]; cells: [[x,y,z] a point inside each cell to fill (a cell: inside some tools, outside the rest)]; operation?: new|join|cut|intersect; remove_tools?: bool",
     ),
@@ -493,4 +499,43 @@ fn boundary_fill(s: &mut Session, p: &Value) -> Result<Value> {
             remove_tools: bool_(p, "remove_tools").unwrap_or(false),
         },
     )
+}
+
+/// Most points one loft through points takes (all sections together).
+const MAX_LOFT_POINTS: usize = 500_000;
+
+fn loft_points(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "solid.loft_points";
+    let shape = "`sections` must be a list of sections, each a list of edges, each a list of [x,y,z] points";
+    let secs = p.get("sections").and_then(Value::as_array).ok_or_else(|| bad(cmd, shape))?;
+    let mut out: Vec<Vec<Vec<[f64; 3]>>> = Vec::with_capacity(secs.len());
+    let mut count = 0usize;
+    for sec in secs {
+        let edges = sec.as_array().ok_or_else(|| bad(cmd, shape))?;
+        let mut es = Vec::with_capacity(edges.len());
+        for e in edges {
+            let pts = e.as_array().ok_or_else(|| bad(cmd, shape))?;
+            if pts.len() < 2 {
+                return Err(bad(cmd, "an edge needs 2 points or more"));
+            }
+            count += pts.len();
+            if count > MAX_LOFT_POINTS {
+                return Err(bad(cmd, format!("more than {MAX_LOFT_POINTS} points")));
+            }
+            let pts = pts.iter().map(|q| vec3(q).map(|v| [v.x, v.y, v.z]).ok_or_else(|| bad(cmd, shape))).collect::<Result<Vec<_>>>()?;
+            es.push(pts);
+        }
+        out.push(es);
+    }
+    if out.len() < 3 || out.len() > solidcraft_kernel::MAX_BEZIER_LOFT_SECTIONS {
+        return Err(bad(cmd, format!("a loft through points needs 3…{} sections", solidcraft_kernel::MAX_BEZIER_LOFT_SECTIONS)));
+    }
+    let shape_of = |s: &Vec<Vec<[f64; 3]>>| s.iter().map(Vec::len).collect::<Vec<_>>();
+    let first = out.first().map(shape_of).unwrap_or_default();
+    if out.iter().any(|s| s.is_empty() || shape_of(s) != first) {
+        return Err(bad(cmd, "every section needs as many edges, each of as many points"));
+    }
+    let operation = super::features::operation(p, cmd)?;
+    let targets = string_list(p, "targets").into_iter().map(BodyName::from).collect();
+    add_feature(s, p, FeatureKind::LoftPoints { sections: solidcraft_doc::PointSections(out), operation, targets })
 }

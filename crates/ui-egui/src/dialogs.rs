@@ -239,6 +239,8 @@ pub enum Kind {
     },
     /// Foil wing, Foil stabiliser or B-Series Propeller: the Onshape feature's whole dialog.
     Foil(crate::dialogs_foil::FoilDialog),
+    /// A plugin's feature, its dialog drawn from the plugin's parameter schema.
+    Plugin(Box<crate::dialogs_plugin::PluginDialog>),
     Primitive {
         cmd: &'static str,
         fields: Vec<(&'static str, String)>,
@@ -596,6 +598,7 @@ impl Dialog {
             }),
             "solid.move" => Dialog::new(crate::dialogs_move::kind(0), crate::dialogs_move::inputs(0)),
             "solid.hole" => Dialog::new(hole_defaults(), vec![SelInput::new("Face", HOLE_FACES, true)]),
+            "plugin.add" => Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::PluginDialog::new(None)?)), vec![]),
             "foil.wing_feature" | "foil.stabiliser_feature" | "foil.propeller_feature" => {
                 Dialog::new(Kind::Foil(crate::dialogs_foil::FoilDialog::new(crate::dialogs_foil::tool_of_command(id)?)), vec![])
             }
@@ -800,6 +803,7 @@ impl Dialog {
             Kind::Part(_) => return true,
             // A propeller takes a minute to build: no preview of every keystroke.
             Kind::Foil(k) => return k.tool != solidcraft_engine::doc::foil::Tool::Propeller,
+            Kind::Plugin(k) => return k.previews(),
             _ => {}
         }
         matches!(
@@ -832,6 +836,7 @@ impl Dialog {
                 | Kind::Hole { .. }
                 | Kind::Primitive { .. }
                 | Kind::Foil(_)
+                | Kind::Plugin(_)
                 | Kind::Combine { .. }
                 | Kind::BoundaryFill { .. }
         )
@@ -1421,6 +1426,19 @@ pub(crate) fn publish_row(r: &egui::Response) {
     ROW.with(|row| crate::scenario::publish_handle(&format!("dialog:{}", row.borrow()), r.rect.center()));
 }
 
+/// A title made at run time (a plugin's name), kept for the program's life: there are only as
+/// many as there are plugins.
+fn intern_title(t: String) -> &'static str {
+    static TITLES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
+    let Ok(mut m) = TITLES.get_or_init(Default::default).lock() else { return "PLUGIN" };
+    if let Some(t) = m.get(&t) {
+        return t;
+    }
+    let leaked: &'static str = Box::leak(t.clone().into_boxed_str());
+    m.insert(t, leaked);
+    leaked
+}
+
 fn title(k: &Kind) -> &'static str {
     match k {
         Kind::Sketch => "CREATE SKETCH",
@@ -1467,6 +1485,7 @@ fn title(k: &Kind) -> &'static str {
             _ => "TORUS",
         },
         Kind::Foil(k) => crate::dialogs_foil::title(k.tool),
+        Kind::Plugin(k) => intern_title(k.title()),
         Kind::Combine { .. } => "COMBINE",
         Kind::Params { .. } => "PARAMETERS",
         Kind::EditParam { .. } => "EDIT DIMENSION",
@@ -2344,6 +2363,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Kind::Foil(k) = &mut d.kind {
                 enter |= crate::dialogs_foil::rows(app, ui, k, editing);
             }
+            if let Kind::Plugin(k) = &mut d.kind {
+                enter |= crate::dialogs_plugin::rows(app, ui, k, editing);
+            }
             egui::Grid::new("sc_dialog_grid").num_columns(if pattern_columns { 1 } else { 2 }).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                 if pattern_columns {
                     enter |= rectangular_pattern_rows(&mut d, ui, &app.session);
@@ -2353,7 +2375,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 if matches!(&d.kind, Kind::Motion(crate::dialogs_motion::Mo::Configurations { .. })) {
                     return;
                 }
-                if matches!(&d.kind, Kind::Foil(_)) {
+                if matches!(&d.kind, Kind::Foil(_) | Kind::Plugin(_)) {
                     error_rows(app, ctx, &mut d, ui, false);
                     return;
                 }
@@ -2374,7 +2396,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 }
                 input_rows(&mut d, ui, &app.session);
                 match &mut d.kind {
-                    Kind::Foil(_) => {}
+                    Kind::Foil(_) | Kind::Plugin(_) => {}
                     Kind::Sketch => {
                         if d.error.is_some()
                             && let Some(selection @ Sel::Face { .. }) = d.inputs.first().and_then(|i| i.items.first())
@@ -4344,6 +4366,13 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             return Ok(out);
         }
+        Kind::Plugin(k) => {
+            let mut p = k.params();
+            if let (Value::Object(m), Some(t)) = (&mut p, d.extra.get("targets")) {
+                m.insert("targets".into(), t.clone());
+            }
+            ("plugin.add", p)
+        }
         Kind::Foil(k) => {
             let mut p = k.params();
             if let (Value::Object(m), Some(t)) = (&mut p, d.extra.get("targets")) {
@@ -5252,6 +5281,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 } else {
                     inp.items = bodies;
                 }
+            }
+            d
+        }
+        FeatureKind::Plugin { operation, targets, .. } => {
+            let mut d = Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::for_feature(&f.kind, op_index(operation))?)), vec![]);
+            if !targets.is_empty() {
+                d.extra.insert("targets".into(), json!(targets));
             }
             d
         }

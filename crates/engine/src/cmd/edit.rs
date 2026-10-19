@@ -980,7 +980,7 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
         .chain(super::surface::COMMANDS)
         .chain(super::surface_boundary::COMMANDS)
         .any(|candidate| candidate.id == spec.id)
-        || matches!(spec.id, "foil.wing_feature" | "foil.stabiliser_feature" | "foil.propeller_feature")
+        || matches!(spec.id, "plugin.add" | "foil.wing_feature" | "foil.stabiliser_feature" | "foil.propeller_feature")
         || matches!(
             spec.id,
             "sheet.flange"

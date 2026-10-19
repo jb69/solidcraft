@@ -11,7 +11,7 @@ use solidcraft_doc::expr::Kind;
 
 use super::{CommandSpec, not_in_sketch};
 use crate::params::{bad, bool_, expr, num, str_};
-use crate::{Result, Session};
+use crate::{EngineError, Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("foil.wing", "Foil Wing", wing).at("SOLID", "CREATE").icon("loft").enabled(not_in_sketch).params(
     "span: expr (tip to tip, mm; a parameter name keeps the station planes following it); \
@@ -267,4 +267,199 @@ fn wing(s: &mut Session, p: &Value) -> Result<Value> {
         "half_volume_ruled_mm3": half,
         "note": "the smooth loft bulges a little between stations: measure gives the true volume",
     }))
+}
+
+// ---- The parametric foil features: one timeline feature per Onshape feature, every dialog
+// value stored on it and the geometry rebuilt from them on each evaluation.
+
+use solidcraft_doc::FeatureKind;
+use solidcraft_doc::foil::{FoilParams, Tool};
+
+const VALUES_DOC: &str = "values?: {field: value} (any field of the Onshape dialog by its FeatureScript name, e.g. targetArea, aspectRatio, chordShape; \
+     numbers or expressions (a parameter name drives it), true/false, option ids such as SUPERELLIPSE; the rest keep the tool's defaults; \
+     foil.fields lists every field with its group, bounds, default, options and when the dialog shows it)";
+
+pub static FEATURE_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("foil.wing_feature", "Foil Wing", wing_feature).at("SOLID", "CREATE").icon("loft").enabled(not_in_sketch).params(
+        "values?: the Foil wing dialog's values (see foil.fields tool=wing); name?, body_name? (default Wing), operation?: new|join|cut|intersect, targets?: [body] \
+         → a parametric feature rebuilt from its values on every edit (timeline.edit set {values: {...}} or foil.set change them)",
+    ),
+    CommandSpec::new("foil.stabiliser_feature", "Foil Stabiliser", stab_feature).at("SOLID", "CREATE").icon("loft").enabled(not_in_sketch).params(
+        "values?: the Foil stabiliser dialog's values (arm, height, stabLink LINKED follows the last Foil wing above it; see foil.fields tool=stabiliser); \
+         name?, body_name? (default Stabiliser), operation?, targets?",
+    ),
+    CommandSpec::new("foil.propeller_feature", "B-Series Propeller", prop_feature).at("SOLID", "CREATE").icon("revolve").enabled(not_in_sketch).params(
+        "values?: the B-Series Propeller dialog's values (diameter, pdRatio, ear, bladeCount, rotation, hub, mount, rake, skew…; see foil.fields tool=propeller); \
+         name?, body_name? (default Propeller), operation?, targets?",
+    ),
+    CommandSpec::new("foil.set", "Set Foil Values", set_values).icon("edit").params(
+        "feature: id|name of a Foil wing, Foil stabiliser or B-Series Propeller feature, values: {field: value} (as foil.wing_feature) \
+         → the feature rebuilt; its notice (area, span, AR, chords…)",
+    ),
+    CommandSpec::new("foil.fields", "Foil Dialog Fields", fields).icon("inspect").noundo().params(
+        "tool?: wing|stabiliser|propeller, or feature?: id|name (then each field's current value and whether the dialog shows it, and the notice) \
+         → every field in dialog order: key, label, group, kind, unit, min, default, max, options, when (the FeatureScript's show condition), help, built",
+    ),
+];
+
+fn tool_of(name: &str) -> Option<Tool> {
+    match name.to_ascii_lowercase().as_str() {
+        "wing" | "foil wing" | "foilwing" => Some(Tool::Wing),
+        "stab" | "stabiliser" | "stabilizer" | "foil stabiliser" | "foilstabiliser" => Some(Tool::Stabiliser),
+        "prop" | "propeller" | "b-series propeller" => Some(Tool::Propeller),
+        _ => None,
+    }
+}
+
+fn params_from(tool: Tool, p: &Value, cmd: &str) -> Result<FoilParams> {
+    let mut fp = FoilParams::defaults(tool);
+    match p.get("values") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(m)) => {
+            for (k, v) in m {
+                fp.set_json(k, v).map_err(|e| bad(cmd, e))?;
+            }
+        }
+        Some(_) => return Err(bad(cmd, format!("`values` must be an object of fields; {VALUES_DOC}"))),
+    }
+    Ok(fp)
+}
+
+fn add(s: &mut Session, p: &Value, tool: Tool, cmd: &str, body: &str) -> Result<Value> {
+    let values = params_from(tool, p, cmd)?;
+    let operation = match str_(p, "operation") {
+        None => solidcraft_doc::Operation::NewBody,
+        Some(o) => solidcraft_doc::Operation::parse(o).ok_or_else(|| bad(cmd, "`operation` must be new, join, cut or intersect"))?,
+    };
+    let targets = crate::params::string_list(p, "targets").into_iter().map(Into::into).collect();
+    let kind = match tool {
+        Tool::Wing => FeatureKind::FoilWing { values, operation, targets },
+        Tool::Stabiliser => FeatureKind::FoilStabiliser { values, operation, targets },
+        Tool::Propeller => FeatureKind::Propeller { values, operation, targets },
+    };
+    let mut p = p.clone();
+    if let Some(o) = p.as_object_mut() {
+        o.remove("targets");
+        if !o.contains_key("body_name") && operation == solidcraft_doc::Operation::NewBody {
+            o.insert("body_name".into(), json!(body));
+        }
+    }
+    let mut r = super::features::add_feature(s, &p, kind)?;
+    if let Some(id) = r.get("feature").and_then(Value::as_u64)
+        && let Some(o) = r.as_object_mut()
+    {
+        o.insert("notice".into(), json!(notice(s, id)));
+    }
+    Ok(r)
+}
+
+/// The feature's summary line, as the Onshape feature's notice gives it.
+fn notice(s: &Session, id: u64) -> Option<String> {
+    let f = s.doc.feature(id)?;
+    let (vals, _) = s.doc.param_values();
+    solidcraft_doc::foil::summary(&s.doc, &vals, f).ok().map(|(n, w)| if w.is_empty() { n } else { format!("{n} | {}", w.join(" | ")) })
+}
+
+fn wing_feature(s: &mut Session, p: &Value) -> Result<Value> {
+    add(s, p, Tool::Wing, "foil.wing_feature", "Wing")
+}
+
+fn stab_feature(s: &mut Session, p: &Value) -> Result<Value> {
+    add(s, p, Tool::Stabiliser, "foil.stabiliser_feature", "Stabiliser")
+}
+
+fn prop_feature(s: &mut Session, p: &Value) -> Result<Value> {
+    add(s, p, Tool::Propeller, "foil.propeller_feature", "Propeller")
+}
+
+fn foil_feature(s: &Session, p: &Value, cmd: &str) -> Result<(u64, FoilParams)> {
+    let key = match p.get("feature") {
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::String(x)) => x.clone(),
+        _ => return Err(bad(cmd, "`feature` must be an id or name")),
+    };
+    let f = s.doc.find_feature(&key).ok_or_else(|| bad(cmd, format!("no feature `{key}`")))?;
+    match &f.kind {
+        FeatureKind::FoilWing { values, .. } | FeatureKind::FoilStabiliser { values, .. } | FeatureKind::Propeller { values, .. } => {
+            Ok((f.id, values.clone()))
+        }
+        _ => Err(bad(cmd, format!("`{key}` is not a Foil wing, Foil stabiliser or B-Series Propeller feature"))),
+    }
+}
+
+fn set_values(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "foil.set";
+    let (id, mut values) = foil_feature(s, p, cmd)?;
+    let Some(Value::Object(m)) = p.get("values") else { return Err(bad(cmd, format!("`values` must be an object of fields; {VALUES_DOC}"))) };
+    for (k, v) in m {
+        values.set_json(k, v).map_err(|e| bad(cmd, e))?;
+    }
+    if let Some(f) = s.doc_mut().feature_mut(id) {
+        match &mut f.kind {
+            FeatureKind::FoilWing { values: slot, .. }
+            | FeatureKind::FoilStabiliser { values: slot, .. }
+            | FeatureKind::Propeller { values: slot, .. } => {
+                *slot = values;
+            }
+            _ => {}
+        }
+    }
+    s.refresh();
+    if let Some(e) = s.model.result(id).and_then(|r| r.error.clone()) {
+        return Err(EngineError::Other(e));
+    }
+    let warning = s.model.result(id).and_then(|r| r.warning.clone());
+    Ok(json!({"feature": id, "notice": notice(s, id), "warning": warning, "recomputed": s.model.last_recomputed}))
+}
+
+fn fields(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "foil.fields";
+    let (tool, current) = if p.get("feature").is_some() {
+        let (id, values) = foil_feature(s, p, cmd)?;
+        (values.tool, Some((id, values)))
+    } else {
+        let t = str_(p, "tool").unwrap_or("wing");
+        (tool_of(t).ok_or_else(|| bad(cmd, "`tool` must be wing, stabiliser or propeller"))?, None)
+    };
+    let shown = current.as_ref().and_then(|(_, v)| v.values(&s.doc.param_values().0).ok());
+    let mut out = Vec::new();
+    for f in tool.fields() {
+        let mut row = json!({
+            "key": f.key, "label": f.label, "group": f.group,
+            "kind": match f.kind { solidcraft_doc::foil::FieldKind::Bool { .. } => "bool", solidcraft_doc::foil::FieldKind::Enum { .. } => "enum",
+                solidcraft_doc::foil::FieldKind::Int { .. } => "integer", solidcraft_doc::foil::FieldKind::Length { .. } => "length",
+                solidcraft_doc::foil::FieldKind::Angle { .. } => "angle", _ => "number" },
+            "when": f.when, "help": solidcraft_doc::foil::schema::plain_help(f.help),
+            "built": !solidcraft_doc::foil::schema::not_built(tool, f),
+        });
+        if let Some(o) = row.as_object_mut() {
+            if let Some((lo, d, hi)) = f.kind.bounds() {
+                o.insert("min".into(), json!(lo));
+                o.insert("default".into(), json!(d));
+                o.insert("max".into(), json!(hi));
+                if !f.kind.unit().is_empty() {
+                    o.insert("unit".into(), json!(f.kind.unit()));
+                }
+            }
+            match f.kind {
+                solidcraft_doc::foil::FieldKind::Bool { default } => {
+                    o.insert("default".into(), json!(default));
+                }
+                solidcraft_doc::foil::FieldKind::Enum { options, default } => {
+                    o.insert("default".into(), json!(default));
+                    o.insert("options".into(), json!(options.iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>()));
+                }
+                _ => {}
+            }
+            if let Some((_, v)) = &current {
+                o.insert("value".into(), v.to_json().get(f.key).cloned().unwrap_or(Value::Null));
+            }
+            if let Some(vals) = &shown {
+                o.insert("shown".into(), json!(vals.shows(f)));
+            }
+        }
+        out.push(row);
+    }
+    let notice = current.as_ref().and_then(|(id, _)| notice(s, *id));
+    Ok(json!({"tool": tool.title(), "fields": out, "notice": notice}))
 }

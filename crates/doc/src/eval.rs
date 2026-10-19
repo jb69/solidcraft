@@ -3811,6 +3811,9 @@ fn feature_tools_with_constructor(
             Ok(unnamed(vec![kernel::torus(point(vals, center)?, val(vals, major, Kind::Length)?, val(vals, minor, Kind::Length)?)?]))
         }
         FeatureKind::Hole { .. } => Ok(hole_feature_tools(vals, st, f)?.into_iter().map(|(tool, _)| tool).collect()),
+        FeatureKind::FoilWing { .. } | FeatureKind::FoilStabiliser { .. } | FeatureKind::Propeller { .. } => {
+            Ok(unnamed(crate::foil::build(doc, vals, f)?.bodies))
+        }
         _ => Err(DocError::Invalid(format!("{} cannot be patterned or mirrored yet", f.name))),
     }
 }
@@ -4089,6 +4092,9 @@ fn feature_op(f: &Feature) -> (Operation, Vec<String>) {
         FeatureKind::Pipe { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Loft { operation, targets, .. } | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Coil { operation, targets, .. } => (*operation, crate::plain(targets)),
+        FeatureKind::FoilWing { operation, targets, .. }
+        | FeatureKind::FoilStabiliser { operation, targets, .. }
+        | FeatureKind::Propeller { operation, targets, .. } => (*operation, crate::plain(targets)),
         _ => (Operation::NewBody, Vec::new()),
     }
 }
@@ -5270,6 +5276,15 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         FeatureKind::Torus { center, major, minor, operation } => {
             let b = kernel::torus(point(vals, center)?, val(vals, major, Kind::Length)?, val(vals, minor, Kind::Length)?)?;
             apply_op(st, f, vec![b], *operation, &[])
+        }
+        FeatureKind::FoilWing { operation, targets, .. }
+        | FeatureKind::FoilStabiliser { operation, targets, .. }
+        | FeatureKind::Propeller { operation, targets, .. } => {
+            let built = crate::foil::build(doc, vals, f)?;
+            if !built.warnings.is_empty() {
+                *warning = Some(built.warnings.join("; "));
+            }
+            apply_op(st, f, built.bodies, *operation, &crate::plain(targets))
         }
         FeatureKind::Combine { target, tools, operation, keep_tools } => {
             if tools.iter().any(|t| t == target) {

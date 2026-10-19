@@ -4140,6 +4140,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solidcraft-derive",
+ "solidcraft-foil",
  "solidcraft-geom",
  "solidcraft-kernel",
  "solidcraft-render",
@@ -4164,6 +4165,10 @@ dependencies = [
  "thiserror 2.0.21",
  "web-time",
 ]
+
+[[package]]
+name = "solidcraft-foil"
+version = "0.16.2"
 
 [[package]]
 name = "solidcraft-geom"

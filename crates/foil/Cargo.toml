@@ -1,0 +1,11 @@
+[package]
+name = "solidcraft-foil"
+description = "SolidCraft hydrofoil and propeller design laws: the Foil wing, Foil stabiliser and B-Series propeller dialogs and their geometry, ported from the Onshape FeatureScript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

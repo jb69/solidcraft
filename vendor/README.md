@@ -45,6 +45,10 @@ Changes:
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
 Changes:
+- `nurbs/bspsurface.rs`: a B-spline surface's point and derivatives sum only the control points
+  whose basis functions are non-zero (degree + 1 each way). The sums ran over every control
+  point, so a face lofted through long section curves (a foil's whole surface, a propeller
+  blade's back) was slow to mesh and to intersect in proportion to its size.
 - `decorators/intersection_curve.rs`: `IntersectionCurve::parameter_division` divides as
   `algo::curve::parameter_division` does (the same split points, in the same order), but each
   point's projection onto the two surfaces starts from the parameters of the point that begins

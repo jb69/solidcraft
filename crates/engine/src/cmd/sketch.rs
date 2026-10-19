@@ -590,10 +590,23 @@ pub(super) fn plane_ref(s: &Session, p: &Value, cmd: &str) -> Result<PlaneRef> {
             if o.contains_key("face") {
                 face::capture(s, v, cmd)?
             } else {
-                let origin = v.get("origin").and_then(vec3).unwrap_or(Vec3::ZERO);
+                // The origin's coordinates are numbers or length expressions. An expression is
+                // kept (`Placed`), so the plane follows its parameters; it used to be read as 0
+                // without a word.
+                let origin = match v.get("origin") {
+                    None => solidcraft_doc::point_expr(Vec3::ZERO),
+                    Some(_) => super::features::point_param(s, v, "origin", cmd)?.unwrap_or_else(|| solidcraft_doc::point_expr(Vec3::ZERO)),
+                };
+                let at = |e: &solidcraft_doc::Expr| s.doc.eval(e, solidcraft_doc::expr::Kind::Length).unwrap_or(0.0);
+                let here = Vec3::new(at(&origin[0]), at(&origin[1]), at(&origin[2]));
                 let x = v.get("x_dir").and_then(vec3).ok_or_else(|| bad(cmd, "plane needs x_dir"))?;
                 let y = v.get("y_dir").and_then(vec3).ok_or_else(|| bad(cmd, "plane needs y_dir"))?;
-                PlaneRef::Custom { plane: Plane::new(origin, x, y).ok_or_else(|| bad(cmd, "degenerate plane"))? }
+                let plane = Plane::new(here, x, y).ok_or_else(|| bad(cmd, "degenerate plane"))?;
+                if origin.iter().all(|e| solidcraft_doc::expr::is_literal(e)) {
+                    PlaneRef::Custom { plane }
+                } else {
+                    PlaneRef::Placed { origin, x_dir: plane.x, y_dir: plane.y }
+                }
             }
         }
         _ => return Err(bad(cmd, "`plane` must be XY, XZ, YZ, a construction plane name or id, or an object")),

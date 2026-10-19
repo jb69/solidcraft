@@ -135,6 +135,7 @@ thread
     Length = thread.length (Length)
   expressions: thread.length
 loft
+loft_points
 sweep
 sweep_options
   inputs:

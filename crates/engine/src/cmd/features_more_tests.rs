@@ -1567,3 +1567,34 @@ fn loft_through_coplanar_sections_is_refused() {
     assert!(e.contains("same plane"), "{e}");
     assert!(s.model.state().bodies.is_empty());
 }
+
+/// A loft through points: three circles of radius 10 at z = 0, 10 and 20, each four quarter-arc
+/// edges of nine points, make a cylinder (volume π r² h to the fit spline's accuracy). A section
+/// with another edge count is refused.
+#[test]
+fn loft_points_through_three_circles_is_a_cylinder() {
+    let circle = |z: f64| -> serde_json::Value {
+        let edges: Vec<Vec<[f64; 3]>> = (0..4)
+            .map(|q| {
+                (0..9)
+                    .map(|i| {
+                        let a = std::f64::consts::FRAC_PI_2 * (q as f64 + i as f64 / 8.0);
+                        [10.0 * a.cos(), 10.0 * a.sin(), z]
+                    })
+                    .collect()
+            })
+            .collect();
+        serde_json::json!(edges)
+    };
+    let mut s = crate::Session::default();
+    let r = s.execute("solid.loft_points", &serde_json::json!({"sections": [circle(0.0), circle(10.0), circle(20.0)], "body_name": "Rod"})).unwrap();
+    assert_eq!(r["created_bodies"], serde_json::json!(["Rod"]));
+    let m = solidcraft_kernel::measure(&s.model.state().body("Rod").unwrap().body).unwrap();
+    let v = std::f64::consts::PI * 100.0 * 20.0;
+    assert!((m.volume - v).abs() / v < 1e-3, "{} vs {v}", m.volume);
+    assert!((m.bbox.max.z - 20.0).abs() < 1e-9 && m.bbox.min.z.abs() < 1e-9);
+    let mut bad = circle(30.0);
+    bad.as_array_mut().unwrap().pop();
+    let e = s.execute("solid.loft_points", &serde_json::json!({"sections": [circle(0.0), circle(10.0), bad]})).unwrap_err().to_string();
+    assert!(e.contains("as many edges"), "{e}");
+}

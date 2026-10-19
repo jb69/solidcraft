@@ -1,0 +1,13 @@
+[package]
+name = "solidcraft-plugin"
+description = "SolidCraft plugin contract: the manifest, parameter schema and evaluate entry point a parametric plugin implements, and the registry of plugins compiled into an app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -328,6 +328,8 @@ fn rename_design(s: &mut Session, from: &str, to: &str) {
 
 fn write(s: &mut Session, path: &str, format: &str, compression: &str, preview: bool, cache: bool) -> Result<Value> {
     solidcraft_io::vfs::check(path).map_err(|e| EngineError::Other(e.to_string()))?;
+    // Plugin features keep their last result in the design, for opening it without the plugin.
+    crate::plugin_host::record_results(s);
     // Saving an unnamed design, or one named after the file it was saved as, names it after its
     // file (not an undoable edit).
     let renamed = saved_name(&s.doc.name, s.path.as_deref(), path).map(|stem| (s.doc.name.clone(), stem));

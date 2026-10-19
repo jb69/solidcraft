@@ -36,6 +36,7 @@ mod face;
 mod features;
 mod features_more;
 pub(crate) use features::profiles as feature_profiles;
+mod plugin;
 pub use features::{auto_operation, extrude_reach};
 pub use sketch_modify::trim_piece;
 mod component_link;
@@ -60,6 +61,8 @@ pub(crate) use measure_sel::measure_items;
 mod kernel_heal_tests;
 mod parameters;
 mod plastic;
+#[cfg(test)]
+mod plugin_tests;
 mod render;
 #[cfg(test)]
 mod script_tests;
@@ -270,6 +273,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(sketch_project::COMMANDS.iter());
     v.extend(features::COMMANDS.iter());
     v.extend(features_more::COMMANDS.iter());
+    v.extend(plugin::COMMANDS.iter());
     v.extend(mesh::COMMANDS.iter());
     v.extend(construct::COMMANDS.iter());
     v.extend(sheet::COMMANDS.iter());

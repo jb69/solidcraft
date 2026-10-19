@@ -61,6 +61,7 @@ thread
   face points: [0, 0, 0]
 loft
   profiles: 4 all, 5 all
+plugin
 sweep
   profiles: 1 all
 sweep_options

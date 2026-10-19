@@ -1,0 +1,31 @@
+// The plugin world (docs/plugins.md). The in-process host (`solidcraft_plugin::Plugin`) has the
+// same shape: every value crosses as JSON text, and a plugin changes a design only through
+// `host.run`, the same command surface as MCP. A WebAssembly host implements this world.
+package solidcraft:plugin@1.0.0;
+
+interface host {
+    /// Run one command (`solid.extrude`, `sketch.create`, ...) with JSON arguments on the
+    /// plugin's scratch design; the command's JSON result or its error message.
+    run: func(command: string, args: string) -> result<string, string>;
+}
+
+interface plugin {
+    /// JSON: {id, name, version, api-version, description, display: {label, icon-id, tooltip,
+    /// type-name}, fallback: "recorded_mesh" | "suppress_with_warning" | "error_on_rebuild"}.
+    manifest: func() -> string;
+    /// JSON: {fields: [{key, label, group, collapsed, kind: {type: "number", min, default, max,
+    /// unit: "none" | "length" | "angle", integer} | {type: "bool", default} | {type: "choice",
+    /// options: [[id, label]], default}, when, help, unused}]}.
+    schema: func() -> string;
+    /// Build the feature from `params` (JSON: every parameter, numbers evaluated, lengths in mm,
+    /// angles in degrees) and `ctx` (JSON: {feature, published: {plugin-id: value}}), through
+    /// `host.run`. JSON result: {notice?, values?, issues?, warnings?, publish?}.
+    evaluate: func(params: string, ctx: string) -> result<string, string>;
+    /// The notice `evaluate` would give, without building anything; "null" when there is none.
+    describe: func(params: string, ctx: string) -> result<string, string>;
+}
+
+world parametric-plugin {
+    import host;
+    export plugin;
+}

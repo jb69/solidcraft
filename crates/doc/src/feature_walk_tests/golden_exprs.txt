@@ -135,6 +135,11 @@ thread
     Length = thread.length (Length)
   expressions: thread.length
 loft
+plugin
+  inputs:
+    Length A = plugin.a (Length)
+    Angle B = plugin.b (Angle)
+  expressions: plugin.a, plugin.b
 sweep
 sweep_options
   inputs:

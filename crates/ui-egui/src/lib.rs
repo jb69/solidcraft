@@ -94,6 +94,7 @@ pub mod messages;
 mod pattern_arrow_tests;
 #[cfg(test)]
 mod prompt_cards_tests;
+mod row_help;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]

@@ -2209,6 +2209,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let wide = matches!(&d.kind, Kind::Motion(k) if k.wide());
 
     let raw_title = title(&d.kind);
+    // Its rows' tooltips describe them as rows of this dialog.
+    let _rows = crate::row_help::Scope::enter(raw_title);
     let heading = if d.editing.is_some() { crate::i18n::format("dialog.edit_title", &[("title", tr(raw_title))]) } else { tr(raw_title).to_string() };
     let frame = crate::ui_kit::Panel::feature_frame(ctx, app.ui.layout, side);
     // OK is offered once the inputs make a feature.

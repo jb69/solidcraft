@@ -83,8 +83,9 @@ pub(super) fn sized_row<R>(ui: &mut Ui, text: &str, height: f32, control: impl F
     let label_rect = egui::Rect::from_min_size(rect.min, vec2(label_width, rect.height()));
     ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         // Left aligned in the label column, as in the design.
-        ui.add(egui::Label::new(RichText::new(crate::i18n::tr_label(text)).size(t.font_label).color(t.dialog_label)).truncate())
-            .on_hover_text(crate::i18n::tr_label(text));
+        // The tooltip says what the row does where the dialog has a description for it, else repeats the label.
+        let tip = crate::row_help::help(text).map(crate::i18n::tr).unwrap_or_else(|| crate::i18n::tr_label(text));
+        ui.add(egui::Label::new(RichText::new(crate::i18n::tr_label(text)).size(t.font_label).color(t.dialog_label)).truncate()).on_hover_text(tip);
     });
     let control_rect = egui::Rect::from_min_max(egui::pos2((label_rect.right() + label_gap(width)).min(rect.right()), rect.top()), rect.max);
     let result = ui

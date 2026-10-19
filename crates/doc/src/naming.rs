@@ -306,6 +306,7 @@ fn geometric_from(b: &ModelBody, o: &NamingOrigin, nf: usize, names_of: fn(&Mode
             | FeatureKind::Torus { operation: crate::Operation::NewBody, .. }
             | FeatureKind::Extrude { operation: crate::Operation::NewBody, .. }
             | FeatureKind::Revolve { operation: crate::Operation::NewBody, .. }
+            | FeatureKind::Plugin { operation: crate::Operation::NewBody, .. }
     );
     let inputs: Vec<(&ModelBody, FaceIndex, Arc<Vec<String>>)> = o
         .before

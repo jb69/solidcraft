@@ -501,6 +501,9 @@ pub struct ModelState {
     /// The radius spline of each edge a fillet tapered (a point on the edge with it, by feature
     /// id, see `FilletFit::Taper`).
     tapered: BTreeMap<u64, Vec<(Vec3, kernel::Taper)>>,
+    /// What plugin features published (by plugin id, as JSON text), for the plugin features
+    /// after them.
+    pub plugin_vars: BTreeMap<String, String>,
 }
 
 impl ModelState {
@@ -544,6 +547,7 @@ impl ModelState {
         }
         serde_json::to_string(&self.threads).unwrap_or_default().hash(&mut h);
         serde_json::to_string(&self.sheets).unwrap_or_default().hash(&mut h);
+        self.plugin_vars.hash(&mut h);
         h.finish()
     }
 
@@ -778,6 +782,7 @@ fn fingerprint(prev: u64, f: &Feature, vals: &BTreeMap<String, Value>, rolled_ba
     rolled_back.hash(&mut h);
     vals.get(DESIGN_LEN).map(|v| v.v.to_bits()).hash(&mut h);
     feature_json(f, steps).hash(&mut h);
+    crate::plugin_feature::installed_version(f).hash(&mut h);
     for n in param_names(f) {
         n.hash(&mut h);
         match vals.get(&n) {
@@ -3811,6 +3816,12 @@ fn feature_tools_with_constructor(
             Ok(unnamed(vec![kernel::torus(point(vals, center)?, val(vals, major, Kind::Length)?, val(vals, minor, Kind::Length)?)?]))
         }
         FeatureKind::Hole { .. } => Ok(hole_feature_tools(vals, st, f)?.into_iter().map(|(tool, _)| tool).collect()),
+        FeatureKind::Plugin { .. } => Ok(unnamed(crate::plugin_feature::build(doc, vals, f, &st.plugin_vars)?.bodies)),
+        FeatureKind::LoftPoints { sections, .. } => {
+            let secs: Vec<Vec<Vec<Vec3>>> =
+                sections.0.iter().map(|s| s.iter().map(|e| e.iter().map(|p| Vec3::new(p[0], p[1], p[2])).collect()).collect()).collect();
+            Ok(unnamed(vec![kernel::loft_points(&secs)?]))
+        }
         _ => Err(DocError::Invalid(format!("{} cannot be patterned or mirrored yet", f.name))),
     }
 }
@@ -4087,8 +4098,11 @@ fn feature_op(f: &Feature) -> (Operation, Vec<String>) {
         | FeatureKind::Torus { operation, .. } => (*operation, Vec::new()),
         FeatureKind::Hole { .. } => (Operation::Cut, Vec::new()),
         FeatureKind::Pipe { operation, targets, .. } => (*operation, crate::plain(targets)),
-        FeatureKind::Loft { operation, targets, .. } | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
+        FeatureKind::Loft { operation, targets, .. }
+        | FeatureKind::LoftPoints { operation, targets, .. }
+        | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Coil { operation, targets, .. } => (*operation, crate::plain(targets)),
+        FeatureKind::Plugin { operation, targets, .. } => (*operation, crate::plain(targets)),
         _ => (Operation::NewBody, Vec::new()),
     }
 }
@@ -4805,6 +4819,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         | FeatureKind::Pipe { operation, targets, .. }
         | FeatureKind::Revolve { operation, targets, .. }
         | FeatureKind::Loft { operation, targets, .. }
+        | FeatureKind::LoftPoints { operation, targets, .. }
         | FeatureKind::Coil { operation, targets, .. }
         | FeatureKind::Sweep { operation, targets, .. } => {
             let mut constructor = None;
@@ -5270,6 +5285,16 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         FeatureKind::Torus { center, major, minor, operation } => {
             let b = kernel::torus(point(vals, center)?, val(vals, major, Kind::Length)?, val(vals, minor, Kind::Length)?)?;
             apply_op(st, f, vec![b], *operation, &[])
+        }
+        FeatureKind::Plugin { plugin_id, operation, targets, .. } => {
+            let built = crate::plugin_feature::build(doc, vals, f, &st.plugin_vars)?;
+            if !built.warnings.is_empty() {
+                *warning = Some(built.warnings.join("; "));
+            }
+            if let Some(p) = built.result.get("publish").filter(|p| !p.is_null()) {
+                st.plugin_vars.insert(plugin_id.clone(), p.to_string());
+            }
+            apply_op(st, f, built.bodies, *operation, &crate::plain(targets))
         }
         FeatureKind::Combine { target, tools, operation, keep_tools } => {
             if tools.iter().any(|t| t == target) {

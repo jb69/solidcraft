@@ -980,6 +980,7 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
         .chain(super::surface::COMMANDS)
         .chain(super::surface_boundary::COMMANDS)
         .any(|candidate| candidate.id == spec.id)
+        || spec.id == "plugin.add"
         || matches!(
             spec.id,
             "sheet.flange"

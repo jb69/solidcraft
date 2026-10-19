@@ -27,6 +27,49 @@ One-shot plugins call `execute(params)` once; they may emit ordinary native feat
 extrude, …) inside that transaction. Parametric plugins still use `run()` inside rebuild; the
 difference is that the document **records** a single feature whose params the user edits later.
 
+## Implemented: the in-process host (parametric plugins)
+
+Milestone 2's contract runs today with plugins compiled into the app; the Wasm loader is the
+next step and changes no plugin.
+
+- **Contract** (`crates/plugin`, no workspace dependencies): `Plugin { manifest, schema,
+  evaluate, describe }`, `Host { run }`, `Manifest` (id, name, version, `api_version`, `display`,
+  `fallback`, `preview`), the parameter `Schema` (fields with group, kind: number with unit,
+  bounds, default and integer flag / bool / choice, a `when` show condition, help, `unused`), the
+  condition language and value checks, and the registry (`register`, `find`, `installed`). All
+  values cross as JSON; `crates/plugin/wit/plugin.wit` is the same world for the Wasm host.
+- **Why in-process first.** The contract is JSON plus `run()`, so a Wasm adapter is mechanical
+  and every plugin written now moves behind it unchanged; wasmtime is a large dependency and
+  build-time cost to take before the contract has settled. An app registers its plugins at
+  start-up (`solidcraft_plugin::register`).
+- **Feature shell** (`FeatureKind::Plugin`, `crates/doc/src/plugin_feature.rs`): `plugin_id`,
+  `api_version`, `params` (every number an expression and a feature input with a `dN` name, so
+  parameters drive it; `inputs` keeps each number's label and unit, so the design walks and
+  opens without the plugin), `display`, `provenance`, `fallback`, `operation`, `targets`.
+- **Rebuild.** The document evaluates a plugin feature through a runner the engine registers:
+  `evaluate` runs against a scratch session through `run()` (file, document, app, library,
+  edit and plugin commands refused), and the bodies left there become the feature's result. A
+  plugin that panics fails its feature. The plugin's installed version is part of the feature's
+  fingerprint, so installing or updating a plugin rebuilds its features.
+- **Published values.** `evaluate` may return `publish`; later plugin features read it from their
+  context as `published.<plugin id>` (part of the model state's digest, so they rebuild when it
+  changes).
+- **Fallback.** `recorded_mesh`: the engine stores each such feature's last result in the design
+  (`plugin_results`, beside the features, so recording does not change a feature) whenever it is
+  saved; without the plugin the design shows it with a warning. `suppress_with_warning` and
+  `error_on_rebuild` as above. `recorded_script` is not built.
+- **Commands**: `plugin.list`, `plugin.add {plugin, values}`, `plugin.set {feature, values}`,
+  `plugin.fields {plugin | feature}`; `timeline.edit` and `timeline.redefine` work on plugin
+  features as on built-in ones. `solid.loft_points` (a smooth loft through sections given as
+  points) is there for plugins that build lofted shapes.
+- **Dialog** (`crates/ui-egui/src/dialogs_plugin.rs`): SOLID › CREATE › Plugin Feature picks an
+  installed plugin; groups are collapsible as the schema says, a field shows under its
+  condition, help is the tooltip, `unused` fields are dimmed, and `describe` gives the notice
+  as values are typed. The timeline row uses `display.icon_id` from the host's icons.
+- **Tests**: `crates/engine/src/cmd/plugin_tests.rs` (build, parameters, choices and conditions,
+  bounds, published values, refused commands, panics, save and reopen, every fallback),
+  `crates/ui-egui/src/plugin_dialog_tests.rs` (the dialog).
+
 ## Generic feature shell (host-owned)
 
 Add one variant to the parametric document (name illustrative):

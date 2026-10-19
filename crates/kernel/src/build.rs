@@ -1718,6 +1718,139 @@ pub(crate) fn close_sweep(sides: Vec<Side>) -> Result<Body> {
     record::attach(Body::new(solid)?, &[], history, Default::default())
 }
 
+/// One section of [`loft_beziers`]: a closed chain of edges, each a chain of cubic Béziers in 3D
+/// (each piece starts where the one before ends; the last edge ends where the first starts).
+pub type BezierSection = Vec<Vec<[Vec3; 4]>>;
+
+/// Most sections [`loft_beziers`] takes.
+pub const MAX_BEZIER_LOFT_SECTIONS: usize = 200;
+
+/// The B-spline of a chain of cubic Béziers: their control points end to end, every joint a knot
+/// of multiplicity three (the chain's own continuity is kept, nothing is refitted).
+fn bezier_chain(pieces: &[[Vec3; 4]]) -> Option<mt::BSplineCurve<mt::Point3>> {
+    let first = pieces.first()?;
+    let n = pieces.len();
+    let mut ctrl = vec![p3(first[0])];
+    let mut knots = vec![0.0; 4];
+    for (i, b) in pieces.iter().enumerate() {
+        ctrl.extend([p3(b[1]), p3(b[2]), p3(b[3])]);
+        let k = (i + 1) as f64 / n as f64;
+        knots.extend(if i + 1 == n { [1.0; 4].to_vec() } else { vec![k; 3] });
+    }
+    mt::BSplineCurve::try_new(mt::KnotVec::from(knots), ctrl).ok()
+}
+
+/// A smooth loft through sections given as chains of cubic Béziers in 3D: a section needs no
+/// plane (it may be wrapped on a cylinder), only the first and the last, which are the
+/// caps. Every section has the same number of edges and each edge the same number of pieces;
+/// each edge becomes one face through all the sections. The sections must run the same way
+/// round. Refused: fewer than 3 or more than [`MAX_BEZIER_LOFT_SECTIONS`] sections, sections
+/// that do not match, an edge that does not start where the one before ends.
+pub fn loft_beziers(sections: &[BezierSection]) -> Result<Body> {
+    if sections.len() < 3 || sections.len() > MAX_BEZIER_LOFT_SECTIONS {
+        return Err(KernelError::Invalid(format!("a Bézier loft needs 3…{MAX_BEZIER_LOFT_SECTIONS} sections")));
+    }
+    let shape: Vec<usize> = sections.first().map(|s| s.iter().map(Vec::len).collect()).unwrap_or_default();
+    if shape.is_empty() || shape.contains(&0) || sections.iter().any(|s| s.iter().map(Vec::len).collect::<Vec<_>>() != shape) {
+        return Err(KernelError::Invalid("the loft's sections must have the same edges, each of as many pieces".into()));
+    }
+    if sections.iter().flatten().flatten().flatten().any(|p| !p.is_finite()) {
+        return Err(KernelError::Invalid("a loft section has a point that is not finite".into()));
+    }
+    for s in sections {
+        let n = s.len();
+        for (i, e) in s.iter().enumerate() {
+            let (Some(end), Some(next)) = (e.last().map(|b| b[3]), s.get((i + 1) % n).and_then(|f| f.first()).map(|b| b[0])) else { continue };
+            if end.dist(next) > 1e-6 * (1.0 + end.len()) {
+                return Err(KernelError::Invalid("a loft section does not close: an edge ends away from the next one's start".into()));
+            }
+        }
+    }
+    guard("loft", || {
+        let mut wires: Vec<mt::Wire> = Vec::with_capacity(sections.len());
+        for s in sections {
+            let verts: Vec<mt::Vertex> = s.iter().filter_map(|e| e.first()).map(|b| builder::vertex(p3(b[0]))).collect();
+            let n = verts.len();
+            let mut edges = Vec::with_capacity(n);
+            for (i, e) in s.iter().enumerate() {
+                let (Some(a), Some(b)) = (verts.get(i), verts.get((i + 1) % n)) else { return Err(KernelError::Failed("loft section".into())) };
+                let c = bezier_chain(e).ok_or_else(|| KernelError::Failed("loft section curve".into()))?;
+                edges.push(mt::Edge::new(a, b, mt::Curve::BSplineCurve(c)));
+            }
+            wires.push(edges.into());
+        }
+        let numbers: Vec<Vec<Vec<usize>>> = sections.iter().map(|s| (0..s.len()).map(|i| vec![i]).collect()).collect();
+        // Across the sections by how far their pieces' joints move on average: a section's
+        // few edge corners (two, for a profile closed by a short straight edge) say little about
+        // how far the whole moved.
+        let joints = |s: &BezierSection| -> Vec<Vec3> { s.iter().flatten().map(|b| b[0]).collect() };
+        let mut along = vec![0.0];
+        for w in sections.windows(2) {
+            let (a, b) = (joints(&w[0]), joints(&w[1]));
+            let step = a.iter().zip(&b).map(|(p, q)| p.dist(*q)).sum::<f64>() / a.len().max(1) as f64;
+            along.push(along.last().copied().unwrap_or(0.0) + step);
+        }
+        let total = along.last().copied().unwrap_or(0.0);
+        let along = (total > 0.0 && along.windows(2).all(|w| w[1] - w[0] > 1e-9 * total)).then(|| along.iter().map(|x| x / total).collect());
+        let faces = smooth_loft_faces_along(&wires, &numbers, true, along)?;
+        let (Some(w0), Some(w1)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("loft sections".into())) };
+        cap_and_close(faces, std::slice::from_ref(w0), std::slice::from_ref(w1), false)
+    })
+}
+
+/// The cubic Béziers of the natural cubic spline through `p` by chord length (the sketch fit
+/// spline's maths, in 3D): exact through every point, second derivative zero at both ends.
+pub fn fit_chain_3d(p: &[Vec3]) -> Vec<[Vec3; 4]> {
+    let n = p.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let h: Vec<f64> = p.windows(2).map(|w| w[0].dist(w[1]).max(1e-9)).collect();
+    if n == 2 {
+        return vec![[p[0], p[0] + (p[1] - p[0]) * (1.0 / 3.0), p[0] + (p[1] - p[0]) * (2.0 / 3.0), p[1]]];
+    }
+    // Second derivatives (natural ends) by the tridiagonal solve.
+    let m = n - 2;
+    let (mut diag, mut up, mut low, mut rhs) = (vec![0.0; m], vec![0.0; m], vec![0.0; m], vec![Vec3::ZERO; m]);
+    for i in 0..m {
+        let (h0, h1) = (h[i], h[i + 1]);
+        diag[i] = 2.0 * (h0 + h1);
+        low[i] = h0;
+        up[i] = h1;
+        rhs[i] = ((p[i + 2] - p[i + 1]) * (1.0 / h1) - (p[i + 1] - p[i]) * (1.0 / h0)) * 6.0;
+    }
+    for i in 1..m {
+        let w = low[i] / diag[i - 1];
+        diag[i] -= w * up[i - 1];
+        rhs[i] = rhs[i] - rhs[i - 1] * w;
+    }
+    let mut sol = vec![Vec3::ZERO; m];
+    for i in (0..m).rev() {
+        let next = if i + 1 < m { sol[i + 1] * up[i] } else { Vec3::ZERO };
+        sol[i] = (rhs[i] - next) * (1.0 / diag[i]);
+    }
+    let mm = |i: usize| if i == 0 || i == n - 1 { Vec3::ZERO } else { sol[i - 1] };
+    (0..n - 1)
+        .map(|i| {
+            let hi = h[i];
+            let slope = (p[i + 1] - p[i]) * (1.0 / hi);
+            // First derivatives (per unit chord) at both ends of the span, as Hermite tangents.
+            let d0 = (slope - (mm(i) * 2.0 + mm(i + 1)) * (hi / 6.0)) * hi;
+            let d1 = (slope + (mm(i) + mm(i + 1) * 2.0) * (hi / 6.0)) * hi;
+            [p[i], p[i] + d0 * (1.0 / 3.0), p[i + 1] - d1 * (1.0 / 3.0), p[i + 1]]
+        })
+        .collect()
+}
+
+/// [`loft_beziers`] through sections given as points: each section a closed chain of edges,
+/// each edge the points it passes through from its start to its end (the next edge starts
+/// where it ends, the last ends at the first's start), fitted with [`fit_chain_3d`]. An edge of
+/// two points is straight.
+pub fn loft_points(sections: &[Vec<Vec<Vec3>>]) -> Result<Body> {
+    let secs: Vec<BezierSection> = sections.iter().map(|s| s.iter().map(|e| fit_chain_3d(e)).collect()).collect();
+    loft_beziers(&secs)
+}
+
 /// Ruled loft through two or more planar sections (outer loops only). The sections and the
 /// same sections in reverse order give the same body.
 pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
@@ -1877,6 +2010,12 @@ fn section_parameters(edges: &[Vec<mt::Edge>]) -> Vec<f64> {
 /// more, quadratic across three), neighbours sharing their seams. `closed` wires join their
 /// last edge to their first; open ones have a seam at each end.
 pub(crate) fn smooth_loft_faces(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], closed: bool) -> Result<Vec<Side>> {
+    smooth_loft_faces_along(wires, numbers, closed, None)
+}
+
+/// [`smooth_loft_faces`] with the sections' parameters across the loft given (0 to 1, rising),
+/// instead of worked out from the wires' corners.
+pub(crate) fn smooth_loft_faces_along(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], closed: bool, along: Option<Vec<f64>>) -> Result<Vec<Side>> {
     let fail = |m: &str| KernelError::Failed(format!("smooth loft: {m}"));
     let edges: Vec<Vec<mt::Edge>> = wires.iter().map(|w| w.edge_iter().cloned().collect()).collect();
     let n = edges.first().map(Vec::len).ok_or_else(|| fail("no sections"))?;
@@ -1890,7 +2029,7 @@ pub(crate) fn smooth_loft_faces(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>],
         }
     };
     let (Some(first), Some(last)) = (edges.first(), edges.last()) else { return Err(fail("sections")) };
-    let along = section_parameters(&edges);
+    let along = along.filter(|a| a.len() == edges.len()).unwrap_or_else(|| section_parameters(&edges));
     // Seams: through the k-th vertex of every section (an open wire's last one at the end of
     // its last edge).
     let vertex = |e: &mt::Edge, end: bool| if end { e.back().clone() } else { e.front().clone() };

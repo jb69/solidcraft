@@ -13,6 +13,7 @@ solidcraft-geom = { workspace = true }
 solidcraft-sketch = { workspace = true }
 solidcraft-kernel = { workspace = true }
 solidcraft-doc = { workspace = true }
+solidcraft-plugin = { workspace = true }
 solidcraft-io = { workspace = true }
 solidcraft-render = { workspace = true }
 serde = { workspace = true }

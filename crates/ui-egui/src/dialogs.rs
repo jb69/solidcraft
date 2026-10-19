@@ -237,6 +237,8 @@ pub enum Kind {
         cs_angle: String,
         opts: HoleOpts,
     },
+    /// A plugin's feature, its dialog drawn from the plugin's parameter schema.
+    Plugin(Box<crate::dialogs_plugin::PluginDialog>),
     Primitive {
         cmd: &'static str,
         fields: Vec<(&'static str, String)>,
@@ -594,6 +596,7 @@ impl Dialog {
             }),
             "solid.move" => Dialog::new(crate::dialogs_move::kind(0), crate::dialogs_move::inputs(0)),
             "solid.hole" => Dialog::new(hole_defaults(), vec![SelInput::new("Face", HOLE_FACES, true)]),
+            "plugin.add" => Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::PluginDialog::new(None)?)), vec![]),
             "solid.box" => Dialog::new(
                 Kind::Primitive {
                     cmd: "solid.box",
@@ -793,6 +796,8 @@ impl Dialog {
             Kind::SketchModify(k) => return k.previews(),
             Kind::Plastic(k) => return k.previews(),
             Kind::Part(_) => return true,
+            // A plugin that takes many seconds to build says so: no preview of every keystroke.
+            Kind::Plugin(k) => return k.previews(),
             _ => {}
         }
         matches!(
@@ -824,6 +829,7 @@ impl Dialog {
                 | Kind::Move { .. }
                 | Kind::Hole { .. }
                 | Kind::Primitive { .. }
+                | Kind::Plugin(_)
                 | Kind::Combine { .. }
                 | Kind::BoundaryFill { .. }
         )
@@ -1413,6 +1419,19 @@ pub(crate) fn publish_row(r: &egui::Response) {
     ROW.with(|row| crate::scenario::publish_handle(&format!("dialog:{}", row.borrow()), r.rect.center()));
 }
 
+/// A title made at run time (a plugin's name), kept for the program's life: there are only as
+/// many as there are plugins.
+fn intern_title(t: String) -> &'static str {
+    static TITLES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
+    let Ok(mut m) = TITLES.get_or_init(Default::default).lock() else { return "PLUGIN" };
+    if let Some(t) = m.get(&t) {
+        return t;
+    }
+    let leaked: &'static str = Box::leak(t.clone().into_boxed_str());
+    m.insert(t, leaked);
+    leaked
+}
+
 fn title(k: &Kind) -> &'static str {
     match k {
         Kind::Sketch => "CREATE SKETCH",
@@ -1458,6 +1477,7 @@ fn title(k: &Kind) -> &'static str {
             "solid.coil" => "COIL",
             _ => "TORUS",
         },
+        Kind::Plugin(k) => intern_title(k.title()),
         Kind::Combine { .. } => "COMBINE",
         Kind::Params { .. } => "PARAMETERS",
         Kind::EditParam { .. } => "EDIT DIMENSION",
@@ -2330,6 +2350,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Kind::Motion(k @ crate::dialogs_motion::Mo::Configurations { .. }) = &mut d.kind {
                 enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs);
             }
+            // A plugin's dialog lays out its own groups (collapsible, as its schema says).
+            let editing = d.editing.map(|(id, _)| id);
+            if let Kind::Plugin(k) = &mut d.kind {
+                enter |= crate::dialogs_plugin::rows(app, ui, k, editing);
+            }
             egui::Grid::new("sc_dialog_grid").num_columns(if pattern_columns { 1 } else { 2 }).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                 if pattern_columns {
                     enter |= rectangular_pattern_rows(&mut d, ui, &app.session);
@@ -2337,6 +2362,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     return;
                 }
                 if matches!(&d.kind, Kind::Motion(crate::dialogs_motion::Mo::Configurations { .. })) {
+                    return;
+                }
+                if matches!(&d.kind, Kind::Plugin(_)) {
+                    error_rows(app, ctx, &mut d, ui, false);
                     return;
                 }
                 placement_row(&mut d, ui);
@@ -2356,6 +2385,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 }
                 input_rows(&mut d, ui, &app.session);
                 match &mut d.kind {
+                    Kind::Plugin(_) => {}
                     Kind::Sketch => {
                         if d.error.is_some()
                             && let Some(selection @ Sel::Face { .. }) = d.inputs.first().and_then(|i| i.items.first())
@@ -4325,6 +4355,13 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             return Ok(out);
         }
+        Kind::Plugin(k) => {
+            let mut p = k.params();
+            if let (Value::Object(m), Some(t)) = (&mut p, d.extra.get("targets")) {
+                m.insert("targets".into(), t.clone());
+            }
+            ("plugin.add", p)
+        }
         Kind::Primitive { cmd, fields, operation, at } => {
             let mut p = serde_json::Map::new();
             for (k, v) in fields {
@@ -5226,6 +5263,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 } else {
                     inp.items = bodies;
                 }
+            }
+            d
+        }
+        FeatureKind::Plugin { operation, targets, .. } => {
+            let mut d = Dialog::new(Kind::Plugin(Box::new(crate::dialogs_plugin::for_feature(&f.kind, op_index(operation))?)), vec![]);
+            if !targets.is_empty() {
+                d.extra.insert("targets".into(), json!(targets));
             }
             d
         }

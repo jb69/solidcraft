@@ -4142,6 +4142,7 @@ dependencies = [
  "solidcraft-derive",
  "solidcraft-geom",
  "solidcraft-kernel",
+ "solidcraft-plugin",
  "solidcraft-render",
  "solidcraft-sketch",
  "thiserror 2.0.21",
@@ -4159,6 +4160,7 @@ dependencies = [
  "solidcraft-geom",
  "solidcraft-io",
  "solidcraft-kernel",
+ "solidcraft-plugin",
  "solidcraft-render",
  "solidcraft-sketch",
  "thiserror 2.0.21",
@@ -4241,6 +4243,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-plugin"
+version = "0.16.2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "solidcraft-render"
 version = "0.16.2"
 dependencies = [
@@ -4286,6 +4296,7 @@ dependencies = [
  "sha2 0.10.9",
  "solidcraft-engine",
  "solidcraft-gpu",
+ "solidcraft-plugin",
  "tiny-skia",
  "toml",
  "ttf-parser",

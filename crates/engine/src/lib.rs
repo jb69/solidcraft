@@ -16,6 +16,7 @@ pub mod fuzz;
 pub mod licences;
 pub mod occurrences;
 pub mod params;
+mod plugin_host;
 pub mod product_scene;
 pub mod recovery;
 pub mod render_jobs;
@@ -346,6 +347,8 @@ impl Default for Session {
 
 impl Session {
     pub fn new(mut doc: Document) -> Self {
+        // Plugin features evaluate through this process's engine.
+        plugin_host::install();
         // The session keeps what is hidden (not an undo step); the design file carries it.
         let visibility = std::mem::take(&mut doc.visibility);
         let doc = Arc::new(doc);

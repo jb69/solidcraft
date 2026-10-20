@@ -13,9 +13,9 @@ use crate::prop::{self, BladeSection, Cut};
 use crate::schema::{self, Kind, Tool, Val, Values};
 use crate::wing::{self, Surface, WingLink};
 
-pub const WING: &str = "foil.wing";
-pub const STABILISER: &str = "foil.stabiliser";
-pub const PROPELLER: &str = "foil.propeller";
+pub const WING: &str = "foil-wing";
+pub const STABILISER: &str = "foil-stabiliser";
+pub const PROPELLER: &str = "foil-propeller";
 
 /// Register the three plugins (once; an app calls it at start-up).
 pub fn register() {

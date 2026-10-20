@@ -46,7 +46,7 @@ fn silk_1050() -> Value {
 #[test]
 fn silk_1050_as_onshape_builds_it() {
     let mut s = session();
-    let r = run(&mut s, "plugin.add", json!({"plugin": "foil.wing", "values": silk_1050(), "body_name": "Wing"}));
+    let r = run(&mut s, "plugin.add", json!({"plugin": "foil-wing", "values": silk_1050(), "body_name": "Wing"}));
     let n = r["notice"].as_str().unwrap();
     assert!(n.starts_with("Area 1050 cm² projected (1057 developed) · span 972 mm · AR 9 · root 151 mm · end 47 mm · MAC 118 mm"), "{n}");
     check_against(&s, "Wing", 1_013_913.8, [-37.6575, -486.0556, -47.5982], [152.0899, 486.0556, 12.7978], 5e-4, 0.05);
@@ -73,7 +73,7 @@ fn silk_1050_winglets_and_tubercles_as_onshape_builds_them() {
     ] {
         v[k] = x;
     }
-    let r = run(&mut s, "plugin.add", json!({"plugin": "foil.wing", "values": v, "body_name": "Wing"}));
+    let r = run(&mut s, "plugin.add", json!({"plugin": "foil-wing", "values": v, "body_name": "Wing"}));
     assert!(
         r["notice"].as_str().unwrap().contains(
             "winglets up 15 cm² each (14.4 projected), 9 mm high at 25°, projected span 969 mm · tip section NACA4 1% camber from 40% span"
@@ -92,7 +92,7 @@ fn u_surf_135_as_onshape_builds_it() {
     let r = run(
         &mut s,
         "plugin.add",
-        json!({"plugin": "foil.stabiliser", "body_name": "Stab", "values": {
+        json!({"plugin": "foil-stabiliser", "body_name": "Stab", "values": {
             "profile": "NACA4", "camber": 0, "rootThickness": 9.4, "tipThickness": 7.4, "targetArea": 135, "aspectRatio": 9,
             "chordShape": "SUPERELLIPSE", "superN": 1.4, "endRatio": 0.2, "minTipOn": true, "minTip": 1, "stations": 13,
             "planformAlign": 19, "sweepTip": 15, "sweepExp": 4, "tipDrop": 0, "dropLaw": "POWER", "dropExp": 1,
@@ -121,7 +121,7 @@ fn efoil_propeller_as_onshape_builds_it() {
     let r = run(
         &mut s,
         "plugin.add",
-        json!({"plugin": "foil.propeller", "body_name": "Prop", "values": {
+        json!({"plugin": "foil-propeller", "body_name": "Prop", "values": {
             "diameter": 140, "pdRatio": 0.9, "ear": 0.3, "hubUpstream": 63, "hubDownstream": 63, "hubLength": 30, "noseLength": 15,
             "mountType": "BOLTED", "pilotDia": 12, "tipPitchChange": -10, "skewAngle": 7, "rake": 5, "taperExponent": 1, "sectionCount": 12
         }}),
@@ -142,12 +142,12 @@ fn a_wing_follows_its_parameters_and_a_linked_stab_follows_the_wing() {
     run(
         &mut s,
         "plugin.add",
-        json!({"plugin": "foil.wing", "body_name": "Wing", "values": {"targetArea": "area", "aspectRatio": 8, "stations": 7, "pointsPerSurface": 24}}),
+        json!({"plugin": "foil-wing", "body_name": "Wing", "values": {"targetArea": "area", "aspectRatio": 8, "stations": 7, "pointsPerSurface": 24}}),
     );
     let r = run(
         &mut s,
         "plugin.add",
-        json!({"plugin": "foil.stabiliser", "body_name": "Stab", "values": {"stabLink": "LINKED", "arm": 600, "stations": 7, "pointsPerSurface": 24}}),
+        json!({"plugin": "foil-stabiliser", "body_name": "Stab", "values": {"stabLink": "LINKED", "arm": 600, "stations": 7, "pointsPerSurface": 24}}),
     );
     // linked: 15 % of the wing, AR 8 - 1.5
     assert!(r["notice"].as_str().unwrap().starts_with("Area 150 cm²") && r["notice"].as_str().unwrap().contains("AR 6.5"), "{r}");
@@ -171,11 +171,11 @@ fn a_foil_set_round_trips_through_a_saved_design() {
     v["pointsPerSurface"] = json!(20);
     v["stations"] = json!(5);
     v["camber"] = json!("2.5 + 0");
-    run(&mut s, "plugin.add", json!({"plugin": "foil.wing", "values": v, "body_name": "Wing"}));
+    run(&mut s, "plugin.add", json!({"plugin": "foil-wing", "values": v, "body_name": "Wing"}));
     run(
         &mut s,
         "plugin.add",
-        json!({"plugin": "foil.stabiliser", "body_name": "Stab", "values": {"stations": 5, "pointsPerSurface": 20, "profile": "MH18", "invertSection": true}}),
+        json!({"plugin": "foil-stabiliser", "body_name": "Stab", "values": {"stations": 5, "pointsPerSurface": 20, "profile": "MH18", "invertSection": true}}),
     );
     let dir = std::env::temp_dir().join(format!("foil_plugin_rt_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

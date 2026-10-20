@@ -3,7 +3,7 @@
 //! foil design build 246, propeller build 99) and checked against it. Fork-only: a port of
 //! FeatureScript checked against Onshape cannot go upstream (CONTRIBUTING, rule 1).
 //!
-//! - [`plugins`]: the three plugins (`foil.wing`, `foil.stabiliser`, `foil.propeller`) on the
+//! - [`plugins`]: the three plugins (`foil-wing`, `foil-stabiliser`, `foil-propeller`) on the
 //!   plugin contract; [`register`] installs them in an app.
 //! - [`schema`]: every dialog field (generated from the FeatureScript preconditions), values and
 //!   the conditions the dialogs show fields under;

@@ -9,12 +9,12 @@ FeatureScript checked against Onshape cannot go upstream (CONTRIBUTING, rule 1).
 
 | Plugin | Id | Onshape feature |
 |---|---|---|
-| Foil Wing | `foil.wing` | Foil wing |
-| Foil Stabiliser | `foil.stabiliser` | Foil stabiliser |
-| B-Series Propeller | `foil.propeller` | B-Series Propeller |
+| Foil Wing | `foil-wing` | Foil wing |
+| Foil Stabiliser | `foil-stabiliser` | Foil stabiliser |
+| B-Series Propeller | `foil-propeller` | B-Series Propeller |
 
 In the app: SOLID › CREATE › Plugin Feature, pick the plugin. Over MCP:
-`plugin.add {plugin: "foil.wing", values: {targetArea: 1050, …}}`, `plugin.set {feature,
+`plugin.add {plugin: "foil-wing", values: {targetArea: 1050, …}}`, `plugin.set {feature,
 values}`, `plugin.fields {plugin | feature}` (values by the FeatureScript's names). The desktop
 app and the CLI (and so its MCP server) register them at start-up
 (`solidcraft_plugin_foil::register`).

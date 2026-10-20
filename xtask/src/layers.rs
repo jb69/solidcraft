@@ -58,6 +58,9 @@ pub const TABLE: &[(&str, Class)] = &[
     // the WebAssembly plugin host: depends on the contract only (and wasmtime); at 5 so that its
     // tests build plugin features with the engine. The apps load plugin folders through it.
     ("plugin-wasm", Class::Layer(5)),
+    // plugins on the contract (crates/plugin): like the apps, they and their tests sit above
+    // every layer (their tests build designs with the engine and load them with plugin-wasm)
+    ("plugin-gear", Class::Exempt),
     ("testkit", Class::Testkit),
     // apps and tooling
     ("solidcraft", Class::Exempt),

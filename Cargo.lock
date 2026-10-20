@@ -4713,6 +4713,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-plugin-gear"
+version = "0.18.1"
+dependencies = [
+ "serde_json",
+ "solidcraft-engine",
+ "solidcraft-kernel",
+ "solidcraft-plugin",
+ "solidcraft-plugin-guest",
+ "solidcraft-plugin-wasm",
+ "wit-component 0.262.0",
+]
+
+[[package]]
 name = "solidcraft-plugin-guest"
 version = "0.18.1"
 dependencies = [

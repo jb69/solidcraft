@@ -27,6 +27,7 @@ solidcraft-space-mouse = { path = "crates/space-mouse" }
 solidcraft-mcp = { path = "crates/mcp" }
 solidcraft-derive = { path = "crates/derive" }
 solidcraft-plugin = { path = "crates/plugin" }
+solidcraft-plugin-foil = { path = "crates/plugin-foil" }
 solidcraft-3dx-client = { path = "crates/threedx-client" }
 
 # foundation

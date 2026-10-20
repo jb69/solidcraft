@@ -4184,6 +4184,7 @@ dependencies = [
  "serde_json",
  "solidcraft-3dx-client",
  "solidcraft-engine",
+ "solidcraft-plugin-foil",
  "solidcraft-space-mouse",
  "solidcraft-ui-egui",
  "ureq",
@@ -4204,6 +4205,7 @@ dependencies = [
  "solidcraft-engine",
  "solidcraft-gpu",
  "solidcraft-mcp",
+ "solidcraft-plugin-foil",
 ]
 
 [[package]]
@@ -4337,6 +4339,16 @@ version = "0.18.1"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "solidcraft-plugin-foil"
+version = "0.18.1"
+dependencies = [
+ "serde_json",
+ "solidcraft-engine",
+ "solidcraft-kernel",
+ "solidcraft-plugin",
 ]
 
 [[package]]

@@ -85,6 +85,8 @@ const USAGE: &str = "usage:
 ";
 
 fn main() -> ExitCode {
+    // The plugins compiled into this build (docs/plugins.md).
+    solidcraft_plugin_foil::register();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("run") => cmd_run(&args[1..]),

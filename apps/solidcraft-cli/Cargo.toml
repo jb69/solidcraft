@@ -21,6 +21,8 @@ path = "src/alias.rs"
 
 [dependencies]
 solidcraft-engine = { workspace = true }
+# The plugins compiled into the app (docs/plugins.md).
+solidcraft-plugin-foil = { workspace = true }
 solidcraft-gpu = { workspace = true }
 solidcraft-mcp = { workspace = true }
 serde_json = { workspace = true }

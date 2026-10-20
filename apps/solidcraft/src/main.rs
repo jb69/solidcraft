@@ -477,6 +477,8 @@ fn app_viewport() -> Result<egui::ViewportBuilder, eframe::Error> {
 const APP_ID: &str = solidcraft_engine::io::APP_ID;
 
 fn main() -> eframe::Result {
+    // The plugins compiled into this build (docs/plugins.md).
+    solidcraft_plugin_foil::register();
     adopt_legacy_settings();
     let mut safe_mode = startup::env_on(std::env::var(startup::SAFE_MODE_ENV).ok().as_deref());
     let mut control_port: Option<u16> = solidcraft_engine::geom::env::var("CONTROL_PORT").and_then(|p| p.parse().ok());

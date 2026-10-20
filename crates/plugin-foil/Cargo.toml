@@ -5,8 +5,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lints]
-workspace = true
+# The workspace lints, except unsafe_code: denied, not forbidden, so that the examples (each
+# plugin as a WebAssembly component) can take export_plugin!'s export glue, which allows it.
+# Keep the rest in sync with [workspace.lints].
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+neg_cmp_op_on_partial_ord = "allow"
 
 [dependencies]
 solidcraft-plugin = { workspace = true }
@@ -15,3 +25,23 @@ serde_json = { workspace = true }
 [dev-dependencies]
 solidcraft-engine = { workspace = true }
 solidcraft-kernel = { workspace = true }
+# Each plugin as a WebAssembly component (examples/), loaded by the host in tests/wasm.rs.
+solidcraft-plugin-guest = { workspace = true }
+solidcraft-plugin-wasm = { workspace = true }
+wit-component = { workspace = true }
+
+# Each plugin as a WebAssembly component: `cargo xtask plugin solidcraft-plugin-foil wing`.
+[[example]]
+name = "wing"
+path = "examples/wing/lib.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "stabiliser"
+path = "examples/stabiliser/lib.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "propeller"
+path = "examples/propeller/lib.rs"
+crate-type = ["cdylib"]

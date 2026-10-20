@@ -43,6 +43,25 @@ desktop app and the CLI (and so its MCP server) register them at start-up
   stabiliser following it, options and bounds, save and reopen; the propeller one body, as long
   as its hub and nose, within its diameter).
 
+## As WebAssembly components
+
+The same three plugins also build as components for the WebAssembly host of
+[plugins.md](plugins.md), one per plugin (`examples/wing`, `examples/stabiliser`,
+`examples/propeller`: `export_plugin!` of the compiled-in plugin, and its `plugin.json`):
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo xtask plugin solidcraft-plugin-foil wing   # writes target/plugins/foil-wing/
+```
+
+Copy the folder into the per-user plugins directory (`~/Library/Application
+Support/SolidCraft/plugins` on macOS, `%LOCALAPPDATA%\SolidCraft\plugins` on Windows,
+`~/.local/share/solidcraft/plugins` elsewhere). An app that compiles the foil plugins in keeps
+those and skips the folders (same ids). `tests/wasm.rs` loads all three from folders, checks
+their manifests, dialogs and notices against the compiled-in plugins, builds the 1050 cm² wing
+of `tests/plugins.rs` from its component (the same span and volume as the compiled-in plugin)
+and a linked stabiliser following a loaded wing.
+
 Rebuild time on a laptop: a wing or stabiliser 1 to 3 s (73 stations: about 2.5 s); the
 propeller about a minute (its blade joins), so its dialog has no live preview.
 

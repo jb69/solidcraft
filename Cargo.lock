@@ -4722,6 +4722,9 @@ dependencies = [
  "solidcraft-engine",
  "solidcraft-kernel",
  "solidcraft-plugin",
+ "solidcraft-plugin-guest",
+ "solidcraft-plugin-wasm",
+ "wit-component 0.262.0",
 ]
 
 [[package]]

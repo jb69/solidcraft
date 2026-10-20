@@ -8,3 +8,5 @@ publish = false
 [dependencies]
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# `cargo xtask plugin`: a plugin module as a component
+wit-component = { workspace = true }

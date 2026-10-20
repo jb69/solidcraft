@@ -27,7 +27,17 @@ solidcraft-space-mouse = { path = "crates/space-mouse" }
 solidcraft-mcp = { path = "crates/mcp" }
 solidcraft-derive = { path = "crates/derive" }
 solidcraft-plugin = { path = "crates/plugin" }
+solidcraft-plugin-guest = { path = "crates/plugin-guest" }
+solidcraft-plugin-wasm = { path = "crates/plugin-wasm" }
 solidcraft-3dx-client = { path = "crates/threedx-client" }
+
+# WebAssembly plugins (docs/plugins.md; Apache-2.0 WITH LLVM-exception). The host runs components
+# of the solidcraft:plugin world with fuel and memory limits: the runtime and Cranelift only, no
+# WASI, caching, profiling or text format. Only crates/plugin-wasm uses it; desktop builds only.
+wasmtime = { version = "49.0.4", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "parallel-compilation"] }
+# the guest bindings (crates/plugin-guest), and the module-to-component step (xtask, tests)
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
+wit-component = { version = "0.262", default-features = false }
 
 # foundation
 thiserror = "2"

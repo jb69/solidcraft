@@ -27,10 +27,10 @@ One-shot plugins call `execute(params)` once; they may emit ordinary native feat
 extrude, …) inside that transaction. Parametric plugins still use `run()` inside rebuild; the
 difference is that the document **records** a single feature whose params the user edits later.
 
-## Implemented: the in-process host (parametric plugins)
+## Implemented: parametric plugins, compiled in or loaded as WebAssembly
 
-Milestone 2's contract runs today with plugins compiled into the app; the Wasm loader is the
-next step and changes no plugin.
+Milestone 2's contract runs with plugins compiled into the app and with plugins loaded from the
+per-user plugin folders as WebAssembly components. A plugin is the same code either way.
 
 - **Contract** (`crates/plugin`, no workspace dependencies): `Plugin { manifest, schema,
   evaluate, describe }`, `Host { run }`, `Manifest` (id, name, version, `api_version`, `display`,
@@ -38,13 +38,43 @@ next step and changes no plugin.
   bounds, default and integer flag / bool / choice, a `when` show condition, help, `unused`), the
   condition language and value checks, and the registry (`register`, `find`, `installed`). All
   values cross as JSON; `crates/plugin/wit/plugin.wit` is the same world for the Wasm host.
+- **Compiled in.** An app registers the plugins it ships at start-up
+  (`solidcraft_plugin::register`); tests do the same. These run in-process: not sandboxed, and
+  a plugin that loops forever hangs the rebuild.
+- **WebAssembly** (`crates/plugin-wasm`, wasmtime with the component model and Cranelift).
+  `install_folder(dir, limits, enabled)` loads every folder `<data dir>/plugins/<id>/` that
+  holds a `plugin.json` (its `id` the folder's name; the file the Preferences' Plugins page of
+  #2718 reads) and exactly one `.wasm` component of the `solidcraft:plugin` world, checks that
+  the component's own manifest has the same id and version, and registers it through an adapter
+  (`WasmPlugin`) that implements `Plugin`. A folder that does not load is skipped with its
+  reason (logged); an id already registered keeps the compiled-in plugin. The desktop app loads
+  the folders at start-up (not in safe mode), `solidcraft-cli` for the commands that build
+  designs (`SOLIDCRAFT_NO_PLUGINS=1` leaves them out); the browser build loads none.
+- **Sandbox.** The component's only import is `host.run`, answered by the same scratch-session
+  runner as a compiled-in plugin (its refused commands included); there is no WASI, so no files,
+  clock, network or environment. Each call (`evaluate`, `describe`, and `manifest` and `schema`
+  once at load) gets a fresh instance with `Limits`: fuel (about one unit per instruction; ten
+  billion by default), memory (1 GiB) and stack (2 MiB). A plugin that runs out is stopped and its
+  feature fails with the reason (`used its whole allowance of … instructions`, `ran out of
+  memory`, `ran out of stack`, `stopped (it panicked)`); the app carries on. Time spent inside
+  `host.run` is the engine's and uses no fuel. `describe` cannot run commands.
+- **Writing one** (`crates/plugin-guest`): implement `Plugin` as for a compiled-in plugin and
+  export it from a `cdylib` (a crate or an example) with
+  `solidcraft_plugin_guest::export_plugin!(MyPlugin)`; put its `plugin.json` beside the source
+  (without a `version`, it gets the package's).
+  `cargo xtask plugin <package> <example>` builds it for `wasm32-unknown-unknown` (release),
+  makes the module a component and writes the folder `target/plugins/<id>/`; installing is
+  copying that folder into the plugins directory. One component is one plugin. The guest crate
+  allows `unsafe_code` for wit-bindgen's export glue only, so a plugin crate in this workspace
+  denies it rather than forbidding it.
 - **Plugin folders.** The preferences' Plugins page (`crates/ui-egui/src/plugins.rs`, #2718)
-  lists `{data}/plugins/<id>/plugin.json` and records the plugins turned off; it loads nothing.
-  A Wasm loader takes its plugins from there; compiled-in plugins register in code.
-- **Why in-process first.** The contract is JSON plus `run()`, so a Wasm adapter is mechanical
-  and every plugin written now moves behind it unchanged; wasmtime is a large dependency and
-  build-time cost to take before the contract has settled. An app registers its plugins at
-  start-up (`solidcraft_plugin::register`).
+  lists `{data}/plugins/<id>/plugin.json` and records the plugins turned off. The loader reads
+  `plugin.json` by the same rules (`id`, `name`, `version`, `description` and nothing else; the
+  id 1–64 lowercase letters, digits and hyphens, the folder's name), and the desktop app loads
+  the folders after its preferences, leaving out the plugins turned off there. The component's
+  own manifest is the one registered.
+- **Why in-process first.** The contract is JSON plus `run()`, so the Wasm adapter was
+  mechanical and no plugin changed for it.
 - **Feature shell** (`FeatureKind::Plugin`, `crates/doc/src/plugin_feature.rs`): `plugin_id`,
   `api_version`, `params` (every number an expression and a feature input with a `dN` name, so
   parameters drive it; `inputs` keeps each number's label and unit, so the design walks and
@@ -70,7 +100,10 @@ next step and changes no plugin.
   as values are typed. The timeline row uses `display.icon_id` from the host's icons.
 - **Tests**: `crates/engine/src/cmd/plugin_tests.rs` (build, parameters, choices and conditions,
   bounds, published values, refused commands, panics, save and reopen, every fallback),
-  `crates/ui-egui/src/plugin_dialog_tests.rs` (the dialog).
+  `crates/ui-egui/src/plugin_dialog_tests.rs` (the dialog), `crates/plugin-wasm/tests/wasm.rs`
+  (the test plugins of `crates/plugin-guest/examples` built as components and loaded from
+  folders: a feature driven by a parameter, refused commands, skipped folders, fuel and memory
+  limits; needs `rustup target add wasm32-unknown-unknown`).
 
 ## Generic feature shell (host-owned)
 

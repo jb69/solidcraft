@@ -1,5 +1,5 @@
 //! A gear studio for SolidCraft (docs/plugins.md): the `gear` plugin builds one involute gear per
-//! feature, spur or helical, external or a ring gear, with profile shift, backlash, a bore or a
+//! feature, spur or helical, external, a ring gear or a straight bevel gear, with profile shift, backlash, a bore or a
 //! rim, and places it on its own or in mesh with the gear feature before it, at the working
 //! centre distance and turned so the teeth fit. Its notice and values give the sizes, centre
 //! distance, ratio and contact ratio; undercut, pointed tips, wrong helix hands, ring
@@ -9,8 +9,10 @@
 //! (`examples/gear`, `cargo xtask plugin solidcraft-plugin-gear gear`) for the plugin folders.
 //!
 //! - [`involute`]: the gear's sizes, its tooth outline and how two gears mesh;
+//! - [`bevel`]: straight bevel gears: the cone, the projected tooth outline, two cones in mesh;
 //! - [`plugin`]: the plugin (schema, notice and issues, the sketch and extrude or sweep).
 
+pub mod bevel;
 pub mod involute;
 pub mod plugin;
 

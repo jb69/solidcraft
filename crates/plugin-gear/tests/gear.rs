@@ -111,8 +111,8 @@ fn turn(s: &mut Session, body: &str, c: [f64; 2], deg: f64) {
     run(s, "solid.move", json!({"bodies": [body], "translate": [c[0], c[1], 0]}));
 }
 
-/// Two gears in mesh: the second sits at (z1 + z2)·m/2 in the mesh direction, its teeth in the
-/// first's spaces (no overlap, with 0.1 mm backlash), and overlaps once turned off that phase; the
+/// Two gears in mesh: the second sits at (z1 + z2)·m/2 in the mesh direction, its teeth centred
+/// in the first's spaces (flanks (j/2)·cos α apart) (no overlap, with 0.1 mm backlash), and overlaps once turned off that phase; the
 /// contact ratio is the textbook (√(ra1²−rb1²) + √(ra2²−rb2²) − a·sin α) / (π·m·cos α).
 #[test]
 fn gears_in_mesh_sit_at_their_centre_distance_with_the_teeth_between_each_other() {
@@ -139,6 +139,10 @@ fn gears_in_mesh_sit_at_their_centre_distance_with_the_teeth_between_each_other(
     assert!(r["notice"].as_str().unwrap_or_default().contains("meshes with the 18-tooth gear at 48.00 mm (ratio 1.667"), "{r}");
     let fit = interference(&mut s);
     assert!(fit < 1e-3, "the teeth fit: {fit} mm³ overlap");
+    // Centred in the spaces: half the backlash each side, (j/2)·cos α along the line of action
+    // (to 5 %, 0.002 mm: the flanks are splines fitted through 8 points of the involute).
+    let g = gap(&mut s);
+    assert!((g / (0.05 * a.cos()) - 1.0).abs() < 0.05, "flanks {g} mm apart");
     turn(&mut s, "B", c, 4.0);
     assert!(interference(&mut s) > 0.1, "turned off its phase it overlaps");
 }
@@ -225,4 +229,106 @@ fn mismatched_gears_are_refused_and_wrong_hands_reported() {
     let r = run(&mut s, "plugin.set", json!({"feature": r["feature"], "values": {"hand": "LEFT"}}));
     assert!(!r["issues"].as_array().is_some_and(|a| a.iter().any(|i| i["code"] == "helix_hand")), "{r}");
     assert!(interference(&mut s) < 1e-2, "opposite hands mesh along the whole face");
+}
+
+/// Turn a body about the line through `at` along `axis`.
+fn turn_about(s: &mut Session, body: &str, at: [f64; 3], axis: [f64; 3], deg: f64) {
+    run(s, "solid.move", json!({"bodies": [body], "translate": [-at[0], -at[1], -at[2]]}));
+    run(s, "solid.move", json!({"bodies": [body], "axis": axis, "angle": format!("{deg} deg")}));
+    run(s, "solid.move", json!({"bodies": [body], "translate": at}));
+}
+
+fn bevel(values: Value) -> Value {
+    use solidcraft_plugin::Plugin;
+    let plugin = solidcraft_plugin_gear::GearPlugin;
+    let mut p = plugin.schema().defaults();
+    p.extend(values.as_object().cloned().unwrap_or_default());
+    p.insert("kind".into(), json!("BEVEL"));
+    plugin.describe(&Value::Object(p), &json!({"published": {}})).expect("describe")
+}
+
+fn r3(v: f64) -> Value {
+    json!((v * 1000.0).round() / 1000.0)
+}
+
+/// A straight bevel gear on its cone: tan δ = sin Σ / (z_mate/z + cos Σ), cone distance
+/// R = r / sin δ, tip Ø m·(z + 2 cos δ) on the back cone, and the face b along the cone, so the
+/// gear is b·cos δ high.
+#[test]
+fn a_bevel_gear_sits_on_its_pitch_cone() {
+    let mut s = session();
+    let r = run(
+        &mut s,
+        "plugin.add",
+        json!({"plugin": "gear", "values": {"kind": "BEVEL", "teeth": 20, "mate_teeth": 40, "module": 3, "face_width": 15}, "body_name": "P"}),
+    );
+    let d = 0.5f64.atan();
+    assert_eq!(r["values"]["pitch_cone_angle_deg"], r3(d.to_degrees()), "{r}");
+    assert_eq!(r["values"]["cone_distance_mm"], r3(1.5 * 2000f64.sqrt()), "{r}");
+    assert_eq!(r["values"]["tip_diameter_mm"], r3(3.0 * (20.0 + 2.0 * d.cos())), "{r}");
+    assert!(r["notice"].as_str().unwrap_or_default().starts_with("Bevel gear, 20 teeth, module 3, for a 40-tooth mate at 90°"), "{r}");
+    let m = measure(&s, "P");
+    assert!((m.bbox.max.x - 1.5 * (20.0 + 2.0 * d.cos())).abs() < 1e-3, "the tips end on the back cone at the tip circle: {:?}", m.bbox);
+    assert!((m.bbox.max.z - 15.0 * d.cos()).abs() < 1e-6 && m.bbox.min.z.abs() < 1e-6, "{:?}", m.bbox);
+
+    // Another shaft angle: Σ = 60°, 18 and 24 teeth.
+    let v = bevel(json!({"teeth": 18, "mate_teeth": 24, "shaft_angle": 60, "module": 2, "face_width": 8}));
+    let d = (60f64.to_radians().sin()).atan2(24.0 / 18.0 + 60f64.to_radians().cos());
+    assert_eq!(v["values"]["pitch_cone_angle_deg"], r3(d.to_degrees()), "{v}");
+    assert_eq!(v["values"]["cone_distance_mm"], r3(18.0 / d.sin()), "{v}");
+    // Few virtual teeth are undercut; a face over a third of the cone distance is flagged.
+    let v = bevel(json!({"teeth": 9, "mate_teeth": 10, "module": 2, "face_width": 5}));
+    assert!(v["issues"].as_array().is_some_and(|a| a.iter().any(|i| i["code"] == "undercut")), "{v}");
+    let v = bevel(json!({"teeth": 20, "mate_teeth": 40, "module": 3, "face_width": 30}));
+    let wide = v["issues"].as_array().and_then(|a| a.iter().find(|i| i["code"] == "face_too_wide")).cloned().unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(wide["suggestion"]["face_width"], json!((1.5 * 2000f64.sqrt() / 3.0 * 10.0).floor() / 10.0), "{wide}");
+}
+
+fn gap(s: &mut Session) -> f64 {
+    let r = run(s, "inspect.clearance", json!({"nearest": 1}));
+    r["nearest"].as_object().and_then(|n| n.values().next()).and_then(|v| v[0]["distance_mm"].as_f64()).unwrap_or_else(|| panic!("{r}"))
+}
+
+/// Two bevel gears at right angles: the second shares the first's apex, its axis square to the
+/// first's, its back at its own apex height R·cos δ₂; its teeth sit in the first's spaces with a
+/// gap (at most the normal backlash at the outer end, (j/2)·cos α, less towards the apex), and
+/// turned off its phase it touches.
+#[test]
+fn a_bevel_pair_meshes_on_a_shared_apex() {
+    let mut s = session();
+    run(
+        &mut s,
+        "plugin.add",
+        json!({"plugin": "gear", "values": {"kind": "BEVEL", "teeth": 10, "mate_teeth": 20, "module": 2, "face_width": 6, "backlash": 0.1}, "body_name": "Pinion"}),
+    );
+    let r = run(
+        &mut s,
+        "plugin.add",
+        json!({"plugin": "gear", "values": {"kind": "BEVEL", "teeth": 20, "module": 2, "face_width": 6, "backlash": 0.1, "mesh": "PREVIOUS"}, "body_name": "Wheel"}),
+    );
+    let rr = 500f64.sqrt();
+    let (d1, d2) = (0.5f64.atan(), 2f64.atan());
+    assert_eq!(r["values"]["pitch_cone_angle_deg"], r3(d2.to_degrees()), "{r}");
+    assert_eq!(r["values"]["ratio"], json!(2.0), "{r}");
+    let apex = [0.0, 0.0, rr * d1.cos()];
+    assert_eq!(r["values"]["apex_mm"], json!([0.0, 0.0, (apex[2] * 1000.0).round() / 1000.0]), "{r}");
+    assert_eq!(r["values"]["axis"], json!([-1.0, 0.0, 0.0]), "{r}");
+    let w = measure(&s, "Wheel");
+    assert!((w.bbox.max.x - rr * d2.cos()).abs() < 1e-6, "the wheel's back at R·cos δ₂ from the apex: {:?}", w.bbox);
+    let outer = 0.05 * 20f64.to_radians().cos();
+    let g = gap(&mut s);
+    assert!(g > 0.5 * outer * (rr - 6.0) / rr && g <= outer + 1e-4, "the teeth sit in the spaces: {g} mm apart");
+    turn_about(&mut s, "Wheel", apex, [1.0, 0.0, 0.0], 1.0);
+    assert!(gap(&mut s) < 1e-6, "turned off its phase it touches");
+
+    let e = s
+        .execute("plugin.add", &json!({"plugin": "gear", "values": {"teeth": 30, "module": 2, "mesh": "PREVIOUS"}}))
+        .expect_err("spur on bevel")
+        .to_string();
+    assert!(e.contains("cannot mesh with a bevel gear"), "{e}");
+    let e = s
+        .execute("plugin.add", &json!({"plugin": "gear", "values": {"kind": "BEVEL", "teeth": 30, "module": 2, "mesh": "PREVIOUS"}}))
+        .expect_err("wrong mate")
+        .to_string();
+    assert!(e.contains("made for a 10-tooth mate, this one has 30 teeth"), "{e}");
 }

@@ -105,8 +105,8 @@ per-user plugin folders as WebAssembly components. A plugin is the same code eit
   folders: a feature driven by a parameter, refused commands, skipped folders, fuel and memory
   limits; needs `rustup target add wasm32-unknown-unknown`).
 - **A plugin built on it**: the gear studio, [gear-plugin.md](gear-plugin.md)
-  (`crates/plugin-gear`, id `gear`): involute spur, helical and ring gears placed in mesh with
-  one another, compiled in or loaded from a plugin folder; the reference plugin for both paths.
+  (`crates/plugin-gear`, id `gear`): involute spur, helical, ring and straight bevel gears placed
+  in mesh with one another, compiled in or loaded from a plugin folder; the reference plugin for both paths.
 
 ## Generic feature shell (host-owned)
 

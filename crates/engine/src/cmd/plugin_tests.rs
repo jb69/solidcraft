@@ -297,3 +297,21 @@ fn a_saved_model_keeps_what_plugin_features_published() {
     assert!((volume(&t, "F") - 216.0).abs() < 1e-6, "the follower still finds the block's height");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `model.notices` carries a plugin feature's notice, values and coded issues; the coded warning
+/// replaces the generic warning issue that says the same.
+#[test]
+fn a_plugin_feature_notice_reaches_model_notices() {
+    install();
+    let mut s = Session::default();
+    let id =
+        run(&mut s, "plugin.add", json!({"plugin": "test.block", "values": {"length": 10, "width": 10, "height": 60}}))["feature"].as_u64().unwrap();
+    let r = run(&mut s, "model.notices", json!({"features": [id]}));
+    let n = &r["notices"][0];
+    assert_eq!((n["status"].clone(), n["info"].clone()), (json!("warning"), json!("volume 6000.0 mm³")), "{r}");
+    assert_eq!(n["values"]["volume_mm3"], json!(6000.0), "{r}");
+    assert_eq!(n["values"]["published"]["height"], json!(60.0), "{r}");
+    let codes: Vec<&str> = n["issues"].as_array().unwrap().iter().filter_map(|i| i["code"].as_str()).collect();
+    assert_eq!(codes, ["tall_block", "tall_noted"], "{r}");
+    assert_eq!(n["issues"][0]["suggestion"], json!({"height": 50.0}), "{r}");
+}

@@ -308,7 +308,26 @@ pub(crate) fn feature_notice(_s: &Session, r: &solidcraft_doc::FeatureResult) ->
     if let Some(ss) = r.state.sketch(r.id) {
         sketch_notice(ss, &mut n);
     }
+    if let Some(out) = r.state.plugin_output(r.id) {
+        plugin_notice(&out, &mut n);
+    }
     n
+}
+
+/// A plugin feature's last evaluation: its notice, values (and what it published, under
+/// `published`) and coded issues, which replace the generic warning issues saying the same.
+fn plugin_notice(out: &Value, n: &mut Notice) {
+    n.info = out.get("notice").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string);
+    if let Some(v) = out.get("values").and_then(Value::as_object) {
+        n.values.extend(v.clone());
+    }
+    if let Some(p) = out.get("publish").filter(|p| !p.is_null()) {
+        n.values.insert("published".into(), p.clone());
+    }
+    let coded = solidcraft_doc::plugin_feature::issues(out);
+    let said = |m: &Value| coded.iter().any(|c| c.get("message") == Some(m));
+    n.issues.retain(|i| !(i.get("code").and_then(Value::as_str) == Some("feature_warning") && i.get("message").is_some_and(said)));
+    n.issues.extend(coded);
 }
 
 /// A sketch's solve: solved or not, degrees of freedom, profiles, and where its profile is open.

@@ -1,6 +1,6 @@
 [package]
 name = "solidcraft-plugin-foil"
-description = "Hydrofoil plugins for SolidCraft: the Foil design tool's Foil wing and Foil stabiliser, ported from its FeatureScript as parametric plugins"
+description = "Hydrofoil and propeller plugins for SolidCraft: the Foil design tool's Foil wing and Foil stabiliser and the B-Series Propeller, ported from their FeatureScript as parametric plugins"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

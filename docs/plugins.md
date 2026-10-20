@@ -71,8 +71,8 @@ next step and changes no plugin.
 - **Tests**: `crates/engine/src/cmd/plugin_tests.rs` (build, parameters, choices and conditions,
   bounds, published values, refused commands, panics, save and reopen, every fallback),
   `crates/ui-egui/src/plugin_dialog_tests.rs` (the dialog).
-- **Plugins built on it**: the Foil wing and Foil stabiliser, [foil-plugins.md](foil-plugins.md)
-  (`crates/plugin-foil`).
+- **Plugins built on it**: the Foil wing, Foil stabiliser and B-Series Propeller,
+  [foil-plugins.md](foil-plugins.md) (`crates/plugin-foil`).
 
 ## Generic feature shell (host-owned)
 

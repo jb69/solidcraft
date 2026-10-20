@@ -172,3 +172,40 @@ fn a_wing_reports_what_its_solve_changed_as_coded_issues() {
     let r = run(&mut s, "plugin.set", json!({"feature": "Wing1", "values": {"endRatio": fix}}));
     assert!(!r["issues"].as_array().unwrap().iter().any(|i| i["code"] == "tip_ratio_raised"), "{r}");
 }
+
+/// A 140 mm, three-blade B-series propeller on its 63 mm hub (30 long, 15 mm nose), bolted: one
+/// body as long as the hub and nose, its blades within the diameter.
+#[test]
+fn a_propeller_builds_on_its_hub_within_its_diameter() {
+    let mut s = session();
+    let r = run(
+        &mut s,
+        "plugin.add",
+        json!({"plugin": "foil-propeller", "body_name": "Prop", "values": {
+            "diameter": 140, "pdRatio": 0.9, "ear": 0.3, "hubUpstream": 63, "hubDownstream": 63, "hubLength": 30, "noseLength": 15,
+            "mountType": "BOLTED", "pilotDia": 12, "tipPitchChange": -10, "skewAngle": 7, "rake": 5, "taperExponent": 1, "sectionCount": 12
+        }}),
+    );
+    assert!(r["notice"].is_string(), "{r}");
+    assert_eq!(s.model.state().bodies.len(), 1, "blades joined to the hub");
+    let m = measure(&s, "Prop");
+    let e = m.bbox.max - m.bbox.min;
+    assert!((e.z - 45.0).abs() < 0.01, "hub and nose: {e:?}");
+    // Three tips on a 70 mm radius span 1.5 R to √3 R across any direction; skew and blade width
+    // add a little, the diameter bounds it.
+    for w in [e.x, e.y] {
+        assert!(w > 1.5 * 70.0 && w <= 140.0 + 0.1, "{e:?}");
+    }
+    assert!(m.volume > 0.0);
+}
+
+/// A folding hub (not built yet) is built fixed and says so, with the change that matches it.
+#[test]
+fn a_propeller_reports_what_it_cannot_build_as_a_coded_issue() {
+    let mut v = solidcraft_plugin_foil::Values::defaults(solidcraft_plugin_foil::Tool::Propeller);
+    v.set("hubType", solidcraft_plugin_foil::Val::Choice("FOLDING".into())).unwrap();
+    let pr = solidcraft_plugin_foil::prop::build(&v).unwrap();
+    let i = pr.issues.iter().find(|i| i.code == "folding_hub_not_built").expect("the folding hub is reported");
+    assert_eq!(i.parameter.as_deref(), Some("hubType"));
+    assert_eq!(i.suggestion.as_ref().and_then(|s| s.get("hubType")), Some(&json!("FIXED")));
+}

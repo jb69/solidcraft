@@ -86,6 +86,7 @@ pub struct Field {
 pub enum Tool {
     Wing,
     Stabiliser,
+    Propeller,
 }
 
 impl Tool {
@@ -93,6 +94,7 @@ impl Tool {
         match self {
             Tool::Wing => crate::schema_gen::WING,
             Tool::Stabiliser => crate::schema_gen::STAB,
+            Tool::Propeller => crate::schema_gen::PROP,
         }
     }
     pub fn field(self, key: &str) -> Option<&'static Field> {
@@ -113,6 +115,7 @@ impl Tool {
         match self {
             Tool::Wing => "Foil wing",
             Tool::Stabiliser => "Foil stabiliser",
+            Tool::Propeller => "B-Series Propeller",
         }
     }
 }
@@ -334,5 +337,9 @@ pub fn not_built(tool: Tool, f: &Field) -> bool {
     match tool {
         Tool::Wing => matches!(f.group, "Fuselage joint" | "Section polar") || f.key == "logInputs",
         Tool::Stabiliser => (matches!(f.group, "Mount pad" | "Mount bolts" | "Section polar") && f.key != "invertSection") || f.key == "logInputs",
+        Tool::Propeller => {
+            matches!(f.group, "Folding" | "Operating check")
+                || matches!(f.key, "rootFillet" | "hubCore" | "coreSkin" | "keepSections" | "debugPrint" | "sectionsOnly")
+        }
     }
 }

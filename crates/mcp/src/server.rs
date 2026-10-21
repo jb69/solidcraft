@@ -36,7 +36,10 @@ and dimension (`sketch.dimension {entities, value}`; values may name parameters)
 edge], radius}`, `solid.chamfer`, patterns, mirror, primitives). Use `batch` for several steps at once, \
 `list_commands` for ids and parameter docs, `describe_command` for a command's schemas, `inspect_design` / `measure` to verify, \
 `body_topology` to find edge points, `set_parameter` to drive the design and `screenshot` to look at it. A call whose error \
-starts `still running:` was not cancelled: don't send it again; `pending` waits for its result. A result may end with a \"Design feedback:\" block: \
+starts `still running:` was not cancelled: don't send it again; `pending` waits for its result.";
+
+/// Added to the instructions when the server sends design feedback.
+const FEEDBACK_INSTRUCTIONS: &str = " A result may end with a \"Design feedback:\" block: \
 features the call broke (new_errors) or mended (fixed), new warnings, and changed_since_your_last_call when the person \
 at the app (or another client) changed the design between your calls; act on it before going on.";
 
@@ -87,9 +90,11 @@ impl Server {
         self.scope = scope;
         self
     }
-    /// Tool results without the design feedback block (see `feedback.rs`).
-    pub fn without_feedback(mut self) -> Self {
-        self.feedback.off = true;
+    /// End tool results with the design feedback block (see `feedback.rs` and docs/mcp.md). Off by
+    /// default, so agents that don't expect it see the replies they always did;
+    /// `solidcraft-cli mcp --design-feedback` and the agent chat's preference turn it on.
+    pub fn with_design_feedback(mut self, on: bool) -> Self {
+        self.feedback.on = on;
         self
     }
     pub fn backend(&mut self) -> &mut dyn Backend {
@@ -205,7 +210,11 @@ impl Server {
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}},
                     "serverInfo": {"name": "solidcraft", "title": "SolidCraft", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
+                    "instructions": format!(
+                        "{INSTRUCTIONS}{} Backend: {}.",
+                        if self.feedback.on { FEEDBACK_INSTRUCTIONS } else { "" },
+                        self.backend.describe()
+                    ),
                 }))
             }
             "ping" => Ok(json!({})),

@@ -12,6 +12,7 @@ mod icons;
 mod layers;
 mod licences;
 mod lists;
+mod plugin;
 mod test;
 mod web_offline;
 mod web_offline_test;
@@ -53,6 +54,12 @@ commands:
                   leave it to the Generated files workflow on main
   lists [--fix]   check that files many changes add to are sorted one item per line (the
                   message catalogs in assets/locales); --fix sorts them
+  plugin <package> <example> [--out DIR]
+                  package a plugin for the WebAssembly host: build the example (a cdylib calling
+                  solidcraft_plugin_guest::export_plugin!) for wasm32-unknown-unknown, make it a
+                  component and write the plugin folder DIR/<id>/ (default target/plugins) with
+                  the plugin.json beside the example's source; copy it into the per-user
+                  plugins directory to install it (docs/plugins.md)
   test [CARGO ARGS] [-- TEST ARGS]
                   build the tests with the ci profile, then run every test binary at once
                   (and the doc tests alongside)
@@ -87,6 +94,7 @@ fn main() -> ExitCode {
         Some("book") => book::run(&root(), !rest.contains(&"--no-build")),
         Some("licences") => licences::run(&root(), rest.contains(&"--check")),
         Some("lists") => lists::run(&root(), rest.contains(&"--fix")),
+        Some("plugin") => metadata().and_then(|m| plugin::run(&root(), &m, &rest)),
         Some("test") => {
             let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((&rest[..], &[][..]), |i| (&rest[..i], &rest[i + 1..]));
             test::run(cargo_args, test_args, vec![test::doc_tests(cargo_args, test_args)])
@@ -129,7 +137,7 @@ pub fn cargo() -> Command {
     c
 }
 
-fn run(mut cmd: Command, what: &str) -> Result<(), String> {
+pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
     eprintln!("$ {what}");
     let status = cmd.status().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("{what}: exited with {status}")) }

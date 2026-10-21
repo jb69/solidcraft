@@ -613,6 +613,14 @@ fn main() -> eframe::Result {
             if let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))).filter(|_| !safe_mode) {
                 app.load_prefs(&p);
             }
+            // Plugins from the per-user plugins folder (docs/plugins.md), beside the compiled-in
+            // ones, less those the preferences' Plugins page turned off; none in safe mode. A
+            // folder that does not load is logged and left out.
+            if !safe_mode && let Some(data) = solidcraft_engine::recovery::data_dir() {
+                solidcraft_engine::crash::phase("plugins");
+                let off = app.preferences.disabled_plugins.clone();
+                solidcraft_plugin_wasm::install_folder(&solidcraft_plugin_wasm::plugins_dir(&data), Default::default(), &|id| !off.contains(id));
+            }
             if let Some(rs) = &cc.wgpu_render_state {
                 eprintln!("SolidCraft graphics: {:?}, MSAA {}x (requested {}x)", rs.adapter.get_info().backend, rs.msaa_samples, samples);
                 solidcraft_engine::crash::phase("viewport pipelines (shader compile)");

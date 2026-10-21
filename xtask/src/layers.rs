@@ -44,6 +44,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("derive", Class::Standalone),
     // the 3Dconnexion driver's client API on macOS (no workspace dependencies)
     ("3dx-client", Class::Standalone),
+    // the guest side of WebAssembly plugins: a plugin exported as a component (only plugins use it)
+    ("plugin-guest", Class::Layer(1)),
     ("sketch", Class::Layer(1)),
     ("kernel", Class::Layer(1)),
     ("render", Class::Layer(1)),
@@ -53,6 +55,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-egui", Class::Layer(5)),
     ("gpu", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
+    // the WebAssembly plugin host: depends on the contract only (and wasmtime); at 5 so that its
+    // tests build plugin features with the engine. The apps load plugin folders through it.
+    ("plugin-wasm", Class::Layer(5)),
     ("testkit", Class::Testkit),
     // apps and tooling
     ("solidcraft", Class::Exempt),

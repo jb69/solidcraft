@@ -88,6 +88,14 @@ fn main() -> ExitCode {
     // The plugins compiled into this build (docs/plugins.md).
     solidcraft_plugin_foil::register();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Plugins from the per-user plugins folder (docs/plugins.md), for the commands that build
+    // designs; SOLIDCRAFT_NO_PLUGINS=1 leaves them out.
+    if !matches!(args.first().map(String::as_str), None | Some("-h" | "--help" | "help" | "licences" | "gpu" | "icon" | "commands"))
+        && std::env::var("SOLIDCRAFT_NO_PLUGINS").ok().as_deref() != Some("1")
+        && let Some(data) = solidcraft_engine::recovery::data_dir()
+    {
+        solidcraft_plugin_wasm::install_folder(&solidcraft_plugin_wasm::plugins_dir(&data), Default::default(), &|_| true);
+    }
     let r = match args.first().map(String::as_str) {
         Some("run") => cmd_run(&args[1..]),
         Some("eval" | "inspect") => cmd_eval(&args[1..]),

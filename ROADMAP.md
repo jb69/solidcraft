@@ -648,3 +648,17 @@ and reference-object placement remain separate work, as do loft rails and center
 
 truck (Apache-2.0) behind our own `kernel` crate, with our own blend operation and boolean
 retry/validation; see `plan/adr/0001-geometry-kernel.md` (local) — summary in README.
+
+## CAM (manufacturing), fork branch `cam`
+
+Toolpaths for the parts SolidCraft models (`docs/cam.md`, `crates/cam`, `cam.*` commands,
+`skills/solidcraft-cam`): 2.5-axis (face, pocket, adaptive, contour, chamfer, drill, bore),
+3-axis (Z-level roughing, parallel, waterline, scallop, pencil, spiral, radial, morphed spiral,
+project, horizontal, steep and shallow), 3+2 by tool orientation, continuous 4-axis rotary and
+5-axis swarf, multi-axis contour and flow; stock simulation with rest machining, gouge and
+collision checks; a visual simulator (`cam.simulate.show`, the Machining Simulation panel);
+G-code posts (generic, grbl, fiveaxis) through machine kinematics with or without TCP.
+
+Not built yet: thread milling, a Manufacture toolbar tab with dialogs (the commands run from
+scripts, the CLI and the MCP server), arc output (G2/G3) in posts, multi-axis stock removal in
+the simulator (tilted moves are collision-checked only).

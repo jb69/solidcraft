@@ -257,6 +257,9 @@ pub struct Session {
     /// Recent body renames: the design before and after each, and the names, so undo and redo
     /// follow them without evaluating either.
     body_renames: Vec<BodyRename>,
+    /// Toolpaths and stock maps the last `cam.generate` computed (not saved; `cam.toolpath`,
+    /// `cam.simulate` and `cam.post` read them).
+    pub cam: cmd::cam::CamCache,
     /// Features copied with `timeline.copy` (pasted by `timeline.paste`).
     pub clipboard: Vec<solidcraft_doc::Feature>,
     /// Sketch geometry copied with `sketch.copy` (pasted by `sketch.paste`).
@@ -411,6 +414,7 @@ impl Session {
             removed_later_cache: Default::default(),
             clearance_cache: Default::default(),
             body_renames: Vec::new(),
+            cam: Default::default(),
             clipboard: Vec::new(),
             sketch_clipboard: None,
             section: None,
@@ -943,6 +947,7 @@ impl Session {
             removed_later_cache: Default::default(),
             clearance_cache: self.clearance_cache.clone(),
             body_renames: Vec::new(),
+            cam: Default::default(),
             clipboard: self.clipboard.clone(),
             sketch_clipboard: self.sketch_clipboard.clone(),
             section: None,

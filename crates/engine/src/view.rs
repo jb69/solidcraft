@@ -500,7 +500,8 @@ fn build_scene(
         })
         .flatten()
         .collect();
-    for body in st.bodies.iter().filter(|b| s.body_visible(&b.name)) {
+    let sim_hidden: Vec<String> = s.cam.preview.as_ref().filter(|pv| pv.hide_model).map(|pv| pv.bodies.clone()).unwrap_or_default();
+    for body in st.bodies.iter().filter(|b| s.body_visible(&b.name) && !sim_hidden.contains(&b.name)) {
         let selected = selected_occurrences.contains(&body.name) || s.selection.iter().any(|x| matches!(x, Sel::Body { name } if *name == body.name));
         let mesh = body.mesh();
         // The body's appearance (or imported colour) and faces with looks of their own, as in
@@ -527,6 +528,18 @@ fn build_scene(
             for (a, b) in section_segments(&mesh, o, n) {
                 sc.lines.push(SceneLine { points: vec![a, b], color: p.edge, width: 1.6, on_top: false });
             }
+        }
+    }
+    // Machining simulation (`cam.simulate.show`): the stock as cut so far, the tool where it
+    // stands, the path made and the path to come.
+    if let Some(pv) = &s.cam.preview {
+        sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.stock), color: Rgb(176, 176, 182), face_colors: Vec::new(), opacity: 1.0 });
+        sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.tool), color: p.body_selected, face_colors: Vec::new(), opacity: 1.0 });
+        for pl in &pv.path_done {
+            sc.lines.push(SceneLine { points: pl.clone(), color: p.body_selected, width: 1.4, on_top: false });
+        }
+        for pl in &pv.path_todo {
+            sc.lines.push(SceneLine { points: pl.clone(), color: Rgb(120, 120, 128), width: 1.0, on_top: false });
         }
     }
     for ss in &st.sketches {

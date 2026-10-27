@@ -22,6 +22,9 @@ macro_rules! planned {
 
 mod bom;
 mod browser;
+pub mod cam;
+#[cfg(test)]
+mod cam_tests;
 pub(crate) mod clearance;
 mod clipboard;
 mod compare;
@@ -273,6 +276,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(features::COMMANDS.iter());
     v.extend(features_more::COMMANDS.iter());
     v.extend(mesh::COMMANDS.iter());
+    v.extend(cam::COMMANDS.iter());
     v.extend(construct::COMMANDS.iter());
     v.extend(sheet::COMMANDS.iter());
     v.extend(plastic::COMMANDS.iter());

@@ -4196,6 +4196,17 @@ name = "solidcraft-3dx-client"
 version = "0.18.2"
 
 [[package]]
+name = "solidcraft-cam"
+version = "0.18.2"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "solidcraft-geom",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "solidcraft-cli"
 version = "0.18.2"
 dependencies = [
@@ -4223,6 +4234,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "solidcraft-cam",
  "solidcraft-derive",
  "solidcraft-geom",
  "solidcraft-kernel",
@@ -4241,6 +4253,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "solidcraft-cam",
  "solidcraft-doc",
  "solidcraft-geom",
  "solidcraft-io",

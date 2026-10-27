@@ -674,8 +674,9 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
     let mut made: std::collections::HashMap<u64, CachedBlock> = std::collections::HashMap::new();
     let mut run: Vec<BodyDraw> = Vec::new();
     let mut run_key = std::collections::hash_map::DefaultHasher::new();
+    let sim_hidden: Vec<String> = app.session.cam.preview.as_ref().filter(|p| p.hide_model).map(|p| p.bodies.clone()).unwrap_or_default();
     for b in &st.bodies {
-        if !app.session.body_visible(&b.name) || app.preview.effective_replaced().contains(&b.name) {
+        if !app.session.body_visible(&b.name) || app.preview.effective_replaced().contains(&b.name) || sim_hidden.contains(&b.name) {
             continue;
         }
         let faded = body_faded(app, b, &active_bodies);
@@ -745,6 +746,26 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         for w in seam.points.windows(2) {
             if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
                 sc.line(a.to_f32(), b.to_f32(), col, 2.6, true);
+            }
+        }
+    }
+    // Machining simulation (`cam.simulate.show`): the stock as cut so far, the tool where it
+    // stands, the path made (accent) and the path to come (faint).
+    if let Some(p) = &s.cam.preview {
+        let stock = c4(tk.body.gamma_multiply(0.85));
+        mesh_tris(&mut sc, &p.stock, stock, true, |_| true);
+        let tool = c4(tk.accent);
+        mesh_tris(&mut sc, &p.tool, tool, true, |_| true);
+        let done = c4(tk.accent.gamma_multiply(0.9));
+        for pl in &p.path_done {
+            for w in pl.windows(2) {
+                sc.line(w[0].to_f32(), w[1].to_f32(), done, 1.4, false);
+            }
+        }
+        let todo = c4(tk.text.gamma_multiply(0.25));
+        for pl in &p.path_todo {
+            for w in pl.windows(2) {
+                sc.line(w[0].to_f32(), w[1].to_f32(), todo, 1.0, false);
             }
         }
     }

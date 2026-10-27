@@ -44,6 +44,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("3dx-client", Class::Standalone),
     ("sketch", Class::Layer(1)),
     ("kernel", Class::Layer(1)),
+    // toolpaths on meshes and 2D regions (geometry only)
+    ("cam", Class::Layer(1)),
     ("render", Class::Layer(1)),
     ("doc", Class::Layer(2)),
     ("io", Class::Layer(3)),

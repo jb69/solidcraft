@@ -1,0 +1,16 @@
+[package]
+name = "solidcraft-cam"
+description = "SolidCraft CAM: tools, stock and setups, 2.5D, 3-axis, indexed and continuous 4/5-axis toolpaths on triangle meshes, stock simulation, machine kinematics and G-code posts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+solidcraft-geom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

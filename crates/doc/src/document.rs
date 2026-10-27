@@ -2461,6 +2461,9 @@ pub struct Document {
     /// a document in a session leaves this empty; the session puts it back when it saves.
     #[serde(default, skip_serializing_if = "Visibility::is_empty")]
     pub visibility: Visibility,
+    /// Manufacturing: the tool library, setups and their operations (`cam.*` commands).
+    #[serde(default, skip_serializing_if = "solidcraft_cam::Manufacture::is_empty")]
+    pub manufacture: solidcraft_cam::Manufacture,
 }
 
 /// Items hidden or shown one by one. Saved with the design, but not an undo step.
@@ -2634,6 +2637,7 @@ impl Document {
             browser_order: Default::default(),
             named_views: Vec::new(),
             visibility: Visibility::default(),
+            manufacture: Default::default(),
         }
     }
 

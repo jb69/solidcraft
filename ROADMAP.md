@@ -657,8 +657,13 @@ Toolpaths for the parts SolidCraft models (`docs/cam.md`, `crates/cam`, `cam.*` 
 project, horizontal, steep and shallow), 3+2 by tool orientation, continuous 4-axis rotary and
 5-axis swarf, multi-axis contour and flow; stock simulation with rest machining, gouge and
 collision checks; a visual simulator (`cam.simulate.show`, the Machining Simulation panel);
-G-code posts (generic, grbl, fiveaxis) through machine kinematics with or without TCP.
+G-code posts (generic, grbl, fiveaxis, makera) through machine kinematics with or without TCP;
+a Manufacture workspace (MANUFACTURE ribbon tab, a panel of tools, setups and operations, the
+simulation). Makera's Carvera, Carvera Air and Z1 are known by name: presets with their
+published limits, checks of speeds, feeds, collets, work area and tool changes, the `makera`
+post and the `makera_essential` tool kit (`docs/makera-pitch.md` is the proposal to Makera for
+a test machine).
 
-Not built yet: thread milling, a Manufacture toolbar tab with dialogs (the commands run from
-scripts, the CLI and the MCP server), arc output (G2/G3) in posts, multi-axis stock removal in
-the simulator (tilted moves are collision-checked only).
+Not built yet: thread milling, CAM dialogs (the ribbon's buttons open the command box filled
+in), arc output (G2/G3) in posts, multi-axis stock removal in the simulator (tilted moves are
+collision-checked only), a run on a real Makera machine.

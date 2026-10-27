@@ -19,7 +19,12 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
    defaults. Do not invent parameter names; an unknown one is reported as `unknown_parameter`
    with the nearest valid name.
 3. `cam.machine.list` and `cam.post.list` when the machine matters (4/5-axis work needs a
-   4/5-axis machine on the setup and the `fiveaxis` post).
+   4/5-axis machine on the setup and the `fiveaxis` post). For a Makera Carvera, Carvera Air
+   or Z1 put the preset on the setup (`machine: "carvera"`, `"carvera_air"`, `"z1"`, or the
+   `_4axis` variant with the rotary module) and start the library with
+   `cam.tool.kit {material}`: the generate and post notices then check speeds, feeds, collets,
+   the work area and tool changes against the machine, and `cam.post` writes the `makera`
+   dialect (`.cnc`) by itself.
 
 ## Build
 - **Tools** first: `cam.tool.add {name, kind, diameter, flute_length, overall_length, feeds}`.

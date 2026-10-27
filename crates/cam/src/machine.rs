@@ -77,11 +77,29 @@ pub enum Kinematics {
     FiveAxis { primary: RotaryAxis, secondary: RotaryAxis },
 }
 
+/// How tools get into the spindle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolChanger {
+    /// Unknown or none: the post writes tool changes and the control deals with them.
+    #[default]
+    Unknown,
+    /// Tools are changed by hand; the control pauses and prompts.
+    Manual,
+    /// An automatic changer with this many slots; tools beyond them are changed by hand.
+    Automatic { slots: u32 },
+}
+
 /// A machine: kinematics, travel, speeds and the control's capabilities.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Machine {
     pub name: String,
+    /// Vendor and model, when the machine is a known product (`Makera`, `Carvera`).
+    pub vendor: String,
+    pub model: String,
+    /// The post that writes this machine's programs (empty: chosen by the axis count).
+    pub post: String,
     pub kinematics: Kinematics,
     /// Rapid traverse rate, mm/min, for time estimates.
     pub rapid_feed: f64,
@@ -90,6 +108,22 @@ pub struct Machine {
     /// Linear travel in machine coordinates relative to the WCS origin (checked when set).
     pub travel_min: Option<Vec3>,
     pub travel_max: Option<Vec3>,
+    /// The work area as a size (mm): the toolpath's extent is checked against it (0: unknown).
+    pub work_area: Vec3,
+    /// Clearance under the gantry, mm (0: unknown).
+    pub gantry_clearance: f64,
+    /// Spindle speed range, rev/min (max 0: unknown), and power, W (0: unknown).
+    pub spindle_rpm_min: f64,
+    pub spindle_rpm_max: f64,
+    pub spindle_power_w: f64,
+    /// The largest feed the control moves at, mm/min (0: unknown). Faster feeds are clamped by
+    /// the post, with a warning.
+    pub max_feed: f64,
+    pub tool_changer: ToolChanger,
+    /// Shank diameters the collets take, mm (empty: any).
+    pub collets: Vec<f64>,
+    /// A rotary module's stock capacity, diameter and length (mm), when one is fitted.
+    pub rotary_capacity: Option<(f64, f64)>,
     /// The control compensates the rotary axes itself (TCP / RTCP): the post writes workpiece
     /// coordinates and angles. Without it the post computes machine coordinates and linearises.
     pub tcp: bool,
@@ -103,11 +137,23 @@ impl Default for Machine {
     fn default() -> Self {
         Machine {
             name: "3-axis mill".into(),
+            vendor: String::new(),
+            model: String::new(),
+            post: String::new(),
             kinematics: Kinematics::ThreeAxis,
             rapid_feed: 5000.0,
             rotary_rapid_deg_min: 3600.0,
             travel_min: None,
             travel_max: None,
+            work_area: Vec3::new(0.0, 0.0, 0.0),
+            gantry_clearance: 0.0,
+            spindle_rpm_min: 0.0,
+            spindle_rpm_max: 0.0,
+            spindle_power_w: 0.0,
+            max_feed: 0.0,
+            tool_changer: ToolChanger::Unknown,
+            collets: Vec::new(),
+            rotary_capacity: None,
             tcp: false,
             linearisation_tolerance: 0.01,
             max_rotary_step_deg: 5.0,
@@ -155,6 +201,243 @@ impl Machine {
             tcp: true,
             ..Default::default()
         }
+    }
+
+    /// Makera Carvera: 360 × 240 × 140 mm, 200 W spindle to 15 000 rev/min, 6-slot automatic
+    /// tool changer, 1/8" collet (1/4", 6, 4 and 3 mm optional), 6 000 mm/min, 120 mm under the
+    /// gantry (Makera's published specifications).
+    pub fn makera_carvera() -> Machine {
+        Machine {
+            name: "Makera Carvera".into(),
+            vendor: "Makera".into(),
+            model: "Carvera".into(),
+            post: "makera".into(),
+            rapid_feed: 6000.0,
+            max_feed: 6000.0,
+            work_area: Vec3::new(360.0, 240.0, 140.0),
+            gantry_clearance: 120.0,
+            spindle_rpm_min: 0.0,
+            spindle_rpm_max: 15000.0,
+            spindle_power_w: 200.0,
+            tool_changer: ToolChanger::Automatic { slots: 6 },
+            collets: vec![3.175, 6.35, 6.0, 4.0, 3.0],
+            ..Default::default()
+        }
+    }
+
+    /// The Carvera with its 4th-axis module: a continuous A rotary along X taking stock up to
+    /// Ø92 × 240 mm.
+    pub fn makera_carvera_4axis() -> Machine {
+        Machine {
+            name: "Makera Carvera + 4th axis".into(),
+            rotary_rapid_deg_min: 2300.0,
+            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
+            rotary_capacity: Some((92.0, 240.0)),
+            ..Machine::makera_carvera()
+        }
+    }
+
+    /// Makera Carvera Air: 300 × 200 × 130 mm, 200 W spindle to 13 000 rev/min, lever quick
+    /// tool changer (by hand), 1/8" collet (1/4", 6 and 4 mm optional), 4 000 mm/min, 120 mm under
+    /// the gantry.
+    pub fn makera_carvera_air() -> Machine {
+        Machine {
+            name: "Makera Carvera Air".into(),
+            vendor: "Makera".into(),
+            model: "Carvera Air".into(),
+            post: "makera".into(),
+            rapid_feed: 4000.0,
+            max_feed: 4000.0,
+            work_area: Vec3::new(300.0, 200.0, 130.0),
+            gantry_clearance: 120.0,
+            spindle_rpm_max: 13000.0,
+            spindle_power_w: 200.0,
+            tool_changer: ToolChanger::Manual,
+            collets: vec![3.175, 6.35, 6.0, 4.0],
+            ..Default::default()
+        }
+    }
+
+    /// The Carvera Air with its 4th-axis module (Ø92 × 200 mm).
+    pub fn makera_carvera_air_4axis() -> Machine {
+        Machine {
+            name: "Makera Carvera Air + 4th axis".into(),
+            rotary_rapid_deg_min: 2300.0,
+            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
+            rotary_capacity: Some((92.0, 200.0)),
+            ..Machine::makera_carvera_air()
+        }
+    }
+
+    /// Makera Z1: 200 × 200 × 100 mm, 150 W spindle to 13 000 rev/min, quick tool change by
+    /// hand, 1/8" collet (1/4", 6, 4 and 3 mm optional), 1 200 mm/min, 115 mm under the gantry.
+    pub fn makera_z1() -> Machine {
+        Machine {
+            name: "Makera Z1".into(),
+            vendor: "Makera".into(),
+            model: "Z1".into(),
+            post: "makera".into(),
+            rapid_feed: 1200.0,
+            max_feed: 1200.0,
+            work_area: Vec3::new(200.0, 200.0, 100.0),
+            gantry_clearance: 115.0,
+            spindle_rpm_max: 13000.0,
+            spindle_power_w: 150.0,
+            tool_changer: ToolChanger::Manual,
+            collets: vec![3.175, 6.35, 6.0, 4.0, 3.0],
+            ..Default::default()
+        }
+    }
+
+    /// The Z1 with its 4th-axis module (Ø80 × 150 mm).
+    pub fn makera_z1_4axis() -> Machine {
+        Machine {
+            name: "Makera Z1 + 4th axis".into(),
+            rotary_rapid_deg_min: 2300.0,
+            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
+            rotary_capacity: Some((80.0, 150.0)),
+            ..Machine::makera_z1()
+        }
+    }
+
+    /// Every preset by id, in the order shown to people.
+    pub const PRESETS: &'static [&'static str] = &[
+        "three_axis",
+        "four_axis_a",
+        "trunnion_ac",
+        "trunnion_bc",
+        "head_head_bc",
+        "carvera",
+        "carvera_4axis",
+        "carvera_air",
+        "carvera_air_4axis",
+        "z1",
+        "z1_4axis",
+    ];
+
+    /// A preset by id or alias.
+    pub fn preset(id: &str) -> Option<Machine> {
+        Some(match id.trim().to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
+            "three_axis" | "3axis" | "3_axis" | "mill3" => Machine::three_axis(),
+            "four_axis_a" | "4axis" | "4_axis" | "rotary_a" => Machine::four_axis_a(),
+            "trunnion_ac" | "5axis" | "5_axis" | "table_table_ac" => Machine::trunnion_ac(),
+            "trunnion_bc" | "table_table_bc" => Machine::trunnion_bc(),
+            "head_head_bc" | "head_head" => Machine::head_head_bc(),
+            "carvera" | "makera_carvera" => Machine::makera_carvera(),
+            "carvera_4axis" | "makera_carvera_4axis" | "carvera_4th_axis" => Machine::makera_carvera_4axis(),
+            "carvera_air" | "makera_carvera_air" => Machine::makera_carvera_air(),
+            "carvera_air_4axis" | "makera_carvera_air_4axis" | "carvera_air_4th_axis" => Machine::makera_carvera_air_4axis(),
+            "z1" | "makera_z1" => Machine::makera_z1(),
+            "z1_4axis" | "makera_z1_4axis" | "z1_4th_axis" => Machine::makera_z1_4axis(),
+            _ => return None,
+        })
+    }
+
+    /// The spindle speed the machine can give for `rpm`, and whether it had to be changed.
+    pub fn clamp_rpm(&self, rpm: f64) -> (f64, bool) {
+        let mut v = rpm;
+        if self.spindle_rpm_max > 0.0 {
+            v = v.min(self.spindle_rpm_max);
+        }
+        if self.spindle_rpm_min > 0.0 {
+            v = v.max(self.spindle_rpm_min);
+        }
+        (v, (v - rpm).abs() > 1e-9)
+    }
+
+    /// The feed the machine can move at for `feed`, and whether it had to be changed.
+    pub fn clamp_feed(&self, feed: f64) -> (f64, bool) {
+        if self.max_feed > 0.0 && feed > self.max_feed { (self.max_feed, true) } else { (feed, false) }
+    }
+
+    /// What the machine would object to in a tool and its toolpath: a spindle speed or feed
+    /// past the machine's, a shank no collet takes, a toolpath wider than the work area.
+    pub fn check(&self, tool: &crate::tool::Tool, toolpath: &Toolpath) -> Vec<crate::notice::Issue> {
+        use crate::notice::Issue;
+        let mut out = Vec::new();
+        let who = if self.model.is_empty() { self.name.clone() } else { self.model.clone() };
+        let f = &tool.feeds;
+        if self.spindle_rpm_max > 0.0 && f.spindle_rpm > self.spindle_rpm_max + 1e-9 {
+            out.push(
+                Issue::warning(
+                    "spindle_speed",
+                    format!("T{} {}: {} rev/min is past the {}'s {} rev/min; the post writes the maximum", tool.number, tool.name, f.spindle_rpm.round(), who, self.spindle_rpm_max.round()),
+                )
+                .parameter("feeds.spindle_rpm", f.spindle_rpm)
+                .limit(self.spindle_rpm_max)
+                .suggest(serde_json::json!({"command": "cam.tool.set", "tool": tool.id, "feeds": {"spindle_rpm": self.spindle_rpm_max}})),
+            );
+        }
+        if self.max_feed > 0.0 {
+            for (what, v) in [("cutting", f.cutting), ("plunge", f.plunge), ("ramp", f.ramp), ("lead_in", f.lead_in), ("lead_out", f.lead_out)] {
+                if v > self.max_feed + 1e-9 {
+                    out.push(
+                        Issue::warning(
+                            "feed_limit",
+                            format!("T{} {}: the {what} feed {} mm/min is past the {}'s {} mm/min; the post writes the maximum", tool.number, tool.name, v.round(), who, self.max_feed.round()),
+                        )
+                        .parameter(&format!("feeds.{what}"), v)
+                        .limit(self.max_feed)
+                        .suggest(serde_json::json!({"command": "cam.tool.set", "tool": tool.id, "feeds": {what: self.max_feed}})),
+                    );
+                }
+            }
+        }
+        if !self.collets.is_empty() {
+            let shank = if tool.shank_diameter > 0.0 { tool.shank_diameter } else { tool.diameter };
+            if !self.collets.iter().any(|c| (c - shank).abs() < 0.06) {
+                let list: Vec<String> = self.collets.iter().map(|c| format!("{c}")).collect();
+                out.push(
+                    Issue::warning("collet", format!("T{} {}: no {} collet takes a {shank} mm shank (collets: {} mm)", tool.number, tool.name, who, list.join(", ")))
+                        .parameter("shank_diameter", shank)
+                        .limit(serde_json::json!(self.collets)),
+                );
+            }
+        }
+        if let Some((lo, hi)) = toolpath.bounds() {
+            let ext = hi - lo;
+            for (axis, size, limit) in [("X", ext.x, self.work_area.x), ("Y", ext.y, self.work_area.y), ("Z", ext.z, self.work_area.z)] {
+                if limit > 0.0 && size > limit + 1e-6 {
+                    out.push(
+                        Issue::error("work_area", format!("the toolpath spans {:.1} mm in {axis}; the {}'s work area is {limit} mm", size, who))
+                            .parameter(axis, size)
+                            .limit(limit),
+                    );
+                }
+            }
+            if let Some((dia, len)) = self.rotary_capacity
+                && let Kinematics::FourAxis { rotary } = &self.kinematics
+            {
+                // Radius from the rotary axis and length along it.
+                let axis = rotary.direction.normalized().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let mut r_max: f64 = 0.0;
+                let (mut a_min, mut a_max) = (f64::INFINITY, f64::NEG_INFINITY);
+                for m in &toolpath.moves {
+                    if m.kind == crate::toolpath::MoveKind::Rapid {
+                        continue;
+                    }
+                    let d = m.to - rotary.pivot;
+                    let along = d.dot(axis);
+                    let radial = (d - axis * along).len();
+                    r_max = r_max.max(radial);
+                    a_min = a_min.min(along);
+                    a_max = a_max.max(along);
+                }
+                if r_max * 2.0 > dia + 1e-6 {
+                    out.push(
+                        Issue::warning("rotary_capacity", format!("cuts reach {:.1} mm from the rotary axis; the {}'s 4th-axis module takes Ø{dia} mm stock", r_max, who))
+                            .limit(dia),
+                    );
+                }
+                if a_max.is_finite() && a_max - a_min > len + 1e-6 {
+                    out.push(
+                        Issue::warning("rotary_capacity", format!("cuts span {:.1} mm along the rotary axis; the {}'s 4th-axis module takes {len} mm", a_max - a_min, who))
+                            .limit(len),
+                    );
+                }
+            }
+        }
+        out
     }
 
     pub fn axis_count(&self) -> usize {

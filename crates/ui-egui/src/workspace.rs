@@ -261,7 +261,7 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "SHEET METAL", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
     Section { tab: "RENDER", panel: "SCENE", promoted: 2, ids: &["render.scene"] },
     Section { tab: "RENDER", panel: "IMAGE", promoted: 1, ids: &["render.start"] },
-    Section { tab: "MANUFACTURE", panel: "SETUP", promoted: 3, ids: &["cam.setup.create", "cam.tool.add", "cam.machine.set"] },
+    Section { tab: "MANUFACTURE", panel: "SETUP", promoted: 4, ids: &["cam.setup.create", "cam.tool.add", "cam.tool.kit", "cam.machine.set"] },
     Section { tab: "MANUFACTURE", panel: "OPERATIONS", promoted: 2, ids: &["cam.operation.add", "cam.operation.kinds"] },
     Section { tab: "MANUFACTURE", panel: "TOOLPATHS", promoted: 4, ids: &["cam.generate", "cam.simulate.show", "cam.simulate", "cam.post"] },
     Section { tab: "MANUFACTURE", panel: "INSPECT", promoted: 2, ids: &["cam.inspect", "cam.notices"] },

@@ -49,6 +49,17 @@ pub struct Post {
     pub dwell_seconds: bool,
     /// Largest number of axes the control takes.
     pub max_axes: usize,
+    /// The tool change line, with `{n}` for the tool number.
+    pub tool_change: String,
+    /// The line that parks the spindle before a tool change and at the end.
+    pub park: String,
+    /// Coolant codes for flood and for mist/air (empty: none).
+    pub flood_code: String,
+    pub mist_code: String,
+    /// `%` lines around the program.
+    pub percent_lines: bool,
+    /// File extension the control's software opens.
+    pub extension: String,
 }
 
 impl Default for Post {
@@ -80,6 +91,38 @@ impl Post {
             end: "M30".into(),
             dwell_seconds: true,
             max_axes: 3,
+            tool_change: "T{n} M6".into(),
+            park: "G53 G0 Z0".into(),
+            flood_code: "M8".into(),
+            mist_code: "M7".into(),
+            percent_lines: true,
+            extension: "nc".into(),
+        }
+    }
+
+    /// Makera Carvera, Carvera Air and Z1 (a Smoothieware-based control, as Makera documents
+    /// it): millimetres only, `M6 T` tool changes with the control measuring the tool length
+    /// itself (no `G43`), `M7`/`M9` for the air blast, no canned cycles, `;` comments, `M2`
+    /// to end. The A word drives the 4th-axis module.
+    pub fn makera() -> Post {
+        Post {
+            id: "makera".into(),
+            name: "Makera Carvera / Carvera Air / Z1".into(),
+            description: "Makera's control: mm only, M6 T tool changes (the control measures tool length), M7/M9 air, A axis for the 4th-axis module, no canned cycles, ; comments, M2".into(),
+            canned_cycles: false,
+            tool_changes: true,
+            length_offsets: false,
+            paren_comments: false,
+            header: vec!["G21 G90 G94 G17".into(), "G54".into()],
+            end: "M2".into(),
+            max_axes: 4,
+            tool_change: "M6 T{n}".into(),
+            park: "G28".into(),
+            flood_code: "M7".into(),
+            mist_code: "M7".into(),
+            percent_lines: false,
+            extension: "cnc".into(),
+            ..Post::generic()
         }
     }
 
@@ -120,11 +163,12 @@ impl Post {
             "generic" => Some(Post::generic()),
             "grbl" => Some(Post::grbl()),
             "fiveaxis" => Some(Post::fiveaxis()),
+            "makera" | "carvera" => Some(Post::makera()),
             _ => None,
         }
     }
 
-    pub const BUILTIN: &'static [&'static str] = &["generic", "grbl", "fiveaxis"];
+    pub const BUILTIN: &'static [&'static str] = &["generic", "grbl", "fiveaxis", "makera"];
 
     fn comment(&self, text: &str) -> String {
         let clean: String = text.chars().filter(|c| !matches!(c, '(' | ')' | ';' | '\n' | '\r')).collect();
@@ -246,14 +290,17 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
     }
     let mut w = Writer { post, out: String::new(), lines: 0, n: 0, last_xyz: None, last_abc: None, last_feed: None, last_g: None };
     let name: String = program_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == ' ').collect();
-    if post.paren_comments {
+    if post.percent_lines {
         w.line("%");
     }
     w.comment(&format!("{} - SolidCraft CAM", if name.is_empty() { "program" } else { &name }));
     w.comment(&format!("machine: {}", machine.name));
-    for (i, op) in ops.iter().enumerate() {
-        w.comment(&format!("T{} {} D={} {}", op.tool.number, op.tool.name, post.num(op.tool.diameter), tool_kind_name(op.tool)));
-        let _ = i;
+    let mut listed: Vec<u32> = Vec::new();
+    for op in ops {
+        if !listed.contains(&op.tool.number) {
+            listed.push(op.tool.number);
+            w.comment(&format!("T{} {} D={} {}", op.tool.number, op.tool.name, post.num(op.tool.diameter), tool_kind_name(op.tool)));
+        }
     }
     for h in &post.header {
         w.line(h);
@@ -263,6 +310,33 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
     let mut tcp_active = false;
     let mut prev_tool: Option<u32> = None;
     let mut total_moves = 0usize;
+    // What the machine objects to: spindle speeds and feeds past its own are written at the
+    // maximum, with a warning each; a shank no collet takes and a toolpath past the work area
+    // are reported.
+    let mut seen_tools: Vec<u32> = Vec::new();
+    for op in ops {
+        if !seen_tools.contains(&op.tool.number) {
+            seen_tools.push(op.tool.number);
+            for issue in machine.check(op.tool, op.toolpath) {
+                notice.issue(issue);
+            }
+        } else {
+            for issue in machine.check(op.tool, op.toolpath).into_iter().filter(|i| i.code == "work_area" || i.code == "rotary_capacity") {
+                notice.issue(issue);
+            }
+        }
+    }
+    if let crate::machine::ToolChanger::Automatic { slots } = machine.tool_changer {
+        let beyond: Vec<String> = seen_tools.iter().filter(|n| **n > slots).map(|n| format!("T{n}")).collect();
+        if !beyond.is_empty() {
+            notice.issue(Issue::info(
+                "manual_tool_change",
+                format!("{} tool(s) beyond the changer's {slots} slots ({}): the control stops and asks for them by hand", beyond.len(), beyond.join(", ")),
+            ));
+        }
+    } else if machine.tool_changer == crate::machine::ToolChanger::Manual && seen_tools.len() > 1 {
+        notice.issue(Issue::info("manual_tool_change", format!("{} tool changes by hand: the control stops and asks for each tool", seen_tools.len() - 1)));
+    }
     for op in ops {
         let tp = op.toolpath;
         if tp.is_empty() {
@@ -277,26 +351,29 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
                 if post.coolant {
                     w.line("M9");
                 }
-                w.line("G53 G0 Z0");
+                if !post.park.is_empty() {
+                    w.line(&post.park.clone());
+                }
                 w.last_xyz = None;
                 w.last_g = None;
             }
             if post.tool_changes {
-                w.line(&format!("T{} M6", op.tool.number));
+                let line = post.tool_change.replace("{n}", &op.tool.number.to_string());
+                w.line(&line);
             }
             if post.length_offsets {
                 let h = if op.tool.length_offset > 0 { op.tool.length_offset } else { op.tool.number };
                 w.line(&format!("G43 H{h}"));
             }
-            w.line(&format!("S{} {}", (f.spindle_rpm.round() as i64).max(0), if f.clockwise { "M3" } else { "M4" }));
+            let (rpm, _) = machine.clamp_rpm(f.spindle_rpm);
+            w.line(&format!("S{} {}", (rpm.round() as i64).max(0), if f.clockwise { "M3" } else { "M4" }));
             if post.coolant {
                 let code = match f.coolant {
-                    Coolant::Flood => Some("M8"),
-                    Coolant::Mist => Some("M7"),
-                    Coolant::Air | Coolant::ThroughTool => Some("M8"),
+                    Coolant::Flood => Some(post.flood_code.as_str()),
+                    Coolant::Mist | Coolant::Air | Coolant::ThroughTool => Some(post.mist_code.as_str()),
                     Coolant::Off => None,
                 };
-                if let Some(c) = code {
+                if let Some(c) = code.filter(|c| !c.is_empty()) {
                     w.line(c);
                 }
             }
@@ -370,7 +447,7 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
                 MoveKind::Retract if m.feed <= 0.0 && post.g0_rapids => "G0",
                 _ => "G1",
             };
-            let feed = if g == "G0" { None } else { Some(if m.feed > 0.0 { m.feed } else { machine.rapid_feed }) };
+            let feed = if g == "G0" { None } else { Some(machine.clamp_feed(if m.feed > 0.0 { m.feed } else { machine.rapid_feed }).0) };
             let abc = match &machine.kinematics {
                 Kinematics::ThreeAxis => None,
                 Kinematics::FourAxis { .. } => Some((words.first().copied().unwrap_or('A'), p.pose.primary_deg, ' ', 0.0)),
@@ -395,11 +472,14 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
     if post.coolant {
         w.line("M9");
     }
+    if !post.park.is_empty() {
+        w.line(&post.park.clone());
+    }
     for l in &post.footer {
         w.line(l);
     }
     w.line(&post.end.clone());
-    if post.paren_comments {
+    if post.percent_lines {
         w.line("%");
     }
     notice.value("lines", w.lines);

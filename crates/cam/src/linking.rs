@@ -280,10 +280,13 @@ impl Linker<'_> {
                     // size that fits the tool's flat tip, so the centre is cut too).
                     let r_tool = self.tool.radius();
                     let mut d = if diameter > 0.0 { diameter } else { (self.tool.flat_radius() * 1.5).max(r_tool * 0.5) };
+                    // A helix narrower than a quarter of the tool is no better than a plunge
+                    // and takes thousands of moves to descend: plunge instead.
+                    let least = (r_tool * 0.5).max(self.tolerance * 4.0);
                     if let Some(r) = region {
                         // Shrink until the helix circle stays inside the region.
                         let mut tries = 0;
-                        while tries < 8 && !circle_inside(r, start_xy, d * 0.5, self.tolerance) {
+                        while tries < 8 && d >= least && !circle_inside(r, start_xy, d * 0.5, self.tolerance) {
                             d *= 0.5;
                             tries += 1;
                         }
@@ -291,7 +294,7 @@ impl Linker<'_> {
                             d = 0.0;
                         }
                     }
-                    if d <= self.tolerance {
+                    if d < least {
                         self.approach(tp, entry_xy, from_z)?;
                         tp.push(Move::new(MoveKind::Plunge, Vec3::new(entry_xy.x, entry_xy.y, z), f.plunge))?;
                     } else {

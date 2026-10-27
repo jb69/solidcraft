@@ -26,6 +26,7 @@
 pub mod dropcutter;
 pub mod frame;
 pub mod heightmap;
+pub mod kits;
 pub mod linking;
 pub mod machine;
 pub mod notice;

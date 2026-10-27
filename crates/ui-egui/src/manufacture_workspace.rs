@@ -61,8 +61,9 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
     let tool = m.tools.tools.first().map(|t| t.id);
     let template = match id {
         "cam.tool.add" => Some(json!({"name": "6 mm flat", "kind": "flat", "diameter": 6, "flute_length": 20, "overall_length": 50})),
-        "cam.setup.create" => Some(json!({"name": format!("Setup {}", m.setups.len() + 1), "machine": "three_axis", "stock": {"mode": "relative_box", "x_neg": 1, "x_pos": 1, "y_neg": 1, "y_pos": 1, "z_neg": 0, "z_pos": 1}})),
-        "cam.machine.set" => Some(json!({"setup": setup, "machine": "three_axis"})),
+        "cam.setup.create" => Some(json!({"name": format!("Setup {}", m.setups.len() + 1), "machine": "carvera", "stock": {"mode": "relative_box", "x_neg": 1, "x_pos": 1, "y_neg": 1, "y_pos": 1, "z_neg": 0, "z_pos": 1}})),
+        "cam.tool.kit" => Some(json!({"kit": "makera_essential", "material": "aluminium"})),
+        "cam.machine.set" => Some(json!({"setup": setup, "machine": "carvera"})),
         "cam.operation.add" => Some(json!({"setup": setup, "tool": tool, "type": "pocket3d", "name": "Rough", "stepover": 3, "stepdown": 2, "stock_to_leave_radial": 0.2, "stock_to_leave_axial": 0.1})),
         "cam.operation.set" => Some(json!({"operation": null})),
         _ => None,

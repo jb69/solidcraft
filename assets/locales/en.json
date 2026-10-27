@@ -475,6 +475,7 @@
   "cmd.cam_simulate_hide": "Hide Simulation",
   "cmd.cam_simulate_show": "Show Simulation",
   "cmd.cam_tool_add": "Add Tool",
+  "cmd.cam_tool_kit": "Tool Kit",
   "cmd.cam_tool_list": "Tools",
   "cmd.cam_tool_remove": "Remove Tool",
   "cmd.cam_tool_set": "Edit Tool",

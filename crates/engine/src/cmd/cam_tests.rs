@@ -374,3 +374,46 @@ fn hostile_cam_params_never_panic() {
         }
     }
 }
+
+#[test]
+fn carvera_program_uses_the_kit_the_checks_and_the_makera_post() {
+    let mut s = block();
+    let kit = run(&mut s, "cam.tool.kit", json!({"material": "aluminium", "machine": "carvera"}));
+    let tools = kit["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 11, "{kit}");
+    assert_eq!(kit["notice"]["status"], "ok");
+    let flat = tools[0]["id"].as_u64().unwrap();
+    let drill = tools[8]["id"].as_u64().unwrap();
+    let setup = run(&mut s, "cam.setup.create", json!({"name": "Carvera", "machine": "carvera"}))["id"].as_u64().unwrap();
+    let st = run(&mut s, "cam.setup.list", json!({}));
+    assert_eq!(st["setups"][0]["machine"]["name"], "Makera Carvera", "{st}");
+    run(&mut s, "cam.operation.add", json!({"setup": setup, "type": "face", "tool": flat, "name": "Face", "stepover": 2, "stepdown": 0.5, "heights": {"bottom": {"from": "model_top", "offset": 0}}}));
+    run(&mut s, "cam.operation.add", json!({"setup": setup, "type": "pocket2d", "tool": flat, "name": "Pocket", "stepover": 1.2, "stepdown": 0.8, "geometry": {"source": "faces", "points": [[28, 15, 6]]}}));
+    run(&mut s, "cam.operation.add", json!({"setup": setup, "type": "drill", "tool": drill, "name": "Drill", "cycle": "peck", "peck": 1, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
+    let g = run(&mut s, "cam.generate", json!({"setup": setup}));
+    // The block's hole is 6 mm and the kit's drill 3.175 mm: that warning is the only one.
+    assert_eq!(g["status"], "warning", "{g}");
+    for o in g["setups"][0]["operations"].as_array().unwrap() {
+        for i in o["notice"]["issues"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+            assert_eq!(i["code"], "tool_diameter_mismatch", "{o}");
+        }
+    }
+    let post = run(&mut s, "cam.post", json!({}));
+    assert_eq!(post["post"], "makera", "{post}");
+    let code = post["gcode"].as_str().unwrap();
+    assert!(code.contains("M6 T1") && code.contains("M6 T9") && !code.contains("G43") && !code.contains("G83"), "{}", &code[..400]);
+    assert!(code.trim_end().ends_with("M2"));
+    // T9 is beyond the six slots: the control asks for it by hand.
+    assert!(post["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "manual_tool_change"), "{}", post["notice"]);
+    // The machine list carries the Makera presets with their numbers.
+    let ml = run(&mut s, "cam.machine.list", json!({}));
+    let z1 = ml["machines"].as_array().unwrap().iter().find(|m| m["preset"] == "z1").unwrap();
+    assert_eq!(z1["spindle_rpm_max"], 13000.0);
+    assert_eq!(z1["work_area_mm"][0], 200.0);
+    // A tool asked to spin faster than the Z1 can is flagged by generate on a Z1 setup.
+    run(&mut s, "cam.tool.set", json!({"tool": flat, "feeds": {"spindle_rpm": 15000}}));
+    run(&mut s, "cam.machine.set", json!({"setup": setup, "machine": "z1"}));
+    let g = run(&mut s, "cam.generate", json!({"setup": setup}));
+    let face = &g["setups"][0]["operations"][0];
+    assert!(face["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "spindle_speed" && i["limit"] == 13000.0), "{face}");
+}

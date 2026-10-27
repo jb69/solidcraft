@@ -87,9 +87,39 @@ at once, and `cam.simulate`, `cam.simulate.show` and `cam.post` take the design'
 `setup` is left out. Post Process asks where to save the `.nc` file. A simulation shown from a
 script or the agent switches to the workspace by itself, and leaving the workspace ends it.
 
+## Makera machines (Carvera, Carvera Air, Z1)
+
+CAM stays generic, and the Makera desktop machines are first-class: presets `carvera`,
+`carvera_air` and `z1`, each with a `_4axis` variant for the maker's rotary module, carry the
+published work area, gantry clearance, spindle range and power, maximum travel speed, tool
+changer (6-slot automatic on the Carvera, by hand on the Air and Z1), the collet sizes and the
+rotary module's stock capacity (`cam.machine.list` shows every number). With one of them on a
+setup:
+
+- `cam.generate` and `cam.post` check every tool and toolpath against the machine: a spindle
+  speed or feed past the machine's (`spindle_speed`, `feed_limit`: the post writes the maximum
+  and says so), a shank no collet takes (`collet`), a toolpath wider than the work area
+  (`work_area`, an error) or the rotary module's capacity (`rotary_capacity`), and tools beyond
+  the changer's slots or every change on a manual machine (`manual_tool_change`).
+- `cam.post` picks the `makera` post by itself. It writes the control's own dialect as Makera
+  documents it: millimetres only (`G21 G90 G94 G17`), `M6 T<n>` tool changes with the control
+  measuring the tool length itself (no `G43`), `M7`/`M9` for the air blast, `G28` to park, the
+  `A` word for the 4th-axis module, no canned cycles (drilling is expanded), `;` comments and
+  `M2`. Programs are `.cnc` files for Makera's controller software.
+- `cam.tool.kit {kit: makera_essential, material: aluminium | wood | plastic}` adds Makera's
+  1/8" bit set (single-flute flat end mills, ball end mills, a 90° chamfer bit, a 30° engraving
+  bit and drills in 3.175, 2 and 1 mm) with feeds from chip loads for the material, scaled for
+  the small cutters and held within the machine's spindle and feed limits, and a starting
+  stepdown per diameter in the notice.
+
+The Carvera's rotary module turns about X (`A`), continuous; Makera's firmware limits the rotary
+feed itself, so the post writes ordinary feeds. The firmware's manual-change prompt handles tools
+beyond the six slots, and all tools on the Air and Z1. Probing, work offsets and the laser are
+done on the machine (the controller's probing cycles set `G54`), not in the program.
+
 ## Post processors
 
-`generic` (RS-274 for most 3-axis controls: tool changes, length offsets, canned drilling
+`makera` (Makera Carvera, Carvera Air and Z1, see above), `generic` (RS-274 for most 3-axis controls: tool changes, length offsets, canned drilling
 cycles), `grbl` (routers: no tool changer or canned cycles) and `fiveaxis` (A/B/C words through
 the machine's kinematics; `G43.4` TCP when the machine has it, else machine coordinates with the
 moves linearised to the machine's tolerance). `cam.post.list` lists them.

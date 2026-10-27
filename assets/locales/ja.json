@@ -475,6 +475,7 @@
   "cmd.cam_simulate_hide": "シミュレーションを隠す",
   "cmd.cam_simulate_show": "シミュレーションを表示",
   "cmd.cam_tool_add": "工具を追加",
+  "cmd.cam_tool_kit": "工具キット",
   "cmd.cam_tool_list": "工具",
   "cmd.cam_tool_remove": "工具を削除",
   "cmd.cam_tool_set": "工具を編集",

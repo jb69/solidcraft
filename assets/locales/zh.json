@@ -475,6 +475,7 @@
   "cmd.cam_simulate_hide": "隐藏仿真",
   "cmd.cam_simulate_show": "显示仿真",
   "cmd.cam_tool_add": "添加刀具",
+  "cmd.cam_tool_kit": "刀具套件",
   "cmd.cam_tool_list": "刀具",
   "cmd.cam_tool_remove": "删除刀具",
   "cmd.cam_tool_set": "编辑刀具",

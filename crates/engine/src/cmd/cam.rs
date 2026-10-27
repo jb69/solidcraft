@@ -82,18 +82,22 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.tool.add", "Add Tool", tool_add).at("MANUFACTURE", "SETUP")
         .icon("cam")
         .params("name; kind: flat | ball | bull | chamfer | drill | spot | tapered_ball; diameter (mm); corner_radius? (bull); tip_angle_deg? (chamfer, drill, spot; default 90 / 118); tip_radius? and taper_angle_deg? (tapered_ball); number? (T word); flute_length?, overall_length?, shank_diameter?, holder_diameter?, flutes?; feeds?: {spindle_rpm, cutting, plunge, ramp, lead_in, lead_out, retract, clockwise, coolant: flood | mist | air | through_tool | off}: adds a tool to the design's library. Returns the tool with its id"),
+    CommandSpec::new("cam.tool.kit", "Tool Kit", tool_kit)
+        .at("MANUFACTURE", "SETUP")
+        .icon("cam")
+        .params("kit?: makera_essential (default); material?: aluminium | wood | plastic (default aluminium); machine?: preset (default the setup's machine, else carvera); setup?: id: adds a maker's tool set with feeds and speeds scaled to the machine (chip loads for the material, held within the spindle and feed limits). Returns the tools with their ids and a starting stepdown per diameter"),
     CommandSpec::new("cam.tool.set", "Edit Tool", tool_set).icon("cam").params("tool: id; any cam.tool.add field: changes a tool. Operations using it need cam.generate again"),
     CommandSpec::new("cam.tool.remove", "Remove Tool", tool_remove).icon("cam").params("tool: id: removes an unused tool"),
     CommandSpec::new("cam.tool.list", "Tools", tool_list).icon("cam").params("lists the tool library").noundo(),
     CommandSpec::new("cam.setup.create", "Create Setup", setup_create).at("MANUFACTURE", "SETUP")
         .icon("cam")
-        .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} (default a box 1 mm around the model, flush at the bottom); machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc or a machine object; program?: name for the post. Returns the setup with its id and the resolved stock"),
+        .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} (default a box 1 mm around the model, flush at the bottom); machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc | carvera | carvera_4axis | carvera_air | carvera_air_4axis | z1 | z1_4axis or a machine object (cam.machine.list); program?: name for the post. Returns the setup with its id and the resolved stock"),
     CommandSpec::new("cam.setup.set", "Edit Setup", setup_set).icon("cam").params("setup: id; any cam.setup.create field: changes a setup"),
     CommandSpec::new("cam.setup.remove", "Remove Setup", setup_remove).icon("cam").params("setup: id: removes a setup and its operations"),
     CommandSpec::new("cam.setup.list", "Setups", setup_list).icon("cam").params("lists the setups with their operations").noundo(),
     CommandSpec::new("cam.machine.set", "Set Machine", machine_set).at("MANUFACTURE", "SETUP")
         .icon("cam")
-        .params("setup: id; machine: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc or a full machine object; tcp?: bool (the control has tool-centre-point control); rapid_feed?; linearisation_tolerance?; max_rotary_step_deg?; limits?: {A: [min,max], C: [min,max]}: sets the setup's machine"),
+        .params("setup: id; machine: a preset (cam.machine.list: three_axis … carvera, carvera_air, z1, each with a _4axis variant) or a full machine object; tcp?: bool (the control has tool-centre-point control); rapid_feed?; linearisation_tolerance?; max_rotary_step_deg?; limits?: {A: [min,max], C: [min,max]}: sets the setup's machine"),
     CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists the machine presets").noundo(),
     CommandSpec::new("cam.operation.add", "Add Operation", operation_add).at("MANUFACTURE", "OPERATIONS")
         .icon("cam")
@@ -116,7 +120,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .noundo(),
     CommandSpec::new("cam.post", "Post Process", post).at("MANUFACTURE", "TOOLPATHS")
         .icon("export")
-        .params("setup?: id (default the only setup); post?: generic | grbl | fiveaxis (default by the machine's axes); path?: write the G-code here (.nc); program?: name; line_numbers?: increment; canned_cycles?: bool: writes the setup's program through the machine's kinematics. Returns the G-code (when under 2 MB), line count and notice")
+        .params("setup?: id (default the only setup); post?: generic | grbl | fiveaxis | makera (default the machine's own post, else by its axes); path?: write the G-code here (.nc); program?: name; line_numbers?: increment; canned_cycles?: bool: writes the setup's program through the machine's kinematics. Returns the G-code (when under 2 MB), line count and notice")
         .noundo(),
     CommandSpec::new("cam.simulate.show", "Show Simulation", simulate_show).at("MANUFACTURE", "TOOLPATHS")
         .icon("play")
@@ -212,6 +216,45 @@ fn tool_add(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+fn tool_kit(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.tool.kit";
+    let kit_id = str_(p, "kit").unwrap_or("makera_essential");
+    let material = match str_(p, "material") {
+        Some(m) => cam::kits::Material::parse(m).ok_or_else(|| bad(cmd, format!("unknown material `{m}`: aluminium | wood | plastic")))?,
+        None => cam::kits::Material::Aluminium,
+    };
+    let machine = match p.get("machine") {
+        Some(v) if !v.is_null() => machine_param(v, cmd, None)?,
+        _ => {
+            let setup = p.get("setup").and_then(Value::as_u64).and_then(|id| s.doc.manufacture.setup(id)).or_else(|| s.doc.manufacture.setups.first());
+            setup.map(|st| st.machine.clone()).unwrap_or_else(cam::machine::Machine::makera_carvera)
+        }
+    };
+    let tools = cam::kits::kit(kit_id, &machine, material).ok_or_else(|| bad(cmd, format!("unknown kit `{kit_id}`: {}", cam::kits::KITS.join(" | "))))?;
+    if s.doc.manufacture.tools.tools.len() + tools.len() > 1000 {
+        return Err(bad(cmd, "a design holds at most 1000 tools"));
+    }
+    let mut number = s.doc.manufacture.tools.tools.iter().map(|t| t.number).max().unwrap_or(0);
+    let mut out = Vec::new();
+    for mut tool in tools {
+        tool.validate().map_err(|e| engine_err(cmd, e))?;
+        tool.id = s.doc_mut().manufacture.next_id();
+        number += 1;
+        tool.number = number;
+        out.push(tool_json(&tool, 0));
+        s.doc_mut().manufacture.tools.tools.push(tool);
+    }
+    let mut notice = Notice::new(format!("{} tools added for the {} ({:?})", out.len(), machine.name, material));
+    notice.value("spindle_rpm_max", machine.spindle_rpm_max);
+    notice.value("max_feed_mm_min", machine.max_feed);
+    notice.value("stepdown_per_diameter", material.stepdown_per_diameter());
+    notice.issue(Issue::info(
+        "starting_point",
+        format!("feeds are starting points for a {} W spindle: begin with a stepdown of {} × the tool diameter and a stepover of half of it, then listen to the cut", machine.spindle_power_w, material.stepdown_per_diameter()),
+    ));
+    Ok(json!({"tools": out, "machine": machine.name, "material": material, "notice": notice.to_json()}))
+}
+
 fn tool_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.tool.set";
     let id = id_param(p, "tool", cmd)?;
@@ -265,19 +308,8 @@ fn frame_param(p: &Value, k: &str, cmd: &str, default: Frame) -> Result<Frame> {
 
 fn machine_param(v: &Value, cmd: &str, current: Option<&cam::machine::Machine>) -> Result<cam::machine::Machine> {
     let mut m = match v {
-        Value::String(name) => match name.as_str() {
-            "three_axis" | "3axis" | "3-axis" | "mill3" => cam::machine::Machine::three_axis(),
-            "four_axis_a" | "4axis" | "4-axis" | "rotary_a" => cam::machine::Machine::four_axis_a(),
-            "trunnion_ac" | "5axis" | "5-axis" | "table_table_ac" => cam::machine::Machine::trunnion_ac(),
-            "trunnion_bc" | "table_table_bc" => cam::machine::Machine::trunnion_bc(),
-            "head_head_bc" | "head_head" => cam::machine::Machine::head_head_bc(),
-            other => {
-                return Err(bad(
-                    cmd,
-                    format!("unknown machine preset `{other}`: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc"),
-                ));
-            }
-        },
+        Value::String(name) => cam::machine::Machine::preset(name)
+            .ok_or_else(|| bad(cmd, format!("unknown machine preset `{name}`: {}", cam::machine::Machine::PRESETS.join(" | "))))?,
         Value::Object(_) => {
             let mut base = serde_json::to_value(current.cloned().unwrap_or_default()).unwrap_or(Value::Null);
             if let Some(Value::String(preset)) = v.get("preset").or_else(|| v.get("kind_preset")) {
@@ -464,15 +496,9 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn machine_list(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let presets = [
-        ("three_axis", cam::machine::Machine::three_axis()),
-        ("four_axis_a", cam::machine::Machine::four_axis_a()),
-        ("trunnion_ac", cam::machine::Machine::trunnion_ac()),
-        ("trunnion_bc", cam::machine::Machine::trunnion_bc()),
-        ("head_head_bc", cam::machine::Machine::head_head_bc()),
-    ];
+    let presets: Vec<(&str, cam::machine::Machine)> = cam::machine::Machine::PRESETS.iter().filter_map(|id| cam::machine::Machine::preset(id).map(|m| (*id, m))).collect();
     Ok(
-        json!({"machines": presets.iter().map(|(id, m)| json!({"preset": id, "name": m.name, "axes": m.axis_count(), "tcp": m.tcp, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>()}),
+        json!({"machines": presets.iter().map(|(id, m)| json!({"preset": id, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS}),
     )
 }
 
@@ -1295,7 +1321,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                 ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "status": "disabled"}));
                 continue;
             }
-            let g = match generate_one(s, st, op, &meshes, &fixtures, model_bounds, stock_map.as_ref()) {
+            let mut g = match generate_one(s, st, op, &meshes, &fixtures, model_bounds, stock_map.as_ref()) {
                 Ok(g) => g,
                 Err(e) => {
                     let mut n = Notice::new(e.to_string());
@@ -1310,6 +1336,12 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                 }
             };
+            // What the machine objects to (speeds, feeds, collets, work area).
+            if let Some(tool) = s.doc.manufacture.tools.get(op.tool) {
+                for issue in st.machine.check(tool, &g.toolpath) {
+                    g.notice.issue(issue);
+                }
+            }
             // Sweep the stock when the operation is in the WCS.
             if let Some(sm) = stock_map.as_mut()
                 && op.orientation.is_none()
@@ -1457,7 +1489,13 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.post";
     let id = setup_param(s, p, cmd)?;
     let st = s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
-    let default_post = if st.machine.axis_count() > 3 { "fiveaxis" } else { "generic" };
+    let default_post = if !st.machine.post.is_empty() {
+        st.machine.post.as_str()
+    } else if st.machine.axis_count() > 3 {
+        "fiveaxis"
+    } else {
+        "generic"
+    };
     let post_id = str_(p, "post").unwrap_or(default_post);
     let mut post =
         cam::post::Post::builtin(post_id).ok_or_else(|| bad(cmd, format!("unknown post `{post_id}`: {}", cam::post::Post::BUILTIN.join(" | "))))?;

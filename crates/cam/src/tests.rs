@@ -725,3 +725,100 @@ fn drill_pecks_do_not_rapid_into_stock() {
         prev = Some(m.to);
     }
 }
+
+#[test]
+fn makera_post_writes_the_carvera_dialect_and_holds_the_machine_limits() {
+    // A 1/8" single-flute tool asked to run faster than the Z1 can: the post writes the Z1's
+    // maximum speed and feed and says so.
+    let mut tool = flat(3.175);
+    tool.feeds.spindle_rpm = 18000.0;
+    tool.feeds.cutting = 2000.0;
+    tool.shank_diameter = 3.175;
+    let mut tp = Toolpath::new();
+    tp.rapid(Vec3::new(0.0, 0.0, 10.0)).unwrap();
+    tp.rapid(Vec3::new(0.0, 0.0, 1.0)).unwrap();
+    tp.push(crate::toolpath::Move::new(MoveKind::Plunge, Vec3::new(0.0, 0.0, -2.0), 200.0)).unwrap();
+    tp.cut(Vec3::new(30.0, 0.0, -2.0), 2000.0).unwrap();
+    tp.cut(Vec3::new(30.0, 20.0, -2.0), 2000.0).unwrap();
+    let z1 = Machine::makera_z1();
+    let prog = post_program(&Post::makera(), &z1, "bracket", &[PostOperation { name: "slot", tool: &tool, toolpath: &tp }], 0.01).unwrap();
+    let g = &prog.gcode;
+    assert!(g.starts_with(";bracket - SolidCraft CAM\n"), "{g}");
+    assert!(g.contains("G21 G90 G94 G17\n"), "{g}");
+    assert!(g.contains("\nM6 T1\n"), "{g}");
+    assert!(!g.contains("G43"), "{g}");
+    assert!(g.contains("S13000 M3"), "spindle clamped to the Z1: {g}");
+    assert!(g.contains("M7\n"), "air blast: {g}");
+    assert!(g.contains("X30.0 F1200.0"), "feed clamped to the Z1: {g}");
+    assert!(g.contains("\nG28\n") && g.trim_end().ends_with("M2"), "{g}");
+    assert!(!g.contains('%') && !g.contains("G81"), "{g}");
+    let codes: Vec<&str> = prog.notice.issues.iter().map(|i| i.code.as_str()).collect();
+    assert!(codes.contains(&"spindle_speed") && codes.contains(&"feed_limit"), "{codes:?}");
+    assert_eq!(prog.notice.status(), "warning");
+    // A 1/4" shank with the Air's collets is fine; a 10 mm shank is not.
+    let mut big = flat(10.0);
+    big.shank_diameter = 10.0;
+    let air = Machine::makera_carvera_air();
+    let issues = air.check(&big, &tp);
+    assert!(issues.iter().any(|i| i.code == "collet"), "{issues:?}");
+    big.shank_diameter = 6.35;
+    assert!(air.check(&big, &tp).iter().all(|i| i.code != "collet"));
+    // A toolpath wider than the Z1's 200 mm table is an error.
+    let mut wide = Toolpath::new();
+    wide.rapid(Vec3::new(0.0, 0.0, 5.0)).unwrap();
+    wide.cut(Vec3::new(250.0, 0.0, -1.0), 500.0).unwrap();
+    let issues = z1.check(&tool, &wide);
+    assert!(issues.iter().any(|i| i.code == "work_area" && i.severity == crate::notice::Severity::Error), "{issues:?}");
+    assert!(Machine::makera_carvera().check(&tool, &wide).iter().all(|i| i.code != "work_area"));
+    // Tools beyond the Carvera's six slots are changed by hand (an info in the notice).
+    let carvera = Machine::makera_carvera();
+    let mut t7 = flat(3.175);
+    t7.number = 7;
+    let prog = post_program(
+        &Post::makera(),
+        &carvera,
+        "two",
+        &[PostOperation { name: "a", tool: &tool, toolpath: &tp }, PostOperation { name: "b", tool: &t7, toolpath: &tp }],
+        0.01,
+    )
+    .unwrap();
+    assert!(prog.notice.issues.iter().any(|i| i.code == "manual_tool_change" && i.message.contains("T7")), "{:?}", prog.notice.issues);
+    assert!(prog.gcode.contains("\nM6 T7\n"));
+    // Every preset validates, and the 4-axis ones carry a continuous A along X.
+    for id in Machine::PRESETS {
+        let m = Machine::preset(id).unwrap();
+        m.validate().unwrap();
+        if id.ends_with("_4axis") {
+            assert_eq!(m.axis_count(), 4);
+            assert!(m.rotaries()[0].is_continuous() && m.rotary_capacity.is_some(), "{id}");
+        }
+    }
+    assert_eq!(Machine::preset("Carvera Air").unwrap().model, "Carvera Air");
+}
+
+#[test]
+fn makera_kit_feeds_stay_within_the_machine() {
+    use crate::kits::{Material, makera_essential};
+    for m in [Machine::makera_carvera(), Machine::makera_carvera_air(), Machine::makera_z1()] {
+        for mat in [Material::Aluminium, Material::Wood, Material::Plastic] {
+            let tools = makera_essential(&m, mat);
+            assert_eq!(tools.len(), 11);
+            for t in &tools {
+                t.validate().unwrap();
+                assert!(t.feeds.spindle_rpm <= m.spindle_rpm_max + 1e-9, "{} {:?}", t.name, mat);
+                assert!(t.feeds.cutting <= m.max_feed + 1e-9 && t.feeds.plunge <= m.max_feed + 1e-9, "{} {:?} {:?}", t.name, mat, t.feeds);
+                assert!(t.feeds.cutting >= 20.0 && t.feeds.plunge >= 20.0, "{} {:?} {:?}", t.name, mat, t.feeds);
+                assert!(m.check(t, &Toolpath::new()).is_empty(), "{} {:?}", t.name, m.check(t, &Toolpath::new()));
+            }
+        }
+    }
+    // Aluminium on the Carvera: the 3.175 mm single flute runs at 12 000 rev/min and about
+    // 300 mm/min (0.025 mm chip load); the 1 mm tool is slower.
+    let tools = makera_essential(&Machine::makera_carvera(), Material::Aluminium);
+    assert!((tools[0].feeds.spindle_rpm - 12000.0).abs() < 1e-9);
+    assert!((tools[0].feeds.cutting - 300.0).abs() < 1.0, "{:?}", tools[0].feeds);
+    assert!(tools[2].feeds.cutting < tools[0].feeds.cutting);
+    // Wood on the Z1: feeds are capped by the Z1's 1 200 mm/min travel.
+    let tools = makera_essential(&Machine::makera_z1(), Material::Wood);
+    assert!(tools.iter().all(|t| t.feeds.cutting <= 960.0 + 1e-9));
+}

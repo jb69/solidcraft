@@ -16,6 +16,7 @@ pub mod browser;
 pub mod browser_canvas;
 pub mod browser_prompts;
 pub mod cam_panel;
+pub mod manufacture_workspace;
 pub mod canvas;
 #[cfg(test)]
 mod colour_tokens_tests;
@@ -1010,6 +1011,9 @@ impl SolveApp {
             self.set_status(tools::hint(id), false);
             return;
         }
+        if manufacture_workspace::start(self, id) {
+            return;
+        }
         if let Some(d) = dialogs::Dialog::for_command(self, id) {
             // The pre-selection now belongs to the dialog's inputs.
             if d.wants_picks() && !self.session.selection.is_empty() {
@@ -1546,7 +1550,8 @@ impl SolveApp {
             }
         }
         let floating = self.ui.layout == shell::LayoutMode::Floating;
-        let show_timeline = self.ui.show_timeline && !render_workspace::active(self);
+        manufacture_workspace::sync(self);
+        let show_timeline = self.ui.show_timeline && !render_workspace::active(self) && !manufacture_workspace::active(self);
         let left_timeline = show_timeline && self.preferences.timeline_left;
         if !floating {
             toolbar::toolbar(self, ui);
@@ -1602,6 +1607,9 @@ impl SolveApp {
         }
         if render_workspace::active(self) {
             render_workspace::panel(self, ui);
+        }
+        if manufacture_workspace::active(self) {
+            manufacture_workspace::panel(self, ui);
         }
         agent_chat::show(self, ui);
         if browser_float {

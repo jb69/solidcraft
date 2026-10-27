@@ -332,6 +332,8 @@ fn scene_key(app: &SolveApp) -> u64 {
     app.session.active_occurrence_path.hash(&mut h);
     app.preview.effective_replaced().hash(&mut h);
     app.preview.rolled_back.hash(&mut h);
+    // The machining simulation's preview is a fresh `Arc` per `cam.simulate.show`.
+    app.session.cam.preview.as_ref().map(|p| std::sync::Arc::as_ptr(p) as usize).hash(&mut h);
     app.tree.redefine.hash(&mut h);
     crate::theme::is_dark().hash(&mut h);
     crate::theme::vision().hash(&mut h);
@@ -2108,6 +2110,9 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
         return sc;
     }
     let mut feedback = GpuScene::default();
+    // A machining simulation stands in for these bodies: nothing of them is lit.
+    let sim_hidden: Vec<String> = app.session.cam.preview.as_ref().filter(|p| p.hide_model).map(|p| p.bodies.clone()).unwrap_or_default();
+    let sel: Vec<Sel> = sel.into_iter().filter(|x| !matches!(x, Sel::Body { name } | Sel::Face { body: name, .. } if sim_hidden.contains(name))).collect();
     // Selected things.
     for x in &sel {
         match x {
@@ -2176,7 +2181,7 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
     // Timeline modifiers light only their resulting faces; browser rows light whole bodies.
     let mut hovered = app.viewport.hover_feature.map(|id| feature_geometry(app, id)).unwrap_or_default();
     hovered.extend(app.viewport.hover_bodies.iter().map(|name| Sel::Body { name: name.clone() }));
-    for b in st.bodies.iter().filter(|b| app.session.body_visible(&b.name) && !app.preview.effective_replaced().contains(&b.name)) {
+    for b in st.bodies.iter().filter(|b| app.session.body_visible(&b.name) && !app.preview.effective_replaced().contains(&b.name) && !sim_hidden.contains(&b.name)) {
         let whole = hovered.iter().any(|x| matches!(x, Sel::Body { name } if name == &b.name));
         let faces: Vec<_> = if whole {
             (0..b.body.face_count()).collect()

@@ -110,6 +110,9 @@ fn swap_in(app: &mut SolveApp, slot: DocSlot) -> DocSlot {
     if crate::render_workspace::active(app) {
         let _ = crate::render_workspace::enter(app, false);
     }
+    if crate::manufacture_workspace::active(app) {
+        let _ = crate::manufacture_workspace::enter(app, false);
+    }
     // Whatever was going on in the design leaves with it.
     crate::sketch_text_move::cancel_drag(app);
     crate::dialogs::cancel(app);

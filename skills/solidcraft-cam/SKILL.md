@@ -46,7 +46,9 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   is what finishing has left to do (a roughing-only program leaves `stock_to_leave` plus the
   corner fillets of the tool radius).
 - Look: `cam.simulate.show {setup, progress: 1}` then `screenshot {"source":"model"}`; step
-  with `progress` or `step` to watch the tool. `cam.simulate.hide` afterwards.
+  with `progress` or `step` to watch the tool. The app switches to its Manufacture workspace
+  (the MANUFACTURE tab and a panel listing tools, setups and operations) while the simulation
+  shows. `cam.simulate.hide` afterwards.
 - `cam.notices {}` after any design change: `stale: true` means generate again.
 
 ## Finish

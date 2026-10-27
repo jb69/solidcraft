@@ -34,6 +34,7 @@ use solidcraft_doc::{Document, Model, ModelState};
 use solidcraft_geom::Vec3;
 
 pub use cmd::{CommandInfo, CommandSpec, auto_operation, command_specs, extrude_reach, find_command};
+pub use solidcraft_cam as cam;
 pub use solidcraft_doc as doc;
 pub use solidcraft_doc::Visibility;
 pub use solidcraft_geom as geom;
@@ -237,6 +238,9 @@ pub struct Session {
     pub log: Vec<String>,
     /// Increments on every document change (views use it to refresh).
     pub revision: u64,
+    /// Increments when the model is evaluated again (the geometry may have changed); a
+    /// selection, a view or a manufacturing edit leaves it alone. Toolpaths go stale by it.
+    pub geometry_revision: u64,
     /// Project a face's edges into a sketch created on it (the default; `sketch.auto_project`).
     pub auto_project: bool,
     /// How calls that break a command's parameter contract are treated (off by default). It
@@ -404,6 +408,7 @@ impl Session {
             open_preview: None,
             log: Vec::new(),
             revision: 1,
+            geometry_revision: 1,
             auto_project: true,
             param_check: schema::ParamCheck::Off,
             active_component: 0,
@@ -632,6 +637,7 @@ impl Session {
             self.evaluations += 1;
         }
         self.revision += 1;
+        self.geometry_revision += 1;
         self.prune_occurrence_state();
         // Joints follow the geometry their origins snap to.
         if !self.doc.assembly.joints.is_empty() {
@@ -937,6 +943,7 @@ impl Session {
             saved: self.saved.clone(),
             log: Vec::new(),
             revision: self.revision,
+            geometry_revision: self.geometry_revision,
             auto_project: self.auto_project,
             param_check: self.param_check,
             active_component: self.active_component,
@@ -988,6 +995,7 @@ impl Session {
         self.active_sketch = computed.active_sketch;
         self.selection = computed.selection;
         self.revision = computed.revision;
+        self.geometry_revision = self.geometry_revision.max(computed.geometry_revision) + 1;
         self.invalidate_view(previous_revision);
         self.active_component = computed.active_component;
         self.active_occurrence_path = computed.active_occurrence_path;

@@ -73,6 +73,20 @@ cut so far, the tool where it stands, the path made and the path to come. The **
 Simulation** panel plays it back with a timeline, speed and single steps. `cam.simulate.hide`
 ends it.
 
+## The Manufacture workspace
+
+CAM lives in the **Manufacture** workspace (the workspace switcher at the top left, or
+`ui.workspace {"workspace": "manufacture"}` over the control channel), not in Design. Its
+MANUFACTURE ribbon tab carries the commands in four panels: SETUP (Create Setup, Add Tool, Set
+Machine), OPERATIONS (Add Operation, Operation Kinds), TOOLPATHS (Generate Toolpaths, Show
+Simulation, Simulate, Post Process) and INSPECT (Inspect Manufacturing, CAM Notices). A panel on
+the right lists the tools, setups and operations with each one's status and issues, with
+Generate, Simulate and Post buttons. The buttons for commands that take parameters open the
+command box with a filled-in call to edit and run (there are no CAM dialogs yet); the others run
+at once, and `cam.simulate`, `cam.simulate.show` and `cam.post` take the design's only setup when
+`setup` is left out. Post Process asks where to save the `.nc` file. A simulation shown from a
+script or the agent switches to the workspace by itself, and leaving the workspace ends it.
+
 ## Post processors
 
 `generic` (RS-274 for most 3-axis controls: tool changes, length offsets, canned drilling
@@ -94,5 +108,7 @@ than the operation needs), `not_generated`, `sketch_not_level`, `face_not_level`
   frame, linking, operations, kinematics, simulation, posts, the stored model.
 - `crates/engine/src/cmd/cam.rs`: the commands, geometry resolution from bodies, faces and
   sketches, the session's toolpath cache and simulation preview.
-- `crates/ui-egui/src/cam_panel.rs` and the viewport: the simulation display and playback.
+- `crates/ui-egui/src/manufacture_workspace.rs`: the Manufacture workspace (ribbon tab, panel,
+  button behaviour); `crates/ui-egui/src/cam_panel.rs` and the viewport: the simulation display
+  and playback.
 - `skills/solidcraft-cam`: how an agent machines a part.

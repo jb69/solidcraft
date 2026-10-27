@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Ws manufacture</title>
+  <path d="M8 40H56V56H8Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round"/>
+  <path d="M24 40L28 28H44V40Z" fill="#8e9faf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round"/>
+  <path d="M26 4H38V14H26Z" fill="#8e9faf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round"/>
+  <path d="M28 14H36V34L32 38L28 34Z" fill="#328bd3" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round"/>
+  <path d="M32 14V34" fill="none" stroke="#e2e8ef" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M12 20C16 14 20 26 24 20" fill="none" stroke="#34465b" stroke-width="2.55" stroke-linecap="round"/>
+  <path d="M40 20C44 14 48 26 52 20" fill="none" stroke="#34465b" stroke-width="2.55" stroke-linecap="round"/>
+</svg>

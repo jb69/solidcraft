@@ -180,6 +180,21 @@ pub(crate) fn cmd(app: &SolveApp, id: &str, label: &str) -> Item {
 }
 
 /// A view action (`ui.*`).
+/// Switch to a workspace by its slug: the one that is on leaves the other.
+pub(crate) fn enter_workspace(app: &mut SolveApp, workspace: &str) -> Result<(), String> {
+    match workspace {
+        "render" => {
+            crate::manufacture_workspace::enter(app, false)?;
+            crate::render_workspace::enter(app, true)
+        }
+        "manufacture" => crate::manufacture_workspace::enter(app, true),
+        _ => {
+            crate::manufacture_workspace::enter(app, false)?;
+            crate::render_workspace::enter(app, false)
+        }
+    }
+}
+
 pub(crate) fn act(id: &str, label: &str, icon: &str) -> Item {
     Item {
         id: id.into(),
@@ -360,14 +375,17 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
         Target::Toolbar => crate::toolbar_custom::toolbar_items(app),
         Target::Workspace => {
             let rendering = crate::render_workspace::active(app);
+            let manufacturing = crate::manufacture_workspace::active(app);
+            let free = app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none() && !app.file_load.busy();
             let mut v = vec![
-                act("ui.workspace.design", "Design", "ws_design").with(json!({"workspace":"design"})).key(if rendering { "" } else { "current" }),
-                act("ui.workspace.render", "Render", "ws_render")
-                    .with(json!({"workspace":"render"}))
-                    .key(if rendering { "current" } else { "" })
-                    .on(app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none() && !app.file_load.busy()),
+                act("ui.workspace.design", "Design", "ws_design").with(json!({"workspace":"design"})).key(if rendering || manufacturing { "" } else { "current" }),
+                act("ui.workspace.render", "Render", "ws_render").with(json!({"workspace":"render"})).key(if rendering { "current" } else { "" }).on(free),
+                act("ui.workspace.manufacture", "Manufacture", "ws_manufacture")
+                    .with(json!({"workspace":"manufacture"}))
+                    .key(if manufacturing { "current" } else { "" })
+                    .on(free),
             ];
-            for (w, icon) in [("Animation", "ws_animate"), ("Simulation", ""), ("Manufacture", ""), ("Drawing", "ws_drawing")] {
+            for (w, icon) in [("Animation", "ws_animate"), ("Simulation", ""), ("Drawing", "ws_drawing")] {
                 v.push(act("ui.workspace", w, icon).key("coming later").on(false));
             }
             v
@@ -1168,9 +1186,9 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         "ui.toolbarPin" | "ui.toolbarRemove" | "ui.toolbarReset" | "ui.toolbarCustomize" | "ui.shortcutPin" => {
             crate::toolbar_custom::run(app, &item.id, &p)
         }
-        "ui.workspace" | "ui.workspace.design" | "ui.workspace.render" => {
+        "ui.workspace" | "ui.workspace.design" | "ui.workspace.render" | "ui.workspace.manufacture" => {
             if let Some(workspace) = p.get("workspace").and_then(Value::as_str)
-                && let Err(e) = crate::render_workspace::enter(app, workspace == "render")
+                && let Err(e) = enter_workspace(app, workspace)
             {
                 app.set_status(e, true);
             }
@@ -2039,14 +2057,14 @@ mod workspace_menu_tests {
         h.call("ui.resize", json!({"width":1200,"height":1000}));
         h.step(&json!({"click":{"handle":"ribbon:workspace"}})).unwrap();
         let opener = rect_of("ribbon:workspace").unwrap();
-        let rows: Vec<_> = ["design", "render", "animation", "simulation", "manufacture", "drawing"]
+        let rows: Vec<_> = ["design", "render", "manufacture", "animation", "simulation", "drawing"]
             .iter()
             .map(|slug| rect_of(&format!("workspace:menu:{slug}")).unwrap())
             .collect();
         assert!(rows.windows(2).all(|pair| pair[0].bottom() <= pair[1].top()));
         assert!(rows[0].top() > opener.bottom());
         assert_eq!(rows[0].width(), 450.0);
-        assert!(items(&h.app, &Target::Workspace).iter().skip(2).all(|item| !item.enabled));
+        assert!(items(&h.app, &Target::Workspace).iter().skip(3).all(|item| !item.enabled));
         h.step(&json!({"click":{"handle":"workspace:menu:animation"}})).unwrap();
         assert!(!crate::render_workspace::active(&h.app));
         assert!(h.app.viewport.context_menu.is_some());
@@ -2062,5 +2080,55 @@ mod workspace_menu_tests {
         h.step(&json!({"click":{"handle":"workspace:menu:render"}})).unwrap();
         assert!(!crate::render_workspace::active(&h.app));
         assert!(h.app.viewport.context_menu.is_some());
+    }
+}
+
+#[cfg(test)]
+mod manufacture_tests {
+    use super::*;
+    use crate::scenario::{Harness, rect_of};
+
+    #[test]
+    fn manufacture_workspace_shows_the_cam_tab_and_leaves_with_the_simulation() {
+        let mut h = Harness::new();
+        h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 10, "body_name": "Block"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click":{"handle":"ribbon:workspace"}})).unwrap();
+        let item = items(&h.app, &Target::Workspace).into_iter().find(|i| i.id == "ui.workspace.manufacture").unwrap();
+        assert!(item.enabled);
+        assert!(rect_of("workspace:menu:manufacture").is_some());
+        h.step(&json!({"click":{"handle":"workspace:menu:manufacture"}})).unwrap();
+        assert!(crate::manufacture_workspace::active(&h.app));
+        assert_eq!(crate::workspace::visible_tabs(&h.app), vec!["MANUFACTURE"]);
+        for panel in ["SETUP", "OPERATIONS", "TOOLPATHS", "INSPECT"] {
+            assert!(crate::workspace::panels("MANUFACTURE").contains(&panel));
+        }
+        // The CAM commands sit on that tab and nowhere in the design tabs.
+        for id in ["cam.tool.add", "cam.setup.create", "cam.operation.add", "cam.generate", "cam.simulate.show", "cam.post", "cam.inspect"] {
+            let spec = solidcraft_engine::find_command(id).unwrap();
+            assert_eq!(crate::workspace::destination(spec).map(|(t, _)| t), Some("MANUFACTURE"), "{id}");
+        }
+        // A tool button opens the command box filled in rather than running with nothing.
+        h.app.start("cam.tool.add");
+        assert!(h.app.ui.palette_open);
+        assert!(h.app.sbox.text.starts_with("cam.tool.add {"));
+        h.app.ui.palette_open = false;
+        // A simulation shown by a script marks the workspace current; leaving ends it.
+        let tool = h.app.run("cam.tool.add", json!({"name": "6 mm flat", "kind": "flat", "diameter": 6})).unwrap()["id"].clone();
+        let setup = h.app.run("cam.setup.create", json!({})).unwrap()["id"].clone();
+        h.app.run("cam.operation.add", json!({"setup": setup, "tool": tool, "type": "face", "stepover": 4})).unwrap();
+        h.app.run("cam.generate", json!({})).unwrap();
+        h.app.run("cam.simulate.show", json!({"progress": 0.5})).unwrap();
+        assert!(h.app.session.cam.preview.is_some());
+        h.frames(2);
+        h.step(&json!({"click":{"handle":"ribbon:workspace"}})).unwrap();
+        h.step(&json!({"click":{"handle":"workspace:menu:design"}})).unwrap();
+        assert!(!crate::manufacture_workspace::active(&h.app));
+        assert!(h.app.session.cam.preview.is_none());
+        assert_eq!(h.app.ui.tab, "MODEL");
+        // Shown again from the design tabs, the preview brings the workspace with it.
+        h.app.run("cam.simulate.show", json!({"progress": 0.25})).unwrap();
+        h.frames(2);
+        assert!(crate::manufacture_workspace::active(&h.app));
     }
 }

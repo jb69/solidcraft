@@ -35,7 +35,7 @@ pub struct Generated {
     /// The operation frame relative to the WCS.
     pub frame: Frame,
     pub setup: u64,
-    /// The session revision the toolpath was generated at (a later revision may be stale).
+    /// The session's geometry revision the toolpath was generated at (a later one may be stale).
     pub revision: u64,
 }
 
@@ -79,30 +79,30 @@ pub struct CamPreview {
 }
 
 pub static COMMANDS: &[CommandSpec] = &[
-    CommandSpec::new("cam.tool.add", "Add Tool", tool_add)
+    CommandSpec::new("cam.tool.add", "Add Tool", tool_add).at("MANUFACTURE", "SETUP")
         .icon("cam")
         .params("name; kind: flat | ball | bull | chamfer | drill | spot | tapered_ball; diameter (mm); corner_radius? (bull); tip_angle_deg? (chamfer, drill, spot; default 90 / 118); tip_radius? and taper_angle_deg? (tapered_ball); number? (T word); flute_length?, overall_length?, shank_diameter?, holder_diameter?, flutes?; feeds?: {spindle_rpm, cutting, plunge, ramp, lead_in, lead_out, retract, clockwise, coolant: flood | mist | air | through_tool | off}: adds a tool to the design's library. Returns the tool with its id"),
     CommandSpec::new("cam.tool.set", "Edit Tool", tool_set).icon("cam").params("tool: id; any cam.tool.add field: changes a tool. Operations using it need cam.generate again"),
     CommandSpec::new("cam.tool.remove", "Remove Tool", tool_remove).icon("cam").params("tool: id: removes an unused tool"),
     CommandSpec::new("cam.tool.list", "Tools", tool_list).icon("cam").params("lists the tool library").noundo(),
-    CommandSpec::new("cam.setup.create", "Create Setup", setup_create)
+    CommandSpec::new("cam.setup.create", "Create Setup", setup_create).at("MANUFACTURE", "SETUP")
         .icon("cam")
         .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} (default a box 1 mm around the model, flush at the bottom); machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc or a machine object; program?: name for the post. Returns the setup with its id and the resolved stock"),
     CommandSpec::new("cam.setup.set", "Edit Setup", setup_set).icon("cam").params("setup: id; any cam.setup.create field: changes a setup"),
     CommandSpec::new("cam.setup.remove", "Remove Setup", setup_remove).icon("cam").params("setup: id: removes a setup and its operations"),
     CommandSpec::new("cam.setup.list", "Setups", setup_list).icon("cam").params("lists the setups with their operations").noundo(),
-    CommandSpec::new("cam.machine.set", "Set Machine", machine_set)
+    CommandSpec::new("cam.machine.set", "Set Machine", machine_set).at("MANUFACTURE", "SETUP")
         .icon("cam")
         .params("setup: id; machine: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc or a full machine object; tcp?: bool (the control has tool-centre-point control); rapid_feed?; linearisation_tolerance?; max_rotary_step_deg?; limits?: {A: [min,max], C: [min,max]}: sets the setup's machine"),
     CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists the machine presets").noundo(),
-    CommandSpec::new("cam.operation.add", "Add Operation", operation_add)
+    CommandSpec::new("cam.operation.add", "Add Operation", operation_add).at("MANUFACTURE", "OPERATIONS")
         .icon("cam")
         .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
     CommandSpec::new("cam.operation.set", "Edit Operation", operation_set).icon("cam").params("operation: id; any cam.operation.add field (type included): changes an operation; cam.generate again afterwards"),
     CommandSpec::new("cam.operation.remove", "Remove Operation", operation_remove).icon("cam").params("operation: id"),
     CommandSpec::new("cam.operation.list", "Operations", operation_list).icon("cam").params("setup?: id: the operations with their status").noundo(),
-    CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
-    CommandSpec::new("cam.generate", "Generate Toolpaths", generate)
+    CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "OPERATIONS").icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
+    CommandSpec::new("cam.generate", "Generate Toolpaths", generate).at("MANUFACTURE", "TOOLPATHS")
         .icon("cam")
         .params("setup?: id (default every setup); operation?: id (just that one): computes the toolpaths of the enabled operations in order, simulating the stock as it goes for rest machining. Returns each operation's notice (status, values such as time_s and cutting_length_mm, issues with codes such as no_toolpath, tool_too_large, tool_too_short, below_bottom, tilt_limit) and the setup totals")
         .noundo(),
@@ -110,22 +110,22 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("cam")
         .params("operation: id; offset? (0); limit? (2000 moves); coordinates?: wcs | design (default wcs): the generated moves as [kind, x, y, z, feed] with [ax, ay, az] appended when the tool tilts, plus bounds and stats")
         .noundo(),
-    CommandSpec::new("cam.simulate", "Simulate", simulate)
+    CommandSpec::new("cam.simulate", "Simulate", simulate).at("MANUFACTURE", "TOOLPATHS")
         .icon("cam")
-        .params("setup: id; tolerance? (0.05): sweeps the generated toolpaths through a Z-map of the stock: material removed, rest material above the model, gouges, rapids through stock, shank, holder and fixture collisions, per operation and in total")
+        .params("setup?: id (default the only setup); tolerance? (0.05): sweeps the generated toolpaths through a Z-map of the stock: material removed, rest material above the model, gouges, rapids through stock, shank, holder and fixture collisions, per operation and in total")
         .noundo(),
-    CommandSpec::new("cam.post", "Post Process", post)
+    CommandSpec::new("cam.post", "Post Process", post).at("MANUFACTURE", "TOOLPATHS")
         .icon("export")
-        .params("setup: id; post?: generic | grbl | fiveaxis (default by the machine's axes); path?: write the G-code here (.nc); program?: name; line_numbers?: increment; canned_cycles?: bool: writes the setup's program through the machine's kinematics. Returns the G-code (when under 2 MB), line count and notice")
+        .params("setup?: id (default the only setup); post?: generic | grbl | fiveaxis (default by the machine's axes); path?: write the G-code here (.nc); program?: name; line_numbers?: increment; canned_cycles?: bool: writes the setup's program through the machine's kinematics. Returns the G-code (when under 2 MB), line count and notice")
         .noundo(),
-    CommandSpec::new("cam.simulate.show", "Show Simulation", simulate_show)
+    CommandSpec::new("cam.simulate.show", "Show Simulation", simulate_show).at("MANUFACTURE", "TOOLPATHS")
         .icon("play")
-        .params("setup: id; progress?: 0..1 of the program's time | time_s? | operation?: id with move?: index | step?: moves to advance from where the simulation stands; cell? (mm, default by the stock size); show_model?: bool (default false: the stock stands in for the bodies): sweeps the stock to that moment and shows it in the viewport with the tool where it is and the path so far. Returns where it stands (progress, time_s, operation, move, tip, axis) and the stock volume. cam.simulate.hide ends it")
+        .params("setup?: id (default the only setup); progress?: 0..1 of the program's time | time_s? | operation?: id with move?: index | step?: moves to advance from where the simulation stands; cell? (mm, default by the stock size); show_model?: bool (default false: the stock stands in for the bodies): sweeps the stock to that moment and shows it in the viewport with the tool where it is and the path so far. Returns where it stands (progress, time_s, operation, move, tip, axis) and the stock volume. cam.simulate.hide ends it")
         .noundo(),
     CommandSpec::new("cam.simulate.hide", "Hide Simulation", simulate_hide).icon("play").params("ends the simulation preview").noundo(),
     CommandSpec::new("cam.post.list", "Post Processors", post_list).icon("export").params("lists the post processors").noundo(),
-    CommandSpec::new("cam.notices", "CAM Notices", notices).icon("cam").params("setup?: id: every operation's notice from the last cam.generate, with stale: true when the design changed since").noundo(),
-    CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect).icon("cam").params("the manufacturing model in brief: tools, setups, operations, what is generated and what needs attention").noundo(),
+    CommandSpec::new("cam.notices", "CAM Notices", notices).at("MANUFACTURE", "INSPECT").icon("cam").params("setup?: id: every operation's notice from the last cam.generate, with stale: true when the design changed since").noundo(),
+    CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect).at("MANUFACTURE", "INSPECT").icon("cam").params("the manufacturing model in brief: tools, setups, operations, what is generated and what needs attention").noundo(),
 ];
 
 fn engine_err(cmd: &str, e: cam::CamError) -> EngineError {
@@ -137,6 +137,19 @@ fn engine_err(cmd: &str, e: cam::CamError) -> EngineError {
 
 fn id_param(p: &Value, k: &str, cmd: &str) -> Result<u64> {
     p.get(k).and_then(Value::as_u64).ok_or_else(|| bad(cmd, format!("`{k}` must be an id")))
+}
+
+/// The `setup` parameter, or the design's only setup when it has just one (the toolbar's
+/// buttons run without parameters).
+fn setup_param(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
+    if let Some(id) = p.get("setup").and_then(Value::as_u64) {
+        return Ok(id);
+    }
+    match s.doc.manufacture.setups.as_slice() {
+        [] => Err(bad(cmd, "no setup yet: cam.setup.create first")),
+        [only] => Ok(only.id),
+        many => Err(bad(cmd, format!("`setup` must be an id (there are {} setups: see cam.setup.list)", many.len()))),
+    }
 }
 
 fn merge_json(base: &mut Value, over: &Value, skip: &[&str]) {
@@ -690,7 +703,7 @@ fn operation_brief(s: &Session, st: &Setup, o: &Operation) -> Value {
         "axes": o.kind.axes(),
         "setup": st.id,
         "generated": made.is_some(),
-        "stale": made.is_some_and(|g| g.revision != s.revision),
+        "stale": made.is_some_and(|g| g.revision != s.geometry_revision),
         "status": made.map_or("not generated", |g| g.notice.status()),
     })
 }
@@ -705,7 +718,7 @@ fn operation_json(s: &Session, st: &Setup, o: &Operation, issues: &[Issue]) -> V
         n.issue(i.clone());
     }
     if let Some(g) = s.cam.operations.get(&o.id) {
-        v["generated"] = json!({"stale": g.revision != s.revision, "notice": g.notice.to_json()});
+        v["generated"] = json!({"stale": g.revision != s.geometry_revision, "notice": g.notice.to_json()});
     }
     v["notice"] = n.to_json();
     v
@@ -1228,7 +1241,7 @@ fn generate_one(
             .suggest(json!({"command": "cam.machine.set", "machine": if op.kind.axes() == 4 { "four_axis_a" } else { "trunnion_ac" }})),
         );
     }
-    Ok(Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup: st.id, revision: s.revision })
+    Ok(Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup: st.id, revision: s.geometry_revision })
 }
 
 fn generate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1293,7 +1306,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                         stats: ToolpathStats::default(),
                         frame: op.orientation.unwrap_or(Frame::IDENTITY),
                         setup: st.id,
-                        revision: s.revision,
+                        revision: s.geometry_revision,
                     }
                 }
             };
@@ -1321,7 +1334,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
         out_setups.push(json!({"id": st.id, "name": st.name, "operations": ops_out, "notice": setup_notice.to_json()}));
     }
     Ok(
-        json!({"setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": s.revision, "hint": "cam.notices lists every operation's report; cam.simulate checks the stock; cam.post writes the G-code"}),
+        json!({"setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": s.geometry_revision, "hint": "cam.notices lists every operation's report; cam.simulate checks the stock; cam.post writes the G-code"}),
     )
 }
 
@@ -1363,13 +1376,13 @@ fn toolpath(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "operation": id, "coordinates": if design { "design" } else { "wcs" }, "total": g.toolpath.len(), "offset": offset, "returned": moves.len(),
         "format": "[kind, x, y, z, feed_mm_min] plus [ax, ay, az] on every move when the toolpath tilts the tool",
-        "moves": moves, "bounds": bounds, "stats": g.stats, "cycles": g.toolpath.cycles.len(), "stale": g.revision != s.revision,
+        "moves": moves, "bounds": bounds, "stats": g.stats, "cycles": g.toolpath.cycles.len(), "stale": g.revision != s.geometry_revision,
     }))
 }
 
 fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.simulate";
-    let id = id_param(p, "setup", cmd)?;
+    let id = setup_param(s, p, cmd)?;
     let st = s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
     let tol = num(p, "tolerance").unwrap_or(0.05).clamp(0.005, 5.0);
     let meshes = setup_meshes(s, &st, tol, false)?;
@@ -1407,7 +1420,7 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
         total.checked_moves += rep.checked_moves;
         total.gouge_cells = total.gouge_cells.max(rep.gouge_cells);
         total.gouge_max_mm = total.gouge_max_mm.max(rep.gouge_max_mm);
-        ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "report": rep, "notice": rep.notice().to_json(), "stale": g.revision != s.revision}));
+        ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "report": rep, "notice": rep.notice().to_json(), "stale": g.revision != s.geometry_revision}));
     }
     // Final rest and gouges from the finished stock.
     let final_rep = cam::simulate::simulate(
@@ -1442,7 +1455,7 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn post(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.post";
-    let id = id_param(p, "setup", cmd)?;
+    let id = setup_param(s, p, cmd)?;
     let st = s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
     let default_post = if st.machine.axis_count() > 3 { "fiveaxis" } else { "generic" };
     let post_id = str_(p, "post").unwrap_or(default_post);
@@ -1513,7 +1526,7 @@ fn sim_program(s: &Session, st: &Setup) -> Result<(Vec<cam::simulate::SimOperati
 
 fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.simulate.show";
-    let id = id_param(p, "setup", cmd)?;
+    let id = setup_param(s, p, cmd)?;
     let st = s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
     let (ops, stamp, missing) = sim_program(s, &st)?;
     if ops.is_empty() {
@@ -1719,7 +1732,7 @@ fn notices(s: &mut Session, p: &Value) -> Result<Value> {
         for op in &st.operations {
             let v = match s.cam.operations.get(&op.id) {
                 Some(g) => {
-                    json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": g.notice.status(), "stale": g.revision != s.revision, "info": g.notice.info, "values": g.notice.values, "issues": g.notice.issues})
+                    json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": g.notice.status(), "stale": g.revision != s.geometry_revision, "info": g.notice.info, "values": g.notice.values, "issues": g.notice.issues})
                 }
                 None => {
                     json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": if op.enabled { "not generated" } else { "disabled" }})
@@ -1738,7 +1751,7 @@ fn inspect(s: &mut Session, _p: &Value) -> Result<Value> {
         for op in &st.operations {
             match s.cam.operations.get(&op.id) {
                 None if op.enabled => attention.push(json!({"operation": op.id, "name": op.name, "why": "not generated", "command": "cam.generate"})),
-                Some(g) if g.revision != s.revision => attention.push(json!({"operation": op.id, "name": op.name, "why": "the design changed since it was generated", "command": "cam.generate"})),
+                Some(g) if g.revision != s.geometry_revision => attention.push(json!({"operation": op.id, "name": op.name, "why": "the design changed since it was generated", "command": "cam.generate"})),
                 Some(g) if g.notice.status() != "ok" => attention.push(json!({"operation": op.id, "name": op.name, "why": g.notice.status(), "issues": g.notice.issues.iter().map(|i| i.code.clone()).collect::<Vec<_>>()})),
                 _ => {}
             }

@@ -261,14 +261,21 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
     match method {
         "ui.workspace" => {
             if let Some(workspace) = s("workspace") {
-                if !matches!(workspace, "design" | "render") {
-                    return err("workspace must be design or render");
+                if !matches!(workspace, "design" | "render" | "manufacture") {
+                    return err("workspace must be design, render or manufacture");
                 }
-                if let Err(e) = crate::render_workspace::enter(app, workspace == "render") {
+                if let Err(e) = crate::context_menu::enter_workspace(app, workspace) {
                     return err(e);
                 }
             }
-            ok(json!({"workspace":if crate::render_workspace::active(app) {"render"} else {"design"}}))
+            let current = if crate::render_workspace::active(app) {
+                "render"
+            } else if crate::manufacture_workspace::active(app) {
+                "manufacture"
+            } else {
+                "design"
+            };
+            ok(json!({"workspace": current}))
         }
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
@@ -371,6 +378,11 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
                 (Ok(mut u), Ok(v)) => {
                     if (u.tab == "RENDER") != crate::render_workspace::active(app)
                         && let Err(e) = crate::render_workspace::enter(app, u.tab == "RENDER")
+                    {
+                        return err(e);
+                    }
+                    if (u.tab == crate::manufacture_workspace::TAB) != crate::manufacture_workspace::active(app)
+                        && let Err(e) = crate::manufacture_workspace::enter(app, u.tab == crate::manufacture_workspace::TAB)
                     {
                         return err(e);
                     }

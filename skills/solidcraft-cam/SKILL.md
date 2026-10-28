@@ -42,6 +42,10 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   Kinds: `flat`, `ball`, `bull` (+ `corner_radius`), `chamfer`, `drill`, `spot`, `tapered_ball`.
 - **Setup**: `cam.setup.create {name, stock, machine?, wcs?}`. Relative stock is the default
   (1 mm around, flush at the bottom); set `z_pos` for a facing allowance.
+- **Both sides**: a second setup `cam.setup.create {name: Bottom, flip: x}` turns the part over
+  (origin at the new front-left top corner) and starts from what the first left
+  (`from_setup`, the default after the first setup); use `rest_machining: true` so it cuts only
+  material that is left. Generate everything with `cam.generate {}` so the top regenerates first.
 - **Operations** in cutting order, each with the right geometry source:
   - whole top: `face` (geometry `stock`), then `pocket3d` for roughing with `stock_to_leave_*`;
   - a pocket or boss: `pocket2d` / `adaptive2d` / `contour2d` on `faces` (a point on the

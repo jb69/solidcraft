@@ -274,7 +274,11 @@ fn pocket3d(
             // Drop loops that enclose only air in the rest stock: keep a loop when any of its
             // points has material within the tool radius.
             let r = tool.radius();
-            region.retain(|loop_| polyline::densify(loop_, surf.map.cell * 2.0).iter().any(|p| surf.has_material(ctx.rest, *p, r, *z)));
+            let has: Vec<bool> = region
+                .iter()
+                .map(|loop_| polyline::densify(loop_, surf.map.cell * 2.0).iter().any(|p| surf.has_material(ctx.rest, *p, r, *z)))
+                .collect();
+            region = keep_with_islands(&region, &has);
             region = polyline::normalize_set(&region);
         }
         if !region.is_empty() {
@@ -1051,4 +1055,40 @@ fn steep_shallow(
 /// The boundary bounds helper for tests.
 pub fn boundary_bounds(ctx: &Context) -> Result<Aabb2> {
     Ok(polyline::bounds_of(&ctx.boundary()?))
+}
+
+/// The loops of a level to cut, from which of them touch material (`has`): an outer loop and
+/// the islands inside it go together, kept while any of them touches material. Dropping an
+/// outer loop but keeping its islands would turn the islands (the part) into areas to clear.
+fn keep_with_islands(region: &[Poly], has: &[bool]) -> Vec<Poly> {
+    let outers: Vec<usize> = (0..region.len()).filter(|i| region.get(*i).is_some_and(|l| polyline::is_ccw(l))).collect();
+    let mut keep = vec![false; region.len()];
+    let mut owner = vec![None; region.len()];
+    for (i, l) in region.iter().enumerate() {
+        if polyline::is_ccw(l) {
+            keep[i] |= has.get(i).copied().unwrap_or(true);
+            continue;
+        }
+        // The smallest outer loop around this island.
+        let Some(at) = l.first() else { continue };
+        let o = outers.iter().copied().filter(|o| region.get(*o).is_some_and(|ol| polyline::contains(ol, *at))).min_by(|a, b| {
+            let area = |k: usize| region.get(k).map_or(0.0, |p| polyline::signed_area2(p).abs());
+            area(*a).total_cmp(&area(*b))
+        });
+        owner[i] = o;
+        if let Some(o) = o
+            && has.get(i).copied().unwrap_or(true)
+        {
+            keep[o] = true;
+        }
+    }
+    region
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| match owner.get(*i).copied().flatten() {
+            Some(o) => keep.get(o).copied().unwrap_or(false),
+            None => keep.get(*i).copied().unwrap_or(false),
+        })
+        .map(|(_, l)| l.clone())
+        .collect()
 }

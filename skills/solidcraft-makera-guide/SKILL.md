@@ -93,7 +93,13 @@ Carvera Air to 13 000 rev/min and 4 000 mm/min, tool changes by hand; Z1 150 W t
    every change is by hand, and the program pauses and asks for each tool.
 6. If clamps or a vise jaw sit near the toolpath, model them as bodies and list them as the
    setup's `fixtures`; the simulation then checks the tool against them.
-7. `cam.generate {}` and read every operation's notice before moving on.
+7. **Features on the bottom?** Add a second setup that turns the part over:
+   `cam.setup.create {"name":"Bottom","machine":"carvera","flip":"x"}`. It starts from what the
+   top left and its origin is the turned-over stock's front-left top corner. Tell them to flip
+   the part about the X axis (front to back), clamp it again, and probe that corner. Give its
+   roughing `rest_machining: true` so it cuts only what is left, and hold the part by what the
+   top machined (or soft jaws), not by a face the bottom will cut away.
+8. `cam.generate {}` and read every operation's notice before moving on.
 
 ## 5. Explain what the notices say
 Turn each issue into one plain sentence and fix it, or ask when it is their choice.
@@ -129,7 +135,8 @@ Turn each issue into one plain sentence and fix it, or ask when it is their choi
    - Fix the stock as planned; keep clamps clear of the outline the simulation showed.
    - Load the `.cnc` in Makera's controller. Put the tools the program lists in the rack slots
      with their numbers (Carvera), or have them ready to change by hand (Air, Z1).
-   - Probe the work origin at the corner and top you set in step 4, item 2.
+   - Probe the work origin at the corner and top you set in step 4, item 2 (for the bottom
+     setup, the corner of the turned-over part).
    - Turn on air (and dust collection); the program also asks for air.
    - For a first run, use scrap or machinable wax, or run with the work origin raised 10 mm
      above the stock (an air cut) to watch the motion safely.

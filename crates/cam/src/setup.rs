@@ -47,6 +47,12 @@ pub enum Stock {
     },
     /// A cylinder about a WCS axis: `radius`, from `start` to `end` along the axis.
     FixedCylinder { axis: Axis, radius: f64, start: f64, end: f64 },
+    /// What an earlier setup leaves: its stock after its operations, seen in this setup's WCS
+    /// (a part turned over to machine its other side). `setup` 0 is the setup before this one.
+    FromSetup {
+        #[serde(default)]
+        setup: u64,
+    },
 }
 
 impl Default for Stock {
@@ -234,6 +240,7 @@ impl Stock {
                 }
                 Ok(StockShape::Cylinder { axis: *axis, radius: r + radial, start: lo - start, end: hi + end })
             }
+            Stock::FromSetup { .. } => Err(CamError::Param("stock from an earlier setup is worked out from that setup".into())),
             Stock::FixedCylinder { axis, radius, start, end } => {
                 crate::positive("stock radius", *radius)?;
                 if !(start.is_finite() && end.is_finite()) || start >= end {

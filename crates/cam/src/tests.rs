@@ -949,3 +949,52 @@ fn kinds_list_their_defaults_and_fixed_choices() {
     let sources = variants::<crate::setup::Geometry>(serde_json::json!({"source": "\u{1}"}));
     assert!(sources.contains(&"silhouette".to_string()) && sources.contains(&"holes".to_string()), "{sources:?}");
 }
+
+#[test]
+fn stock_turned_over_keeps_the_first_sides_cuts() {
+    use crate::simulate::StockMap;
+    // A 40 × 30 × 10 block with a 10 mm square pocket 5 mm deep in its top.
+    let shape = StockShape::Box { min: Vec3::new(0.0, 0.0, 0.0), max: Vec3::new(40.0, 30.0, 10.0) };
+    let mut top = StockMap::new(&shape, 0.5).unwrap();
+    let flat = Tool::new(1, "flat", ToolKind::FlatEnd, 2.0);
+    for k in 0..=10 {
+        let y = 10.0 + k as f64;
+        top.cut(&flat, Vec3::new(16.0, y, 5.0), Vec3::new(24.0, y, 5.0));
+    }
+    let before = top.volume();
+    assert!((before - (12000.0 - 10.0 * 10.0 * 5.0)).abs() < 150.0, "{before}");
+    // Turned over about x: the old bottom is the new top, the origin at its front-left corner.
+    let flipped =
+        Frame { origin: Vec3::new(0.0, 30.0, 0.0), x: Vec3::new(1.0, 0.0, 0.0), y: Vec3::new(0.0, -1.0, 0.0), z: Vec3::new(0.0, 0.0, -1.0) };
+    let (under, exact) = top.transfer(&Frame::IDENTITY, &flipped).unwrap();
+    assert!(exact, "a part turned over keeps its columns");
+    assert!((under.volume() - before).abs() < before * 0.01, "{} vs {before}", under.volume());
+    let b = under.material_bounds();
+    assert!(close(b.max.z, 0.0, 1e-9) && close(b.min.z, -10.0, 1e-9), "{b:?}");
+    // Over the pocket the material now ends 5 mm down; elsewhere it is 10 mm thick.
+    let cell = |x: f64, y: f64| {
+        let m = &under.map;
+        let (i, j) = (((x - m.origin.x) / m.cell).round() as usize, ((y - m.origin.y) / m.cell).round() as usize);
+        (m.get(i, j).unwrap(), under.floor_at(i, j))
+    };
+    let (t, f) = cell(20.0, 15.0);
+    assert!(close(t, 0.0, 1e-9) && close(f, -5.0, 1e-9), "pocket column {t} {f}");
+    let (t, f) = cell(5.0, 5.0);
+    assert!(close(t, 0.0, 1e-9) && close(f, -10.0, 1e-9), "solid column {t} {f}");
+    // Cutting 6 mm from the new top breaks through into the pocket: that column is empty.
+    let mut cut = under.clone();
+    cut.cut(&flat, Vec3::new(20.0, 15.0, -6.0), Vec3::new(20.0, 15.0, -6.0));
+    let m = &cut.map;
+    let (i, j) = (((20.0 - m.origin.x) / m.cell).round() as usize, ((15.0 - m.origin.y) / m.cell).round() as usize);
+    assert!(m.get(i, j).unwrap() <= cut.floor_at(i, j) + 1e-9, "cut through");
+    // A quarter turn is not a column map: the material's box stands in, and says so.
+    let side = Frame { origin: Vec3::new(0.0, 0.0, 0.0), x: Vec3::new(1.0, 0.0, 0.0), y: Vec3::new(0.0, 0.0, 1.0), z: Vec3::new(0.0, -1.0, 0.0) };
+    let (boxed, exact) = top.transfer(&Frame::IDENTITY, &side).unwrap();
+    assert!(!exact);
+    assert!(boxed.volume() > before, "the box holds at least the material");
+    // The mesh of the turned-over stock has the pocket's floor as a step underneath.
+    let mesh = crate::simulate::stock_mesh(&under, 1);
+    assert!(mesh.positions.iter().any(|p| close(p.z, -5.0, 1e-9)), "pocket floor drawn");
+    // …and shaded as a step: the floor's normals tilt at the pocket's edge.
+    assert!(mesh.normals.iter().zip(&mesh.positions).any(|(n, p)| p.z < -4.0 && n.z < 0.0 && n.z > -0.99), "the step is shaded");
+}

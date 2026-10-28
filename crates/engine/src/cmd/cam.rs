@@ -260,8 +260,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.tool.list", "Tools", tool_list).icon("cam").params("lists the tool library").noundo(),
     CommandSpec::new("cam.setup.create", "Create Setup", setup_create).at("MANUFACTURE", "SETUP")
         .icon("cam")
-        .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} (default a box 1 mm around the model, flush at the bottom); machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc | carvera | carvera_4axis | carvera_air | carvera_air_4axis | z1 | z1_4axis or a machine object (cam.machine.list); program?: name for the post. Returns the setup with its id and the resolved stock"),
-    CommandSpec::new("cam.setup.set", "Edit Setup", setup_set).icon("cam").params("setup: id; any cam.setup.create field: changes a setup"),
+        .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} | {mode: from_setup, setup?: id (default the setup before)}: what the earlier setup's operations left, for rest machining the other side (default a box 1 mm around the model, flush at the bottom, for the first setup; from_setup for every later one); flip?: x | y: the WCS of the setup before turned over about its x or y axis, the origin at the turned-over stock's front-left top corner (machining the bottom: every operation is measured from this origin); machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc | carvera | carvera_4axis | carvera_air | carvera_air_4axis | z1 | z1_4axis or a machine object (cam.machine.list); program?: name for the post. Returns the setup with its id and the resolved stock"),
+    CommandSpec::new("cam.setup.set", "Edit Setup", setup_set).icon("cam").params("setup: id; any cam.setup.create field (flip: x | y turns the setup's WCS over, the origin at the stock's new front-left top corner): changes a setup; its toolpaths, and those of setups that carry its stock over, show as stale"),
     CommandSpec::new("cam.setup.remove", "Remove Setup", setup_remove).icon("cam").params("setup: id: removes a setup and its operations"),
     CommandSpec::new("cam.setup.list", "Setups", setup_list).icon("cam").params("lists the setups with their operations").noundo(),
     CommandSpec::new("cam.machine.set", "Set Machine", machine_set).at("MANUFACTURE", "SETUP")
@@ -404,11 +404,13 @@ fn tool_kit(s: &mut Session, p: &Value) -> Result<Value> {
     let machine = match p.get("machine") {
         Some(v) if !v.is_null() => machine_param(v, cmd, None)?,
         _ => {
-            let setup = p.get("setup").and_then(Value::as_u64).and_then(|id| s.doc.manufacture.setup(id)).or_else(|| s.doc.manufacture.setups.first());
+            let setup =
+                p.get("setup").and_then(Value::as_u64).and_then(|id| s.doc.manufacture.setup(id)).or_else(|| s.doc.manufacture.setups.first());
             setup.map(|st| st.machine.clone()).unwrap_or_else(cam::machine::Machine::makera_carvera)
         }
     };
-    let tools = cam::kits::kit(kit_id, &machine, material).ok_or_else(|| bad(cmd, format!("unknown kit `{kit_id}`: {}", cam::kits::KITS.join(" | "))))?;
+    let tools =
+        cam::kits::kit(kit_id, &machine, material).ok_or_else(|| bad(cmd, format!("unknown kit `{kit_id}`: {}", cam::kits::KITS.join(" | "))))?;
     if s.doc.manufacture.tools.tools.len() + tools.len() > 1000 {
         return Err(bad(cmd, "a design holds at most 1000 tools"));
     }
@@ -528,16 +530,22 @@ fn stock_param(v: Option<&Value>, cmd: &str, current: Stock) -> Result<Stock> {
             }
             merge_json(&mut base, v, &[]);
             serde_json::from_value(base)
-                .map_err(|e| bad(cmd, format!("stock: {e} (modes: relative_box, fixed_box, relative_cylinder, fixed_cylinder)")))
+                .map_err(|e| bad(cmd, format!("stock: {e} (modes: relative_box, fixed_box, relative_cylinder, fixed_cylinder, from_setup)")))
         }
     }
 }
 
 fn setup_json(s: &Session, st: &Setup) -> Value {
     let bounds = setup_model_bounds(s, st);
-    let stock = bounds.as_ref().and_then(|b| st.stock.resolve(b).ok());
+    let stock = stock_shape(s, st).ok();
     let ops: Vec<Value> = st.operations.iter().map(|o| operation_brief(s, st, o)).collect();
+    let from = match previous_setup(s, st) {
+        Ok(Some(prev)) => json!({"setup": prev.id, "name": prev.name}),
+        Ok(None) => Value::Null,
+        Err(e) => json!({"error": e.to_string()}),
+    };
     json!({
+        "stock_from": from,
         "id": st.id,
         "name": st.name,
         "bodies": st.bodies,
@@ -569,13 +577,18 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, format!("no body `{b}`")));
         }
     }
-    let wcs = frame_param(p, "wcs", cmd, Frame::IDENTITY)?;
-    let stock = stock_param(p.get("stock"), cmd, Stock::default())?;
+    let flip = str_(p, "flip").map(str::to_string);
+    let before = s.doc.manufacture.setups.last();
+    // A later setup is measured from the one before (turned over with `flip`), and carries its
+    // stock over: it starts from what the setups before it left.
+    let wcs = frame_param(p, "wcs", cmd, before.filter(|_| flip.is_some()).map_or(Frame::IDENTITY, |b| b.wcs))?;
+    let default_stock = if before.is_some() { Stock::FromSetup { setup: 0 } } else { Stock::default() };
+    let stock = stock_param(p.get("stock"), cmd, default_stock)?;
     let machine = match p.get("machine") {
         Some(v) => machine_param(v, cmd, None)?,
         None => cam::machine::Machine::three_axis(),
     };
-    let setup = Setup {
+    let mut setup = Setup {
         id,
         name,
         bodies,
@@ -586,6 +599,10 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         operations: Vec::new(),
         program: str_(p, "program").unwrap_or_default().to_string(),
     };
+    previous_setup(s, &setup).map_err(|e| bad(cmd, e.to_string()))?;
+    if let Some(axis) = flip {
+        setup.wcs = flipped_wcs(s, &setup, &axis, cmd)?;
+    }
     let out = setup_json(s, &setup);
     s.doc_mut().manufacture.setups.push(setup);
     Ok(out)
@@ -617,20 +634,65 @@ fn setup_set(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(prog) = str_(p, "program") {
         st.program = prog.to_string();
     }
+    previous_setup(s, &st).map_err(|e| bad(cmd, e.to_string()))?;
+    if let Some(axis) = str_(p, "flip") {
+        st.wcs = flipped_wcs(s, &st, axis, cmd)?;
+    }
     let out = setup_json(s, &st);
     if let Some(slot) = s.doc_mut().manufacture.setup_mut(id) {
         *slot = st;
     }
-    s.cam.operations.retain(|_, g| g.setup != id);
+    // The toolpaths stay until the next generate: the setup's signature changed, so they (and
+    // those of setups that carry its stock over) show as stale.
     Ok(out)
+}
+
+/// `wcs` turned over about its own `x` or `y` axis, with the origin at the turned-over stock's
+/// front-left corner on its top (the corner a Makera probes): every operation of the setup is
+/// measured from there.
+fn flipped_wcs(s: &Session, st: &Setup, axis: &str, cmd: &str) -> Result<Frame> {
+    let w = st.wcs;
+    let (x, y) = match axis.trim().to_ascii_lowercase().as_str() {
+        "x" => (w.x, w.y * -1.0),
+        "y" => (w.x * -1.0, w.y),
+        other => return Err(bad(cmd, format!("`flip` turns the setup over about `x` or `y`, not `{other}`"))),
+    };
+    let z = w.z * -1.0;
+    // Stock of the setup's own is resolved in its WCS, so work out the corner in the turned-over
+    // frame itself (twice: the second pass sees the stock as that frame resolves it).
+    let mut frame = Frame { origin: w.origin, x, y, z };
+    for _ in 0..2 {
+        let probe = Setup { wcs: frame, ..st.clone() };
+        let b = stock_shape(s, &probe).map_err(|e| bad(cmd, e.to_string()))?.bounds();
+        let mut local = Aabb3::default();
+        for cx in [b.min.x, b.max.x] {
+            for cy in [b.min.y, b.max.y] {
+                for cz in [b.min.z, b.max.z] {
+                    local.add(Vec3::new(cx, cy, cz));
+                }
+            }
+        }
+        frame.origin = frame.to_world(Vec3::new(local.min.x, local.min.y, local.max.z));
+    }
+    Ok(frame)
 }
 
 fn setup_remove(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.setup.remove";
     let id = id_param(p, "setup", cmd)?;
+    if let Some(user) = s.doc.manufacture.setups.iter().find(|x| x.stock == Stock::FromSetup { setup: id }) {
+        return Err(bad(cmd, format!("`{}` takes its stock from setup {id}; give it its own stock first", user.name)));
+    }
     let m = &mut s.doc_mut().manufacture;
     let i = m.setups.iter().position(|x| x.id == id).ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
     let removed = m.setups.remove(i);
+    // The first setup gone, the one after it that carried its stock over takes its stock.
+    if i == 0
+        && let Some(next) = m.setups.first_mut()
+        && next.stock == (Stock::FromSetup { setup: 0 })
+    {
+        next.stock = removed.stock.clone();
+    }
     s.cam.operations.retain(|_, g| g.setup != id);
     Ok(json!({"removed": id, "operations_removed": removed.operations.len()}))
 }
@@ -674,7 +736,8 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn machine_list(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let presets: Vec<(&str, cam::machine::Machine)> = cam::machine::Machine::PRESETS.iter().filter_map(|id| cam::machine::Machine::preset(id).map(|m| (*id, m))).collect();
+    let presets: Vec<(&str, cam::machine::Machine)> =
+        cam::machine::Machine::PRESETS.iter().filter_map(|id| cam::machine::Machine::preset(id).map(|m| (*id, m))).collect();
     Ok(
         json!({"machines": presets.iter().map(|(id, m)| json!({"preset": id, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "laser": m.laser, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS}),
     )
@@ -814,7 +877,10 @@ fn operation_from(p: &Value, cmd: &str, base: Value, setup: &Setup, tools: &cam:
     let tool = tools.get(op.tool).ok_or_else(|| bad(cmd, format!("no tool {} (cam.tool.list)", op.tool)))?;
     let laser_op = matches!(op.kind, OpKind::LaserCut { .. } | OpKind::LaserEngrave { .. });
     if laser_op && !tool.is_laser() {
-        return Err(bad(cmd, format!("a {} operation needs a laser tool (kind: laser); T{} {} is a cutter", op.kind.type_name(), tool.number, tool.name)));
+        return Err(bad(
+            cmd,
+            format!("a {} operation needs a laser tool (kind: laser); T{} {} is a cutter", op.kind.type_name(), tool.number, tool.name),
+        ));
     }
     if !laser_op && tool.is_laser() {
         return Err(bad(cmd, format!("a {} operation needs a cutter; T{} {} is a laser", op.kind.type_name(), tool.number, tool.name)));
@@ -1011,9 +1077,20 @@ pub fn signatures(s: &Session, st: &Setup) -> Vec<(u64, u64)> {
 /// The setup's part of the chain: the model's geometry, the bodies, fixtures, WCS, stock and
 /// machine.
 fn setup_signature(s: &Session, st: &Setup) -> u64 {
+    setup_signature_with(s, st, &BTreeMap::new())
+}
+
+/// [`setup_signature`], taking the chain end of earlier setups from `ends` where a generation
+/// in progress has already worked it out.
+fn setup_signature_with(s: &Session, st: &Setup, ends: &BTreeMap<u64, (u64, u64)>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.geometry_revision.hash(&mut h);
+    // Stock carried over from an earlier setup: that setup's whole chain is part of this one.
+    if let Ok(Some(prev)) = previous_setup(s, st) {
+        let end = ends.get(&prev.id).copied().unwrap_or_else(|| chain_end(s, prev));
+        end.hash(&mut h);
+    }
     for part in [
         serde_json::to_string(&st.bodies),
         serde_json::to_string(&st.fixtures),
@@ -1024,6 +1101,138 @@ fn setup_signature(s: &Session, st: &Setup) -> u64 {
         part.unwrap_or_default().hash(&mut h);
     }
     h.finish()
+}
+
+/// The end of a setup's chain: the last operation's signature and its toolpath's generation.
+fn chain_end(s: &Session, st: &Setup) -> (u64, u64) {
+    let sig = signatures(s, st).last().map_or_else(|| setup_signature(s, st), |x| x.1);
+    let generation = st.operations.last().and_then(|o| s.cam.operations.get(&o.id)).map_or(0, |g| g.generation);
+    (sig, generation)
+}
+
+/// The setup a setup's stock comes from (`Stock::FromSetup`): the one named, or the one before
+/// it. It must come earlier in the sequence.
+fn previous_setup<'a>(s: &'a Session, st: &Setup) -> Result<Option<&'a Setup>> {
+    let Stock::FromSetup { setup } = st.stock else { return Ok(None) };
+    let list = &s.doc.manufacture.setups;
+    let here = list.iter().position(|x| x.id == st.id).unwrap_or(list.len());
+    let found = if setup == 0 { here.checked_sub(1).and_then(|i| list.get(i)) } else { list.iter().take(here).find(|x| x.id == setup) };
+    match found {
+        Some(p) => Ok(Some(p)),
+        None if setup == 0 => Err(EngineError::Other(format!("setup `{}` takes its stock from the setup before it, but it is the first", st.name))),
+        None => Err(EngineError::Other(format!("setup `{}` takes its stock from setup {setup}, which is not an earlier setup", st.name))),
+    }
+}
+
+/// A setup's stock shape in its WCS: resolved around the model, or, for stock carried over,
+/// the earlier setup's stock seen from this setup's WCS.
+fn stock_shape(s: &Session, st: &Setup) -> Result<cam::setup::StockShape> {
+    stock_shape_at(s, st, 0)
+}
+
+fn stock_shape_at(s: &Session, st: &Setup, depth: usize) -> Result<cam::setup::StockShape> {
+    if depth > 32 {
+        return Err(EngineError::Other("setups take their stock from each other in a loop".into()));
+    }
+    match previous_setup(s, st)? {
+        None => {
+            let bounds = setup_model_bounds(s, st).unwrap_or_default();
+            st.stock.resolve(&bounds).map_err(|e| EngineError::Other(e.to_string()))
+        }
+        Some(prev) => {
+            let b = stock_shape_at(s, prev, depth + 1)?.bounds();
+            let mut out = Aabb3::default();
+            for x in [b.min.x, b.max.x] {
+                for y in [b.min.y, b.max.y] {
+                    for z in [b.min.z, b.max.z] {
+                        out.add(st.wcs.to_local(prev.wcs.to_world(Vec3::new(x, y, z))));
+                    }
+                }
+            }
+            Ok(cam::setup::StockShape::Box { min: out.min, max: out.max })
+        }
+    }
+}
+
+/// Sweeps a setup's enabled, generated three-axis toolpaths through `map` (its stock); the
+/// issues say what was missing or stale.
+fn sweep_setup(s: &Session, st: &Setup, map: &mut cam::simulate::StockMap, issues: &mut Vec<Issue>) {
+    let sigs = signatures(s, st);
+    let (mut missing, mut stale) = (0usize, 0usize);
+    for op in st.operations.iter().filter(|o| o.enabled && o.orientation.is_none()) {
+        let Some(g) = s.cam.operations.get(&op.id) else {
+            missing += 1;
+            continue;
+        };
+        if sigs.iter().find(|x| x.0 == op.id).is_none_or(|x| x.1 != g.signature) {
+            stale += 1;
+        }
+        if let Some(tool) = s.doc.manufacture.tools.get(op.tool) {
+            let _ = cam::simulate::simulate(map, tool, &g.toolpath, None, None, None, None, 0.05);
+        }
+    }
+    if missing > 0 {
+        issues.push(
+            Issue::warning(
+                "previous_setup_not_generated",
+                format!("{missing} operation(s) of `{}` have no toolpath, so the stock carried over does not show their cuts", st.name),
+            )
+            .suggest(json!({"command": "cam.generate", "setup": st.id})),
+        );
+    }
+    if stale > 0 {
+        issues.push(
+            Issue::warning(
+                "previous_setup_stale",
+                format!("{stale} operation(s) of `{}` are stale; the stock carried over shows their old cuts", st.name),
+            )
+            .suggest(json!({"command": "cam.generate", "setup": st.id})),
+        );
+    }
+}
+
+/// The stock a setup starts with, as a map at `cell` (or one from the tolerance): its own stock,
+/// or what the earlier setup leaves after its operations, turned into this setup's WCS.
+fn start_stock(s: &Session, st: &Setup, cell: Option<f64>, tol: f64) -> Result<(cam::setup::StockShape, cam::simulate::StockMap, Vec<Issue>)> {
+    start_stock_at(s, st, cell, tol, 0)
+}
+
+fn start_stock_at(
+    s: &Session,
+    st: &Setup,
+    cell: Option<f64>,
+    tol: f64,
+    depth: usize,
+) -> Result<(cam::setup::StockShape, cam::simulate::StockMap, Vec<Issue>)> {
+    if depth > 32 {
+        return Err(EngineError::Other("setups take their stock from each other in a loop".into()));
+    }
+    let shape = stock_shape_at(s, st, depth)?;
+    let err = |e: cam::CamError| EngineError::Other(e.to_string());
+    match previous_setup(s, st)? {
+        None => {
+            let cell = match cell {
+                Some(c) => c,
+                None => cam::simulate::stock_cell(&shape, tol).map_err(err)?,
+            };
+            Ok((shape, cam::simulate::StockMap::new(&shape, cell).map_err(err)?, Vec::new()))
+        }
+        Some(prev) => {
+            let (_, mut map, mut issues) = start_stock_at(s, prev, cell, tol, depth + 1)?;
+            sweep_setup(s, prev, &mut map, &mut issues);
+            let (map, exact) = map.transfer(&prev.wcs, &st.wcs).map_err(err)?;
+            if !exact {
+                issues.push(Issue::info(
+                    "stock_approximate",
+                    format!(
+                        "`{}` is not turned over along the tool axis of `{}`, so its stock is the box around what `{}` left",
+                        st.name, prev.name, prev.name
+                    ),
+                ));
+            }
+            Ok((shape, map, issues))
+        }
+    }
 }
 
 /// One link of the chain: the signature before it, the operation, its tool, and the generation
@@ -1079,7 +1288,9 @@ fn operation_move(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let order: Vec<u64> = s.doc.manufacture.setup(setup_id).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
     let stale_from = from.min(to);
-    Ok(json!({"operation": id, "setup": setup_id, "index": to, "order": order, "stale_from_index": stale_from, "hint": "the moved operation and every one after its old and new places regenerate on the next cam.generate"}))
+    Ok(
+        json!({"operation": id, "setup": setup_id, "index": to, "order": order, "stale_from_index": stale_from, "hint": "the moved operation and every one after its old and new places regenerate on the next cam.generate"}),
+    )
 }
 
 fn operation_duplicate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1180,7 +1391,9 @@ fn kind_description(name: &str) -> &'static str {
         "trace" => "the tool centre follows the curves to the bottom height in depth passes (geometry: sketch, loops or faces)",
         "engrave" => "a V tool's tip follows the curves; width sets the depth from the tool's angle",
         "circular" => "circular milling of round holes larger than the tool: helix in, concentric circles out to the wall",
-        "thread" => "thread milling: a helix of the pitch up the hole (or round a boss when external) in radial passes (geometry: holes with the major diameter)",
+        "thread" => {
+            "thread milling: a helix of the pitch up the hole (or round a boss when external) in radial passes (geometry: holes with the major diameter)"
+        }
         "adaptive3d" => "3D adaptive clearing: Z-level roughing with engagement-controlled rings and trochoids at each level",
         "morph" => "3-axis passes morphed between two rails, following the surface (geometry: rails)",
         "laser_cut" => "laser cutting along curves with the kerf offset to a side, in passes (a laser tool; geometry: sketch, loops or faces)",
@@ -1560,7 +1773,8 @@ fn prepare_one(
         Some(cam::dropcutter::DropMesh::from_meshes(fixtures.iter().map(|(_, m)| transform_mesh(m, to_op)).collect::<Vec<_>>().iter()))
     };
     let model_bounds_op = model_mesh.as_ref().map_or(Aabb3::default(), |m| m.bounds);
-    let stock = st.stock.resolve(&model_bounds_wcs.unwrap_or_default()).map_err(|e| engine_err(cmd, e))?;
+    let _ = model_bounds_wcs;
+    let stock = stock_shape(s, st).map_err(|e| bad(cmd, e.to_string()))?;
     let stock_z = stock.z_range_in(&orient);
     let model_z = if model_bounds_op.is_empty() { stock_z } else { (model_bounds_op.min.z, model_bounds_op.max.z) };
     let geometry = resolve_geometry(s, st, op, &to_op, &dir_to_op, model_mesh.as_ref(), &mut notice)?;
@@ -1594,7 +1808,22 @@ fn prepare_one(
 /// The toolpath of a prepared operation, with the stock left by the operations before it for
 /// rest machining.
 fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
-    let Prepared { op, setup, tool, machine, orient, model_mesh, fixture_mesh, model_bounds_op, stock, heights, geometry, mut notice, signature, generation } = pr;
+    let Prepared {
+        op,
+        setup,
+        tool,
+        machine,
+        orient,
+        model_mesh,
+        fixture_mesh,
+        model_bounds_op,
+        stock,
+        heights,
+        geometry,
+        mut notice,
+        signature,
+        generation,
+    } = pr;
     let rest_map = match rest {
         Some(r) if op.rest_machining => {
             if op.orientation.is_some() {
@@ -1604,11 +1833,12 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
                 ));
                 None
             } else {
-                Some(&r.map)
+                Some(r.tops())
             }
         }
         _ => None,
     };
+    let rest_map = rest_map.as_ref();
     let ctx = Context {
         tool: &tool,
         model: model_mesh.as_ref(),
@@ -1637,8 +1867,11 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
     let stats = tp_wcs.stats(machine.rapid_feed, None);
     if op.kind.axes() > machine.axis_count() {
         notice.issue(
-            Issue::warning("machine_axes", format!("the toolpath tilts the tool but the setup's machine `{}` has {} axes", machine.name, machine.axis_count()))
-                .suggest(json!({"command": "cam.machine.set", "machine": if op.kind.axes() == 4 { "four_axis_a" } else { "trunnion_ac" }})),
+            Issue::warning(
+                "machine_axes",
+                format!("the toolpath tilts the tool but the setup's machine `{}` has {} axes", machine.name, machine.axis_count()),
+            )
+            .suggest(json!({"command": "cam.machine.set", "machine": if op.kind.axes() == 4 { "four_axis_a" } else { "trunnion_ac" }})),
         );
     }
     // What the machine objects to (speeds, feeds, collets, work area).
@@ -1669,6 +1902,11 @@ struct SetupJob {
     steps: Vec<Step>,
     stock_map: Option<cam::simulate::StockMap>,
     notice: Notice,
+    /// The stock comes from an earlier setup: which, and the two WCSs. When that setup is in
+    /// this job its finished stock is used, else `stock_map` already holds what it left.
+    inherit: Option<(u64, Frame, Frame)>,
+    /// A later setup in this job takes its stock from this one: sweep every operation.
+    feeds_next: bool,
 }
 
 /// A generation prepared on the window thread: everything [`GenerateJob::run`] needs, which may
@@ -1721,8 +1959,9 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
     // below (they depend on it).
     let chain = bool_(p, "chain").unwrap_or(false) && only_op.is_some();
     let (only_op, force) = if chain { (None, only_op) } else { (only_op, None) };
-    let mut jobs = Vec::new();
+    let mut jobs: Vec<SetupJob> = Vec::new();
     let mut operations = Vec::new();
+    let mut ends: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
     for st in setups {
         let tol = st.operations.iter().filter(|o| o.enabled).map(|o| o.tolerance).fold(0.05, f64::min).max(0.002);
         let meshes = setup_meshes(s, st, tol, false)?;
@@ -1732,14 +1971,39 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
         if meshes.is_empty() {
             notice.issue(Issue::warning("no_bodies", "the setup has no bodies: only 2D operations on explicit loops and swarf on chains can run"));
         }
-        // Progressive stock for rest machining (3-axis in the WCS).
-        let stock_shape = model_bounds.as_ref().and_then(|b| st.stock.resolve(b).ok());
-        let stock_map =
-            stock_shape.as_ref().and_then(|sh| cam::simulate::stock_cell(sh, 0.1).ok().and_then(|c| cam::simulate::StockMap::new(sh, c).ok()));
+        // Progressive stock for rest machining (3-axis in the WCS): the setup's own, or what
+        // the setup before it leaves.
+        let prev = previous_setup(s, st).map_err(|e| bad(cmd, e.to_string()))?;
+        let inherit = prev.map(|p| (p.id, p.wcs, st.wcs));
+        let in_job = inherit.as_ref().is_some_and(|(from, _, _)| jobs.iter().any(|j| j.id == *from));
+        let stock_map = if in_job {
+            None
+        } else if prev.is_some() {
+            match start_stock(s, st, None, 0.1) {
+                Ok((_, map, issues)) => {
+                    for i in issues {
+                        notice.issue(i);
+                    }
+                    Some(map)
+                }
+                Err(e) => {
+                    notice.issue(Issue::warning("stock_from_setup", e.to_string()));
+                    None
+                }
+            }
+        } else {
+            let shape = model_bounds.as_ref().and_then(|b| st.stock.resolve(b).ok());
+            shape.as_ref().and_then(|sh| cam::simulate::stock_cell(sh, 0.1).ok().and_then(|c| cam::simulate::StockMap::new(sh, c).ok()))
+        };
+        if let Some((from, _, _)) = &inherit
+            && let Some(j) = jobs.iter_mut().find(|j| j.id == *from)
+        {
+            j.feeds_next = true;
+        }
         // The chain in order, with the generation ids this job gives the toolpaths it makes: once
         // an operation regenerates, every one below it has a new signature and regenerates too
         // (or, when only one operation was asked for, is left stale).
-        let mut prev_sig = setup_signature(s, st);
+        let mut prev_sig = setup_signature_with(s, st, &ends);
         let mut prev_generation = 0u64;
         let mut steps = Vec::new();
         for op in &st.operations {
@@ -1797,7 +2061,8 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
                 }),
             }
         }
-        jobs.push(SetupJob { id: st.id, name: st.name.clone(), steps, stock_map, notice });
+        ends.insert(st.id, (prev_sig, prev_generation));
+        jobs.push(SetupJob { id: st.id, name: st.name.clone(), steps, stock_map, notice, inherit: inherit.filter(|_| in_job), feeds_next: false });
     }
     Ok(GenerateJob { setups: jobs, operations, revision: s.geometry_revision })
 }
@@ -1820,11 +2085,31 @@ impl GenerateJob {
                 *worst = status;
             }
         };
+        // The stock each setup finished with, for the setups that carry it over.
+        let mut finals: BTreeMap<u64, cam::simulate::StockMap> = BTreeMap::new();
         for mut job in self.setups {
             let mut ops_out = Vec::new();
-            // Sweeping the stock only matters for an operation generated after it.
-            let last_generate = job.steps.iter().rposition(|st| matches!(st, Step::Generate { .. })).unwrap_or(0);
-            for (k, step) in job.steps.into_iter().enumerate() {
+            if let Some((from, from_wcs, to_wcs)) = job.inherit
+                && let Some(done) = finals.get(&from)
+            {
+                match done.transfer(&from_wcs, &to_wcs) {
+                    Ok((map, exact)) => {
+                        if !exact {
+                            job.notice.issue(Issue::info("stock_approximate", "the setup is not turned over along the earlier setup's tool axis, so its stock is the box around what that setup left"));
+                        }
+                        job.stock_map = Some(map);
+                    }
+                    Err(e) => {
+                        job.notice.issue(Issue::warning("stock_from_setup", e.to_string()));
+                    }
+                }
+            }
+            // Sweeping the stock only matters for an operation generated after it, or for a
+            // setup that carries this one's stock over.
+            let last_generate =
+                if job.feeds_next { job.steps.len() } else { job.steps.iter().rposition(|st| matches!(st, Step::Generate { .. })).unwrap_or(0) };
+            let steps = std::mem::take(&mut job.steps);
+            for (k, step) in steps.into_iter().enumerate() {
                 let needed = k < last_generate;
                 match step {
                     Step::Disabled { id, name, kind } => ops_out.push(json!({"id": id, "name": name, "type": kind, "status": "disabled"})),
@@ -1865,7 +2150,15 @@ impl GenerateJob {
                         report(GenerateEvent::Started(id));
                         let mut n = Notice::new(error.clone());
                         n.issue(Issue::error("generation_failed", error));
-                        let g = Arc::new(Generated { toolpath: Arc::new(Toolpath::new()), notice: n, stats: ToolpathStats::default(), frame, setup, signature, generation });
+                        let g = Arc::new(Generated {
+                            toolpath: Arc::new(Toolpath::new()),
+                            notice: n,
+                            stats: ToolpathStats::default(),
+                            frame,
+                            setup,
+                            signature,
+                            generation,
+                        });
                         regenerated += 1;
                         worse("error", &mut worst);
                         ops_out.push(json!({
@@ -1883,6 +2176,11 @@ impl GenerateJob {
                 job.notice.value("remaining_stock_mm3", r3(sm.volume()));
             }
             out_setups.push(json!({"id": job.id, "name": job.name, "operations": ops_out, "notice": job.notice.to_json()}));
+            if job.feeds_next
+                && let Some(map) = job.stock_map.take()
+            {
+                finals.insert(job.id, map);
+            }
         }
         report(GenerateEvent::Finished(json!({
             "setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": self.revision,
@@ -1963,10 +2261,9 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = num(p, "tolerance").unwrap_or(0.05).clamp(0.005, 5.0);
     let meshes = setup_meshes(s, &st, tol, false)?;
     let fixtures = setup_meshes(s, &st, tol, true)?;
-    let bounds = setup_model_bounds(s, &st).ok_or_else(|| bad(cmd, "the setup has no bodies to simulate against"))?;
-    let shape = st.stock.resolve(&bounds).map_err(|e| engine_err(cmd, e))?;
-    let cell = cam::simulate::stock_cell(&shape, tol).map_err(|e| engine_err(cmd, e))?;
-    let mut stock = cam::simulate::StockMap::new(&shape, cell).map_err(|e| engine_err(cmd, e))?;
+    setup_model_bounds(s, &st).ok_or_else(|| bad(cmd, "the setup has no bodies to simulate against"))?;
+    let (shape, mut stock, carried) = start_stock(s, &st, None, tol).map_err(|e| bad(cmd, e.to_string()))?;
+    let cell = stock.map.cell;
     let to_wcs = |q: Vec3| st.wcs.to_local(q);
     let model = cam::dropcutter::DropMesh::from_meshes(meshes.iter().map(|(_, m)| transform_mesh(m, to_wcs)).collect::<Vec<_>>().iter());
     let fixture = if fixtures.is_empty() {
@@ -2017,6 +2314,12 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     total.gouge_max_mm = final_rep.gouge_max_mm;
     let mut notice = total.notice();
     notice.value("initial_stock_mm3", r3(initial));
+    if let Ok(Some(prev)) = previous_setup(s, &st) {
+        notice.value("stock_from_setup", prev.id);
+    }
+    for i in carried {
+        notice.issue(i);
+    }
     notice.value("cell_mm", r3(cell));
     if !missing.is_empty() {
         notice.issue(
@@ -2079,8 +2382,11 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if !stale.is_empty() {
         notice.issue(
-            Issue::warning("stale", format!("{} operation(s) changed since they were generated and were posted as they were: {}", stale.len(), stale.join(", ")))
-                .suggest(json!({"command": "cam.generate", "setup": id})),
+            Issue::warning(
+                "stale",
+                format!("{} operation(s) changed since they were generated and were posted as they were: {}", stale.len(), stale.join(", ")),
+            )
+            .suggest(json!({"command": "cam.generate", "setup": id})),
         );
     }
     let mut written = None;
@@ -2113,6 +2419,18 @@ fn sim_program(s: &Session, st: &Setup) -> Result<(Vec<cam::simulate::SimOperati
         stamp.push((op.id, Arc::as_ptr(&g.toolpath) as usize));
         ops.push(cam::simulate::SimOperation { id: op.id, name: op.name.clone(), tool, toolpath: g.toolpath.clone() });
     }
+    // The stock carried over from earlier setups changes with their toolpaths.
+    let mut at = previous_setup(s, st).ok().flatten();
+    let mut depth = 0;
+    while let Some(prev) = at.filter(|_| depth < 32) {
+        for op in &prev.operations {
+            if let Some(g) = s.cam.operations.get(&op.id) {
+                stamp.push((op.id, Arc::as_ptr(&g.toolpath) as usize));
+            }
+        }
+        at = previous_setup(s, prev).ok().flatten();
+        depth += 1;
+    }
     Ok((ops, stamp, missing))
 }
 
@@ -2124,8 +2442,7 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
     if ops.is_empty() {
         return Err(bad(cmd, "nothing to simulate: run cam.generate first"));
     }
-    let bounds = setup_model_bounds(s, &st);
-    let shape = st.stock.resolve(&bounds.unwrap_or_default()).map_err(|e| engine_err(cmd, e))?;
+    let shape = stock_shape(s, &st).map_err(|e| bad(cmd, e.to_string()))?;
     // Rebuild the simulator when it is for another setup, or the toolpaths changed.
     let rebuild = match &s.cam.simulator {
         Some(ss) => ss.setup != id || ss.stamp != stamp,
@@ -2146,7 +2463,8 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
         if (size.x / cell + 2.0) * (size.y / cell + 2.0) > 4_000_000.0 {
             return Err(bad(cmd, "the simulation grid would exceed 4 million cells; use a larger `cell`"));
         }
-        let sim = cam::simulate::Simulator::new(shape, ops, cell, st.machine.rapid_feed).map_err(|e| engine_err(cmd, e))?;
+        let (shape, stock, _) = start_stock(s, &st, Some(cell), 0.05).map_err(|e| bad(cmd, e.to_string()))?;
+        let sim = cam::simulate::Simulator::with_stock(shape, stock, ops, st.machine.rapid_feed).map_err(|e| engine_err(cmd, e))?;
         s.cam.simulator = Some(SimulatorState { setup: id, stamp, sim: Box::new(sim) });
     }
     let Some(state) = s.cam.simulator.as_mut() else { return Err(EngineError::Other("simulator missing".into())) };

@@ -388,9 +388,21 @@ fn carvera_program_uses_the_kit_the_checks_and_the_makera_post() {
     let setup = run(&mut s, "cam.setup.create", json!({"name": "Carvera", "machine": "carvera"}))["id"].as_u64().unwrap();
     let st = run(&mut s, "cam.setup.list", json!({}));
     assert_eq!(st["setups"][0]["machine"]["name"], "Makera Carvera", "{st}");
-    run(&mut s, "cam.operation.add", json!({"setup": setup, "type": "face", "tool": flat, "name": "Face", "stepover": 2, "stepdown": 0.5, "heights": {"bottom": {"from": "model_top", "offset": 0}}}));
-    run(&mut s, "cam.operation.add", json!({"setup": setup, "type": "pocket2d", "tool": flat, "name": "Pocket", "stepover": 1.2, "stepdown": 0.8, "geometry": {"source": "faces", "points": [[28, 15, 6]]}}));
-    run(&mut s, "cam.operation.add", json!({"setup": setup, "type": "drill", "tool": drill, "name": "Drill", "cycle": "peck", "peck": 1, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
+    run(
+        &mut s,
+        "cam.operation.add",
+        json!({"setup": setup, "type": "face", "tool": flat, "name": "Face", "stepover": 2, "stepdown": 0.5, "heights": {"bottom": {"from": "model_top", "offset": 0}}}),
+    );
+    run(
+        &mut s,
+        "cam.operation.add",
+        json!({"setup": setup, "type": "pocket2d", "tool": flat, "name": "Pocket", "stepover": 1.2, "stepdown": 0.8, "geometry": {"source": "faces", "points": [[28, 15, 6]]}}),
+    );
+    run(
+        &mut s,
+        "cam.operation.add",
+        json!({"setup": setup, "type": "drill", "tool": drill, "name": "Drill", "cycle": "peck", "peck": 1, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}),
+    );
     let g = run(&mut s, "cam.generate", json!({"setup": setup}));
     // The block's hole is 6 mm and the kit's drill 3.175 mm: that warning is the only one.
     assert_eq!(g["status"], "warning", "{g}");
@@ -437,16 +449,34 @@ fn every_operation_kind_has_a_command_and_the_new_kinds_cut() {
     }
     // A slot around a rectangle, 4 mm wide with a 3 mm tool, 2 mm deep.
     let rect = json!([[[5, 5], [35, 5], [35, 25], [5, 25]]]);
-    let slot = run(&mut s, "cam.operation.slot", json!({"name": "Slot", "width": 4, "stepdown": 1, "geometry": {"source": "loops", "loops": rect}, "heights": {"bottom": {"from": "model_top", "offset": -2}}}));
+    let slot = run(
+        &mut s,
+        "cam.operation.slot",
+        json!({"name": "Slot", "width": 4, "stepdown": 1, "geometry": {"source": "loops", "loops": rect}, "heights": {"bottom": {"from": "model_top", "offset": -2}}}),
+    );
     assert_eq!(slot["tool"], flat, "{slot}");
     assert_eq!(slot["setup"], setup);
-    let trace = run(&mut s, "cam.operation.trace", json!({"name": "Trace", "geometry": {"source": "loops", "loops": rect}, "heights": {"bottom": {"from": "model_top", "offset": -0.5}}}));
-    let engrave = run(&mut s, "cam.operation.engrave", json!({"name": "Engrave", "tool": v, "width": 1.0, "geometry": {"source": "loops", "loops": rect}}));
-    let circular = run(&mut s, "cam.operation.circular", json!({"name": "Circular", "stepdown": 3, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
-    let thread = run(&mut s, "cam.operation.thread", json!({"name": "Thread", "pitch": 1.0, "passes": 2, "geometry": {"source": "holes", "points": [[13, 10, 5]]}, "heights": {"bottom": {"from": "model_top", "offset": -6}}}));
+    let trace = run(
+        &mut s,
+        "cam.operation.trace",
+        json!({"name": "Trace", "geometry": {"source": "loops", "loops": rect}, "heights": {"bottom": {"from": "model_top", "offset": -0.5}}}),
+    );
+    let engrave =
+        run(&mut s, "cam.operation.engrave", json!({"name": "Engrave", "tool": v, "width": 1.0, "geometry": {"source": "loops", "loops": rect}}));
+    let circular =
+        run(&mut s, "cam.operation.circular", json!({"name": "Circular", "stepdown": 3, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
+    let thread = run(
+        &mut s,
+        "cam.operation.thread",
+        json!({"name": "Thread", "pitch": 1.0, "passes": 2, "geometry": {"source": "holes", "points": [[13, 10, 5]]}, "heights": {"bottom": {"from": "model_top", "offset": -6}}}),
+    );
     let tap = run(&mut s, "cam.operation.tap", json!({"name": "Tap", "pitch": 1.0, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
     let adaptive = run(&mut s, "cam.operation.adaptive3d", json!({"name": "Adaptive 3D", "stepdown": 2, "optimal_load": 1.0}));
-    let morph = run(&mut s, "cam.operation.morph", json!({"name": "Morph", "stepover": 2, "geometry": {"source": "rails", "first": [[2, 2, 10], [38, 2, 10]], "second": [[2, 28, 10], [38, 28, 10]]}}));
+    let morph = run(
+        &mut s,
+        "cam.operation.morph",
+        json!({"name": "Morph", "stepover": 2, "geometry": {"source": "rails", "first": [[2, 2, 10], [38, 2, 10]], "second": [[2, 28, 10], [38, 28, 10]]}}),
+    );
     let g = run(&mut s, "cam.generate", json!({}));
     let ops = g["setups"][0]["operations"].as_array().unwrap();
     for o in ops {
@@ -503,9 +533,21 @@ fn laser_programs_post_in_makera_laser_mode() {
     let flat = tools[0]["id"].as_u64().unwrap();
     run(&mut s, "cam.setup.create", json!({"name": "Carvera", "machine": "carvera"}));
     let rect = json!([[[5, 5], [35, 5], [35, 25], [5, 25]]]);
-    run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 2, "stepdown": 0.5, "heights": {"bottom": {"from": "model_top", "offset": 0}}}));
-    let engrave = run(&mut s, "cam.operation.laser_engrave", json!({"tool": laser, "power": 0.4, "speed": 2500, "line_interval": 0.5, "geometry": {"source": "loops", "loops": rect}}));
-    let cut = run(&mut s, "cam.operation.laser_cut", json!({"tool": laser, "power": 1.0, "speed": 250, "passes": 2, "geometry": {"source": "loops", "loops": rect}}));
+    run(
+        &mut s,
+        "cam.operation.face",
+        json!({"tool": flat, "stepover": 2, "stepdown": 0.5, "heights": {"bottom": {"from": "model_top", "offset": 0}}}),
+    );
+    let engrave = run(
+        &mut s,
+        "cam.operation.laser_engrave",
+        json!({"tool": laser, "power": 0.4, "speed": 2500, "line_interval": 0.5, "geometry": {"source": "loops", "loops": rect}}),
+    );
+    let cut = run(
+        &mut s,
+        "cam.operation.laser_cut",
+        json!({"tool": laser, "power": 1.0, "speed": 250, "passes": 2, "geometry": {"source": "loops", "loops": rect}}),
+    );
     // A cutter cannot run a laser operation.
     let e = fails(&mut s, "cam.operation.laser_cut", json!({"tool": flat, "geometry": {"source": "loops", "loops": rect}}));
     let _ = e;
@@ -600,13 +642,22 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     let flat = add_flat(&mut s, 6.0);
     let small = add_flat(&mut s, 3.0);
     let setup = run(&mut s, "cam.setup.create", json!({"name": "Top"}))["id"].as_u64().unwrap();
-    let face = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"].as_u64().unwrap();
+    let face =
+        run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"]
+            .as_u64()
+            .unwrap();
     let rough = run(&mut s, "cam.operation.pocket3d", json!({"tool": flat, "stepover": 3, "stepdown": 3}))["id"].as_u64().unwrap();
-    let rest = run(&mut s, "cam.operation.pocket3d", json!({"tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}))["id"].as_u64().unwrap();
+    let rest =
+        run(&mut s, "cam.operation.pocket3d", json!({"tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}))["id"].as_u64().unwrap();
     let g = run(&mut s, "cam.generate", json!({}));
     assert_eq!(g["regenerated"], 3, "{g}");
     let stale = |s: &mut Session| -> Vec<bool> {
-        run(s, "cam.notices", json!({}))["notices"].as_array().unwrap().iter().map(|n| n["stale"].as_bool().unwrap_or_else(|| panic!("{n}"))).collect()
+        run(s, "cam.notices", json!({}))["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["stale"].as_bool().unwrap_or_else(|| panic!("{n}")))
+            .collect()
     };
     assert_eq!(stale(&mut s), vec![false, false, false]);
     // Nothing changed: generating again reuses every toolpath.
@@ -675,8 +726,12 @@ fn toolpaths_show_and_hide_on_the_workpiece() {
     let mut s = block();
     let flat = add_flat(&mut s, 6.0);
     let setup = run(&mut s, "cam.setup.create", json!({}))["id"].as_u64().unwrap();
-    let a = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"].as_u64().unwrap();
-    let b = run(&mut s, "cam.operation.contour2d", json!({"tool": flat, "side": "outside", "geometry": {"source": "silhouette"}}))["id"].as_u64().unwrap();
+    let a = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"]
+        .as_u64()
+        .unwrap();
+    let b = run(&mut s, "cam.operation.contour2d", json!({"tool": flat, "side": "outside", "geometry": {"source": "silhouette"}}))["id"]
+        .as_u64()
+        .unwrap();
     // Nothing drawn before generating; both after.
     assert!(super::cam::shown_toolpaths(&s).is_empty());
     run(&mut s, "cam.generate", json!({}));
@@ -725,12 +780,23 @@ fn regenerate_chain_brings_dependencies_and_dependents_current() {
     let flat = add_flat(&mut s, 6.0);
     let small = add_flat(&mut s, 3.0);
     run(&mut s, "cam.setup.create", json!({}));
-    let face = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"].as_u64().unwrap();
+    let face =
+        run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"]
+            .as_u64()
+            .unwrap();
     let rough = run(&mut s, "cam.operation.pocket3d", json!({"tool": flat, "stepover": 3, "stepdown": 3}))["id"].as_u64().unwrap();
-    let rest = run(&mut s, "cam.operation.pocket3d", json!({"tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}))["id"].as_u64().unwrap();
-    let contour = run(&mut s, "cam.operation.contour2d", json!({"tool": flat, "side": "outside", "geometry": {"source": "silhouette"}}))["id"].as_u64().unwrap();
+    let rest =
+        run(&mut s, "cam.operation.pocket3d", json!({"tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}))["id"].as_u64().unwrap();
+    let contour = run(&mut s, "cam.operation.contour2d", json!({"tool": flat, "side": "outside", "geometry": {"source": "silhouette"}}))["id"]
+        .as_u64()
+        .unwrap();
     let stale = |s: &mut Session| -> Vec<bool> {
-        run(s, "cam.notices", json!({}))["notices"].as_array().unwrap().iter().map(|n| n["stale"].as_bool().unwrap_or_else(|| panic!("{n}"))).collect()
+        run(s, "cam.notices", json!({}))["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["stale"].as_bool().unwrap_or_else(|| panic!("{n}")))
+            .collect()
     };
     // Nothing generated yet: the chain through the third regenerates everything (its
     // dependencies above it, it, and the one below).
@@ -746,8 +812,101 @@ fn regenerate_chain_brings_dependencies_and_dependents_current() {
     // it and the one below.
     let g = run(&mut s, "cam.generate", json!({"operation": rest, "chain": true}));
     assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(2), Some(2)), "{g}");
-    let ids: Vec<u64> = g["setups"][0]["operations"].as_array().unwrap().iter().filter(|o| o["reused"] != true).map(|o| o["id"].as_u64().unwrap()).collect();
+    let ids: Vec<u64> =
+        g["setups"][0]["operations"].as_array().unwrap().iter().filter(|o| o["reused"] != true).map(|o| o["id"].as_u64().unwrap()).collect();
     assert_eq!(ids, vec![rest, contour]);
     assert_eq!(stale(&mut s), vec![false, false, false, false]);
     let _ = rough;
 }
+
+#[test]
+fn a_second_setup_turns_the_part_over_and_starts_from_what_the_first_left() {
+    let mut s = block();
+    // A 10 x 10 x 2 pocket in the bottom face too.
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 3, "corner": [5, 15, -1], "operation": "cut", "targets": ["Block"]}));
+    let tool = add_flat(&mut s, 6.0);
+    let small = add_flat(&mut s, 3.0);
+    let top = run(
+        &mut s,
+        "cam.setup.create",
+        json!({"name": "Top", "stock": {"mode": "relative_box", "x_neg": 2, "x_pos": 2, "y_neg": 2, "y_pos": 2, "z_pos": 1}}),
+    );
+    let top_id = top["id"].as_u64().unwrap();
+    assert!(top["stock_from"].is_null());
+    let face = run(
+        &mut s,
+        "cam.operation.face",
+        json!({"setup": top_id, "tool": tool, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    run(&mut s, "cam.operation.pocket3d", json!({"setup": top_id, "tool": small, "stepover": 1.5, "stepdown": 3}));
+    // The bottom: turned over about x, its stock what the top setup leaves (the default for a
+    // later setup), its origin at the turned-over stock's front-left top corner.
+    let bottom = run(&mut s, "cam.setup.create", json!({"name": "Bottom", "flip": "x"}));
+    let bottom_id = bottom["id"].as_u64().unwrap();
+    assert_eq!(bottom["stock"]["mode"], "from_setup");
+    assert_eq!(bottom["stock_from"]["setup"], top_id);
+    let r = &bottom["stock_resolved"];
+    let num = |v: &Value| v.as_f64().unwrap();
+    assert!(num(&r["min"][0]).abs() < 1e-9 && num(&r["min"][1]).abs() < 1e-9 && num(&r["max"][2]).abs() < 1e-9, "origin at the corner: {r}");
+    assert!((num(&r["min"][2]) + 11.0).abs() < 1e-9, "the whole stock below the origin: {r}");
+    assert!((num(&bottom["wcs"]["z"][2]) + 1.0).abs() < 1e-9, "tool axis turned over: {}", bottom["wcs"]);
+    let rest = run(
+        &mut s,
+        "cam.operation.pocket3d",
+        json!({"setup": bottom_id, "tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!(g["regenerated"], 3, "{g}");
+    for st in g["setups"].as_array().unwrap() {
+        for op in st["operations"].as_array().unwrap() {
+            assert_ne!(op["status"], "error", "{op}");
+        }
+        assert!(st["notice"]["issues"].as_array().is_none_or(|i| i.iter().all(|x| x["code"] != "stock_from_setup")), "{st}");
+    }
+    // The bottom's stock is what the top left, and machining it does not gouge the part.
+    let top_sim = run(&mut s, "cam.simulate", json!({"setup": top_id}));
+    let bottom_sim = run(&mut s, "cam.simulate", json!({"setup": bottom_id}));
+    let left = num(&top_sim["total"]["remaining_volume_mm3"]);
+    let start = num(&bottom_sim["notice"]["values"]["initial_stock_mm3"]);
+    assert!((start - left).abs() < left * 0.02, "carried over {start} vs left {left}");
+    assert!(start < num(&top_sim["notice"]["values"]["initial_stock_mm3"]) - 500.0, "the top's cuts are gone from the bottom's stock");
+    assert_eq!(bottom_sim["notice"]["values"]["stock_from_setup"], top_id);
+    assert_eq!(bottom_sim["total"]["gouge_cells"], 0, "{}", bottom_sim["notice"]);
+    // Parametric across setups: changing the top makes the bottom stale; generating brings both current.
+    run(&mut s, "cam.operation.set", json!({"operation": face, "stepover": 3}));
+    let n = run(&mut s, "cam.notices", json!({}));
+    let stale = |n: &Value, id: u64| n["notices"].as_array().unwrap().iter().find(|o| o["operation"] == id).map(|o| o["stale"].clone());
+    assert_eq!(stale(&n, rest), Some(json!(true)), "{n}");
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!(g["regenerated"], 3, "the top's chain and the bottom after it: {g}");
+    let n = run(&mut s, "cam.notices", json!({}));
+    assert_eq!(stale(&n, rest), Some(json!(false)), "{n}");
+    // Rest machining on the bottom never cuts more than without it (the top cleared the sides).
+    let with_rest = s.cam.operations.get(&rest).unwrap().stats.time_s;
+    run(&mut s, "cam.operation.set", json!({"operation": rest, "rest_machining": false}));
+    run(&mut s, "cam.generate", json!({"setup": bottom_id}));
+    let without = s.cam.operations.get(&rest).unwrap().stats.time_s;
+    assert!(with_rest <= without + 1e-6, "rest {with_rest} s, without {without} s");
+    // A turned-over setup with stock of its own also has its origin at the stock's corner.
+    let own = run(
+        &mut s,
+        "cam.setup.create",
+        json!({"name": "Own", "flip": "y", "stock": {"mode": "relative_box", "x_neg": 2, "x_pos": 2, "y_neg": 2, "y_pos": 2, "z_neg": 1}}),
+    );
+    let r = &own["stock_resolved"];
+    assert!(num(&r["min"][0]).abs() < 1e-6 && num(&r["min"][1]).abs() < 1e-6 && num(&r["max"][2]).abs() < 1e-6, "{r}");
+    // Stock comes only from an earlier setup.
+    let e = fails(&mut s, "cam.setup.set", json!({"setup": bottom_id, "stock": {"mode": "from_setup", "setup": bottom_id}}));
+    assert!(e.contains("not an earlier setup"), "{e}");
+    let e = fails(&mut s, "cam.setup.set", json!({"setup": top_id, "stock": {"mode": "from_setup"}}));
+    assert!(e.contains("is the first"), "{e}");
+    // Removing the top hands its stock to the bottom, which is then the first setup.
+    run(&mut s, "cam.setup.remove", json!({"setup": top_id}));
+    let list = run(&mut s, "cam.setup.list", json!({}));
+    assert_eq!(list["setups"][0]["stock"]["mode"], "relative_box", "{list}");
+}
+

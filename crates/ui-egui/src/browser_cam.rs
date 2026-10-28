@@ -11,6 +11,7 @@ use super::{Actions, Row, draw_row, is_open, toggle};
 use crate::SolveApp;
 use crate::context_menu::{Item, Target};
 use crate::theme::Tokens;
+use solidcraft_engine::cam;
 
 /// An operation's state for its row: `ok`, `warning`, `error`, `stale`, `not generated` or
 /// `suppressed`.
@@ -77,17 +78,27 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
     if !open {
         return;
     }
-    let setups: Vec<(u64, String, String, Vec<(u64, String, &'static str)>)> = app
-        .session
-        .doc
-        .manufacture
+    let m = &app.session.doc.manufacture;
+    let tool_of = |id: u64| m.tools.get(id).map_or_else(|| format!("tool {id} (missing)"), |t| format!("T{} {}", t.number, t.name));
+    let setups: Vec<(u64, String, String, String, Vec<(u64, String, &'static str, String)>)> = m
         .setups
         .iter()
-        .map(|st| {
-            (st.id, st.name.clone(), st.machine.name.clone(), st.operations.iter().map(|o| (o.id, o.name.clone(), o.kind.type_name())).collect())
+        .enumerate()
+        .map(|(i, st)| {
+            // Where the stock comes from, for the row's hover text.
+            let stock = match st.stock {
+                cam::setup::Stock::FromSetup { setup } => {
+                    let from =
+                        if setup == 0 { i.checked_sub(1).and_then(|k| m.setups.get(k)) } else { m.setups.iter().take(i).find(|x| x.id == setup) };
+                    from.map_or_else(|| "stock: from an earlier setup (none)".to_string(), |f| format!("stock: what `{}` leaves", f.name))
+                }
+                _ => "stock: its own".to_string(),
+            };
+            let ops = st.operations.iter().map(|o| (o.id, o.name.clone(), o.kind.type_name(), tool_of(o.tool))).collect();
+            (st.id, st.name.clone(), st.machine.name.clone(), stock, ops)
         })
         .collect();
-    for (sid, name, machine, ops) in setups {
+    for (sid, name, machine, stock, ops) in setups {
         let skey = format!("cam-setup-{sid}");
         let sopen = is_open(app, &skey, true);
         let label = format!("{name} · {machine}");
@@ -116,8 +127,14 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
         if r.fold {
             toggle(app, &skey, true);
         }
+        if let Some(resp) = &r.resp {
+            resp.clone().on_hover_text(stock);
+        }
         if r.clicked {
             app.tree.picked_cam = Some(CamPick::Setup(sid));
+        }
+        if r.double {
+            edit_setup(app, sid);
         }
         if let Some(p) = r.secondary {
             app.tree.picked_cam = Some(CamPick::Setup(sid));
@@ -127,7 +144,7 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
             continue;
         }
         // The chain: each operation numbered in order.
-        for (k, (oid, oname, kind)) in ops.iter().enumerate() {
+        for (k, (oid, oname, kind, tool)) in ops.iter().enumerate() {
             let state = op_state(app, *oid);
             let hidden = app.session.cam.hidden.contains(oid);
             let label = format!("{}. {oname}", k + 1);
@@ -150,7 +167,7 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
             );
             row_activity(ui, r.rect, state == "generating", state == "queued");
             if let Some(resp) = &r.resp {
-                resp.clone().on_hover_text(format!("{kind}: {state}"));
+                resp.clone().on_hover_text(format!("{kind} with {tool}: {state}"));
             }
             if r.eye {
                 let _ = app.run("cam.toolpath.visibility", json!({"operation": oid, "visible": hidden}));
@@ -211,6 +228,11 @@ pub(crate) fn edit(app: &mut SolveApp, op: u64) {
     crate::cam_editor::open(app, crate::cam_editor::Target::Operation(op));
 }
 
+/// Opens the same editor on a setup: its stock, origin and axes, and machine.
+pub(crate) fn edit_setup(app: &mut SolveApp, setup: u64) {
+    crate::cam_editor::open(app, crate::cam_editor::Target::Setup(setup));
+}
+
 /// Opens the same editor on a tool.
 pub(crate) fn edit_tool(app: &mut SolveApp, tool: u64) {
     crate::cam_editor::open(app, crate::cam_editor::Target::Tool(tool));
@@ -249,6 +271,7 @@ pub fn operation_items(app: &SolveApp, id: u64) -> Vec<Item> {
 /// The menu of a setup.
 pub fn setup_items(_app: &SolveApp, id: u64) -> Vec<Item> {
     vec![
+        Item::action("ui.camEditSetup", "Edit", "edit").with(json!({"setup": id})),
         Item::action("cam.generate", "Generate", "cam").with(json!({"setup": id})),
         Item::action("cam.generate", "Regenerate All", "cam").with(json!({"setup": id, "all": true})),
         Item::action("cam.simulate.show", "Simulate", "play").with(json!({"setup": id, "progress": 0.0})),
@@ -274,6 +297,11 @@ pub fn run_action(app: &mut SolveApp, id: &str, p: &Value) {
         "ui.camEdit" => {
             if let Some(op) = num("operation") {
                 edit(app, op);
+            }
+        }
+        "ui.camEditSetup" => {
+            if let Some(st) = num("setup") {
+                edit_setup(app, st);
             }
         }
         "ui.camEditTool" => {

@@ -1232,7 +1232,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
             }
         }
         "ui.newView" => drop(crate::browser::save_view(app, None)),
-        "ui.camEdit" | "ui.camEditTool" | "ui.camPost" => crate::browser::cam::run_action(app, &item.id, &p),
+        "ui.camEdit" | "ui.camEditTool" | "ui.camEditSetup" | "ui.camPost" => crate::browser::cam::run_action(app, &item.id, &p),
         "cam.generate" => crate::cam_job::start(app, if p.is_null() { json!({}) } else { p }),
         "ui.restoreView" => {
             if let Some(v) = p.get("view").and_then(Value::as_str) {

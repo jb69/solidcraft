@@ -59,6 +59,44 @@ cam.post            {setup, path: part.nc}   → G-code
 `cam.notices` lists every operation's report (with `stale: true` once the design changed);
 `cam.inspect` says what exists and what needs attention; `cam.toolpath` returns the moves.
 
+## Setups in sequence: the top and the bottom
+
+Each setup defines the stock and the origin its operations are measured from (its WCS). A
+part machined on both sides has two: the first cuts the top, the second turns the part over
+and cuts the bottom.
+
+```text
+cam.setup.create    {name: Top, machine: carvera, stock: {mode: relative_box, z_pos: 1}}
+…operations of the top…
+cam.setup.create    {name: Bottom, machine: carvera, flip: x}
+…operations of the bottom (rest machining sees what the top cut)…
+```
+
+- **Stock carried over.** Every setup after the first starts, by default, from what the setups
+  before it left (`stock: {mode: from_setup, setup?}`; `setup` 0 or absent is the one
+  before): the earlier setup's stock is swept by its toolpaths and turned into this setup's
+  WCS. Turned over along the tool axis the material is exact, column by column, with a bottom
+  of its own in each column, so a pocket cut from the top is a step under the bottom's
+  material and a cut from the bottom breaks through into it. A setup at another angle starts
+  from the box around what is left, and says so (`stock_approximate`).
+- **Rest machining** in the later setup cuts only where material is left: the top's cuts are
+  air to it. Simulation and Simulate to Here start from the carried-over stock too.
+- **The origin.** `flip: x` (or `y`) turns the WCS of the setup before over about its x (y)
+  axis and puts the origin at the turned-over stock's front-left top corner, the corner a
+  Makera probes; every operation of the setup is measured from it. `cam.setup.set {setup,
+  flip}` turns an existing setup over, and the setup editor's Turn Over buttons do the same.
+- **Parametric across setups.** A later setup's chain starts from the end of the earlier
+  setup's: changing, reordering or regenerating the top makes the bottom's toolpaths stale,
+  and `cam.generate {}` brings both current in order. Generating only the bottom uses the top's
+  toolpaths as they are, with a warning when they are stale or missing.
+- **Removing** the first setup hands its stock to the one after it; a setup named as another's
+  source cannot be removed.
+
+A setup opens in the same editor as operations and tools (double-click it, or Edit): name and
+program, the stock (its mode and sizes, and which setup it comes from), the origin and axes
+with the Turn Over buttons, the machine (a preset, then every property: work area, spindle,
+feeds, tool changer, collets, rotary capacity, laser module) and the bodies and fixtures.
+
 ## Simulation
 
 `cam.simulate` sweeps every generated operation of a setup through a Z-map of the stock

@@ -576,7 +576,12 @@ pub fn toolpath_lines(s: &Session, feed: Rgb, rapid: Rgb) -> Vec<SceneLine> {
             if let Some(a) = prev {
                 if run.is_empty() || is_rapid != run_rapid {
                     if run.len() >= 2 {
-                        out.push(SceneLine { points: std::mem::take(&mut run), color: if run_rapid { rapid } else { feed }, width: if run_rapid { 1.0 } else { 1.3 }, on_top: false });
+                        out.push(SceneLine {
+                            points: std::mem::take(&mut run),
+                            color: if run_rapid { rapid } else { feed },
+                            width: if run_rapid { 1.0 } else { 1.3 },
+                            on_top: false,
+                        });
                     }
                     run = vec![a];
                     run_rapid = is_rapid;

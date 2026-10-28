@@ -235,3 +235,33 @@ fn a_tool_kind_brings_its_own_sizes() {
     }
     assert_eq!(label_of("wavelength_nm", &json!(445.0)), "Wavelength (nm)");
 }
+
+#[test]
+fn setups_open_with_stock_origin_and_machine_and_turn_over() {
+    let mut h = Harness::new();
+    pocket(&mut h);
+    let top = h.app.session.doc.manufacture.setups[0].id;
+    let bottom = h.app.run("cam.setup.create", json!({"name": "Bottom"})).unwrap()["id"].as_u64().unwrap();
+    crate::browser::cam::edit_setup(&mut h.app, bottom);
+    h.frames(20);
+    assert_eq!(h.app.cam_editor.as_ref().unwrap().target, Target::Setup(bottom));
+    for w in ["Fields", "JSON", "Name", "Stock", "Origin and axes", "Turn Over About X", "Machine", "Bodies"] {
+        assert!(h.widget(w).is_some(), "{w} is drawn");
+    }
+    let top_name = h.app.session.doc.manufacture.setups[0].name.clone();
+    assert!(h.widget(&format!("Starts from what `{top_name}` leaves after its operations (setup 0: the one before).")).is_some());
+    assert!(!h.app.cam_editor.as_ref().unwrap().draft.as_object().unwrap().contains_key("operations"), "operations are edited on their own");
+    // Turning over applies at once: the tool axis points down and the origin is the corner.
+    h.step(&json!({"widget": "Turn Over About X"})).unwrap();
+    h.frames(2);
+    let st = h.app.session.doc.manufacture.setup(bottom).unwrap().clone();
+    assert!((st.wcs.z.z + 1.0).abs() < 1e-9, "{:?}", st.wcs);
+    assert_eq!(h.app.cam_editor.as_ref().unwrap().draft["wcs"]["z"], json!([0.0, 0.0, -1.0]));
+    // A machine preset from the draft, applied through cam.setup.set.
+    let ed = h.app.cam_editor.as_mut().unwrap();
+    ed.draft["machine"] = serde_json::to_value(cam::machine::Machine::preset("carvera").unwrap()).unwrap();
+    h.frames(1);
+    h.step(&json!({"widget": "Apply"})).unwrap();
+    assert_eq!(h.app.session.doc.manufacture.setup(bottom).unwrap().machine.post, "makera");
+    assert_eq!(h.app.session.doc.manufacture.setups[0].id, top, "the first setup is untouched");
+}

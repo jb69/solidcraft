@@ -49,6 +49,7 @@ const COMMON: &[&str] = &[
 pub enum Target {
     Operation(u64),
     Tool(u64),
+    Setup(u64),
 }
 
 impl Target {
@@ -57,6 +58,7 @@ impl Target {
         match self {
             Target::Operation(id) => ("cam.operation.set", "operation", id),
             Target::Tool(id) => ("cam.tool.set", "tool", id),
+            Target::Setup(id) => ("cam.setup.set", "setup", id),
         }
     }
 
@@ -64,6 +66,7 @@ impl Target {
         match self {
             Target::Operation(_) => "operation",
             Target::Tool(_) => "tool",
+            Target::Setup(_) => "setup",
         }
     }
 }
@@ -89,6 +92,8 @@ pub struct CamEditor {
     inputs: Inputs,
     /// The last Apply's outcome: a refusal (true) or the warnings it gave (false).
     pub message: Option<(String, bool)>,
+    /// A setup to turn over about this axis with the next Apply (`cam.setup.set`'s `flip`).
+    pub flip: Option<&'static str>,
 }
 
 /// The text typed in each field (by the parameter's path), so a value half typed survives the
@@ -110,6 +115,7 @@ impl CamEditor {
             text_error: None,
             inputs: Inputs::default(),
             message: None,
+            flip: None,
         }
     }
 
@@ -144,9 +150,14 @@ fn saved(app: &SolveApp, target: Target) -> Option<Value> {
     let mut v = match target {
         Target::Operation(op) => serde_json::to_value(m.operation(op)?.1).ok()?,
         Target::Tool(tool) => serde_json::to_value(m.tools.get(tool)?).ok()?,
+        Target::Setup(setup) => serde_json::to_value(m.setup(setup)?).ok()?,
     };
     if let Value::Object(m) = &mut v {
         m.remove("id");
+        // A setup's operations are edited one by one.
+        if matches!(target, Target::Setup(_)) {
+            m.remove("operations");
+        }
     }
     Some(v)
 }
@@ -184,6 +195,9 @@ pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
     }
     let (command, key, id) = ed.target.command();
     params[key] = json!(id);
+    if let Some(axis) = ed.flip.take() {
+        params["flip"] = json!(axis);
+    }
     if let Value::Object(m) = &mut params {
         m.remove("id");
     }
@@ -223,13 +237,15 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let name = match (ed.base["name"].as_str(), ed.target) {
         (Some(n), Target::Tool(_)) => format!("T{} {n}", ed.base["number"].as_u64().unwrap_or(0)),
         (Some(n), Target::Operation(_)) => n.to_string(),
+        (Some(n), Target::Setup(_)) => format!("Setup: {n}"),
         (None, _) => kind_label(ed.target.noun()),
     };
     let title = RichText::new(name).strong().size(t.font_button);
     let uses = match ed.target {
         Target::Tool(id) => app.session.doc.manufacture.tool_uses(id),
-        Target::Operation(_) => 0,
+        _ => 0,
     };
+    let setups: Vec<(u64, String)> = app.session.doc.manufacture.setups.iter().map(|x| (x.id, x.name.clone())).collect();
     let tools: Vec<(u64, String)> = app.session.doc.manufacture.tools.tools.iter().map(|tl| (tl.id, format!("T{} {}", tl.number, tl.name))).collect();
     let mut open = true;
     let (mut ok, mut apply_now, mut cancel, mut reload) = (false, false, false, false);
@@ -268,10 +284,16 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             match ed.tab {
                 Tab::Fields => {
                     egui::ScrollArea::vertical().max_height(480.0).auto_shrink([false, true]).show(ui, |ui| {
-                        let CamEditor { draft, inputs, target, .. } = &mut ed;
+                        let CamEditor { draft, inputs, target, flip, .. } = &mut ed;
                         match target {
                             Target::Operation(_) => fields(ui, draft, inputs, &tools),
                             Target::Tool(_) => tool_fields(ui, draft, inputs, uses),
+                            Target::Setup(id) => {
+                                if let Some(axis) = setup_fields(ui, draft, inputs, *id, &setups) {
+                                    *flip = Some(axis);
+                                    apply_now = true;
+                                }
+                            }
                         }
                     });
                 }
@@ -558,6 +580,122 @@ fn tool_fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, uses: 
     }
 }
 
+/// The Fields tab of a setup; returns an axis when a Turn Over button was pressed.
+fn setup_fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, id: u64, setups: &[(u64, String)]) -> Option<&'static str> {
+    let Value::Object(st) = draft else { return None };
+    let t = Tokens::get();
+    let mut flip = None;
+    if let Some(Value::String(name)) = st.get_mut("name") {
+        crate::ui_kit::row(ui, "Name", |ui| crate::ui_kit::text_field(ui, name, ""));
+    }
+    if let Some(Value::String(program)) = st.get_mut("program") {
+        crate::ui_kit::row(ui, "Program", |ui| crate::ui_kit::text_field(ui, program, "the setup's name"));
+    }
+    // The stock, and where it comes from.
+    let here = setups.iter().position(|x| x.0 == id).unwrap_or(0);
+    if let Some(stock) = st.get_mut("stock") {
+        section(ui, "Stock", true, |ui| {
+            let modes = cam::ops::variants::<cam::setup::Stock>(json!({"mode": "\u{1}"}));
+            let axes = cam::ops::variants::<cam::setup::Axis>(Value::Null);
+            tagged_with(ui, inputs, "stock", stock, "mode", &modes, &[("axis", axes)]);
+            if stock["mode"] == "from_setup" {
+                let from = stock["setup"].as_u64().unwrap_or(0);
+                let source = if from == 0 { here.checked_sub(1).and_then(|i| setups.get(i)) } else { setups.iter().take(here).find(|x| x.0 == from) };
+                let text = match source {
+                    Some((_, n)) => format!("Starts from what `{n}` leaves after its operations (setup 0: the one before)."),
+                    None => "There is no earlier setup to take the stock from.".to_string(),
+                };
+                ui.label(RichText::new(text).color(if source.is_some() { t.text_dim } else { t.error }));
+            }
+        });
+    }
+    // The origin and axes every operation of the setup is measured from.
+    if let Some(Value::Object(w)) = st.get_mut("wcs") {
+        section(ui, "Origin and axes", true, |ui| {
+            for (key, label) in [("origin", "Origin"), ("x", "X axis"), ("y", "Y axis"), ("z", "Tool axis (Z)")] {
+                if let Some(v) = w.get_mut(key) {
+                    value(ui, inputs, &format!("wcs.{key}"), label, v, None);
+                }
+            }
+            ui.label(
+                RichText::new("Turn the part over to machine its other side; the origin moves to the stock's front-left top corner.")
+                    .color(t.text_dim),
+            );
+            ui.horizontal(|ui| {
+                if crate::ui_kit::button(ui, "Turn Over About X", crate::ui_kit::Button::Normal).clicked() {
+                    flip = Some("x");
+                }
+                if crate::ui_kit::button(ui, "Turn Over About Y", crate::ui_kit::Button::Normal).clicked() {
+                    flip = Some("y");
+                }
+            });
+        });
+    }
+    // The machine: a preset, then its properties.
+    if let Some(machine) = st.get_mut("machine") {
+        section(ui, "Machine", false, |ui| {
+            let presets = cam::machine::Machine::PRESETS;
+            let mut labels: Vec<String> = vec![crate::i18n::tr_label("Keep this machine").to_string()];
+            labels.extend(presets.iter().map(|p| kind_label(p)));
+            let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+            let mut k = 0usize;
+            crate::ui_kit::row(ui, "Preset", |ui| crate::ui_kit::dropdown(ui, "cam_ed_machine_preset", &mut k, &refs));
+            if let Some(m) = k.checked_sub(1).and_then(|i| presets.get(i)).and_then(|p| cam::machine::Machine::preset(p)) {
+                if let Ok(v) = serde_json::to_value(m) {
+                    *machine = v;
+                }
+                inputs.text.retain(|key, _| !key.starts_with("machine."));
+                inputs.invalid.retain(|key| !key.starts_with("machine."));
+            }
+            let Value::Object(mo) = machine else { return };
+            let changers = cam::ops::variants::<cam::machine::ToolChanger>(json!({"kind": "\u{1}"}));
+            let keys: Vec<String> = mo.keys().cloned().collect();
+            for key in keys {
+                let path = format!("machine.{key}");
+                let Some(v) = mo.get_mut(&key) else { continue };
+                match key.as_str() {
+                    "tool_changer" => group(ui, "Tool changer", |ui| tagged(ui, inputs, &path, v, "kind", &changers)),
+                    "laser" => {
+                        let mut on = !v.is_null();
+                        crate::ui_kit::checkbox(ui, "Laser module", &mut on).on_hover_text(path.as_str());
+                        if on && v.is_null() {
+                            *v = json!({"power_w": 2.5, "wavelength_nm": 445.0, "builtin": false, "spot_mm": 0.1});
+                        } else if !on {
+                            *v = Value::Null;
+                        }
+                        if v.is_object() {
+                            value(ui, inputs, &path, "Laser", v, None);
+                        }
+                    }
+                    _ => {
+                        let label = match key.as_str() {
+                            "spindle_rpm_min" => "Spindle min (rev/min)".to_string(),
+                            "spindle_rpm_max" => "Spindle max (rev/min)".to_string(),
+                            "spindle_power_w" => "Spindle power (W)".to_string(),
+                            "max_feed" | "rapid_feed" => format!("{} (mm/min)", kind_label(&key)),
+                            "rotary_rapid_deg_min" => "Rotary rapid (°/min)".to_string(),
+                            "work_area" => "Work area (mm)".to_string(),
+                            "collets" => "Collets (mm)".to_string(),
+                            "rotary_capacity" => "Rotary capacity (mm)".to_string(),
+                            _ => label_of(&key, v),
+                        };
+                        value(ui, inputs, &path, &label, v, None);
+                    }
+                }
+            }
+        });
+    }
+    // What is machined and what is avoided.
+    section(ui, "Bodies", false, |ui| {
+        for (key, label) in [("bodies", "Bodies to machine (none: all)"), ("fixtures", "Fixtures to avoid")] {
+            if let Some(v) = st.get_mut(key) {
+                value(ui, inputs, key, label, v, None);
+            }
+        }
+    });
+    flip
+}
+
 /// The sizes a tool kind starts with (a tool of `diameter` mm).
 fn tool_kind_default(kind: &str, diameter: f64) -> Value {
     match kind {
@@ -689,6 +827,13 @@ fn list(ui: &mut egui::Ui, inputs: &mut Inputs, path: &str, label: &str, a: &mut
 
 /// The item Add appends: a copy of the last, else an empty loop for `loops` or a point.
 fn new_item(path: &str, last: Option<&Value>) -> Value {
+    if path.ends_with("bodies") || path.ends_with("fixtures") || path.ends_with("collets") {
+        return match last {
+            Some(x) => x.clone(),
+            None if path.ends_with("collets") => json!(3.175),
+            None => json!(""),
+        };
+    }
     match last {
         Some(Value::Array(p)) if !is_point(p) => json!([]),
         Some(x) => x.clone(),
@@ -766,12 +911,21 @@ fn height(ui: &mut egui::Ui, inputs: &mut Inputs, path: &str, label: &str, v: &m
 /// A choice that brings its own parameters (the ramp's kind, the geometry's source): a dropdown
 /// of the choices, then the chosen one's parameters.
 fn tagged(ui: &mut egui::Ui, inputs: &mut Inputs, path: &str, v: &mut Value, tag: &str, choices: &[String]) {
+    tagged_with(ui, inputs, path, v, tag, choices, &[]);
+}
+
+/// [`tagged`], with fixed choices for some of the chosen kind's fields.
+fn tagged_with(ui: &mut egui::Ui, inputs: &mut Inputs, path: &str, v: &mut Value, tag: &str, choices: &[String], fields: &[(&str, Vec<String>)]) {
     let Value::Object(o) = v else { return };
     let current = o.get(tag).and_then(Value::as_str).unwrap_or("").to_string();
     let mut i = choices.iter().position(|c| *c == current).unwrap_or(0);
     let labels: Vec<String> = choices.iter().map(|c| kind_label(c)).collect();
     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let label = if tag == "source" { "Source" } else { "Kind" };
+    let label = match tag {
+        "source" => "Source",
+        "mode" => "Stock",
+        _ => "Kind",
+    };
     crate::ui_kit::row(ui, label, |ui| crate::ui_kit::dropdown(ui, &format!("cam_ed:{path}.{tag}"), &mut i, &refs));
     if let Some(c) = choices.get(i).filter(|c| **c != current) {
         let mut new = tagged_default(tag, c);
@@ -792,7 +946,8 @@ fn tagged(ui: &mut egui::Ui, inputs: &mut Inputs, path: &str, v: &mut Value, tag
         let p = format!("{path}.{key}");
         if let Some(x) = o.get_mut(&key) {
             let l = label_of(&key, x);
-            value(ui, inputs, &p, &l, x, None);
+            let list = fields.iter().find(|(k, _)| *k == key).map(|x| x.1.as_slice());
+            value(ui, inputs, &p, &l, x, list);
         }
     }
 }
@@ -808,6 +963,12 @@ fn tagged_default(tag: &str, choice: &str) -> Value {
         ("source", "holes") => json!({"points": [], "diameter": 0.0}),
         ("source", "chains") => json!({"bottom": [], "top": []}),
         ("source", "rails") => json!({"first": [], "second": []}),
+        ("mode", "relative_box") => json!({"x_neg": 1.0, "x_pos": 1.0, "y_neg": 1.0, "y_pos": 1.0, "z_neg": 0.0, "z_pos": 1.0}),
+        ("mode", "fixed_box") => json!({"min": [0.0, 0.0, 0.0], "max": [100.0, 100.0, 20.0]}),
+        ("mode", "relative_cylinder") => json!({"axis": "x", "radial": 1.0, "start": 0.0, "end": 0.0}),
+        ("mode", "fixed_cylinder") => json!({"axis": "x", "radius": 10.0, "start": 0.0, "end": 50.0}),
+        ("mode", "from_setup") => json!({"setup": 0}),
+        ("kind", "automatic") => json!({"slots": 6}),
         _ => json!({}),
     }
 }

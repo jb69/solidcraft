@@ -15,11 +15,16 @@ use crate::toolpath::{MoveKind, Toolpath};
 use crate::{CamError, Result};
 
 /// The stock as a Z-map: the height of material at each cell (the stock bottom where it is
-/// cut through, `NEG_INFINITY` outside the stock's outline).
+/// cut through, `NEG_INFINITY` outside the stock's outline). Stock carried over from a setup
+/// that machined the other side has a bottom of its own in each cell (`floor`); a cell whose
+/// top is at its floor is cut through.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StockMap {
     pub map: HeightMap,
     pub bottom: f64,
+    /// The bottom of the material in each cell, when it is not `bottom` everywhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<HeightMap>,
 }
 
 impl StockMap {
@@ -67,16 +72,129 @@ impl StockMap {
                 }
             }
         }
-        Ok(StockMap { map, bottom })
+        Ok(StockMap { map, bottom, floor: None })
+    }
+
+    /// The bottom of the material in cell (`i`, `j`).
+    pub fn floor_at(&self, i: usize, j: usize) -> f64 {
+        self.floor.as_ref().and_then(|f| f.get(i, j)).filter(|z| z.is_finite()).unwrap_or(self.bottom)
     }
 
     pub fn volume(&self) -> f64 {
-        self.map.integrate(|z| if z.is_finite() { (z - self.bottom).max(0.0) } else { 0.0 })
+        match &self.floor {
+            None => self.map.integrate(|z| if z.is_finite() { (z - self.bottom).max(0.0) } else { 0.0 }),
+            Some(f) => {
+                let sum: f64 = self
+                    .map
+                    .z
+                    .iter()
+                    .zip(&f.z)
+                    .map(|(z, lo)| if z.is_finite() { (z - if lo.is_finite() { *lo } else { self.bottom }).max(0.0) } else { 0.0 })
+                    .sum();
+                sum * self.map.cell * self.map.cell
+            }
+        }
+    }
+
+    /// The material's tops for rest machining: a column with no material left (cut through
+    /// to its own floor) reads as empty, as outside the stock does.
+    pub fn tops(&self) -> HeightMap {
+        let mut m = self.map.clone();
+        if self.floor.is_some() {
+            for j in 0..m.ny {
+                for i in 0..m.nx {
+                    if m.get(i, j).is_some_and(|z| z.is_finite() && z <= self.floor_at(i, j) + 1e-9) {
+                        m.set(i, j, f64::NEG_INFINITY);
+                    }
+                }
+            }
+        }
+        m
+    }
+
+    /// The extent of the material left (in this map's frame), empty when none is.
+    pub fn material_bounds(&self) -> solidcraft_geom::Aabb3 {
+        let mut b = solidcraft_geom::Aabb3::default();
+        let half = self.map.cell * 0.5;
+        for j in 0..self.map.ny {
+            for i in 0..self.map.nx {
+                let Some(top) = self.map.get(i, j).filter(|z| z.is_finite()) else { continue };
+                let lo = self.floor_at(i, j);
+                if top <= lo + 1e-9 {
+                    continue;
+                }
+                let p = self.map.point(i, j);
+                b.add(Vec3::new(p.x - half, p.y - half, lo));
+                b.add(Vec3::new(p.x + half, p.y + half, top));
+            }
+        }
+        b
+    }
+
+    /// This stock (in the frame `from`, design coordinates to map) seen in the frame `to`: the
+    /// material of each column, turned over or moved as the frames are. Exact when the two
+    /// frames' tool axes are parallel or opposite (a part turned over for its other side), the
+    /// columns staying columns; otherwise the material's bounding box in `to`, and `false`.
+    pub fn transfer(&self, from: &crate::frame::Frame, to: &crate::frame::Frame) -> Result<(StockMap, bool)> {
+        let za = from.dir_to_world(Vec3::new(0.0, 0.0, 1.0));
+        let zb = to.dir_to_world(Vec3::new(0.0, 0.0, 1.0));
+        let along = za.dot(zb);
+        // The material's corners in `to`.
+        let mb = self.material_bounds();
+        if mb.is_empty() {
+            return Err(CamError::Geometry("the earlier setup leaves no material".into()));
+        }
+        let mut bb = solidcraft_geom::Aabb3::default();
+        for x in [mb.min.x, mb.max.x] {
+            for y in [mb.min.y, mb.max.y] {
+                for z in [mb.min.z, mb.max.z] {
+                    bb.add(to.to_local(from.to_world(Vec3::new(x, y, z))));
+                }
+            }
+        }
+        if along.abs() < 1.0 - 1e-6 {
+            let shape = crate::setup::StockShape::Box { min: bb.min, max: bb.max };
+            return Ok((StockMap::new(&shape, self.map.cell)?, false));
+        }
+        let cell = self.map.cell;
+        let mut b2 = Aabb2::default();
+        b2.add(Vec2::new(bb.min.x, bb.min.y));
+        b2.add(Vec2::new(bb.max.x, bb.max.y));
+        let mut map = HeightMap::new(b2.inflated(cell), cell, f64::NEG_INFINITY)?;
+        let mut floor = HeightMap { origin: map.origin, cell, nx: map.nx, ny: map.ny, z: vec![f64::NEG_INFINITY; map.z.len()] };
+        let mut bottom = f64::INFINITY;
+        for j in 0..map.ny {
+            for i in 0..map.nx {
+                let p = map.point(i, j);
+                let q = from.to_local(to.to_world(Vec3::new(p.x, p.y, 0.0)));
+                let si = ((q.x - self.map.origin.x) / cell).round();
+                let sj = ((q.y - self.map.origin.y) / cell).round();
+                if si < 0.0 || sj < 0.0 {
+                    continue;
+                }
+                let (si, sj) = (si as usize, sj as usize);
+                let Some(top) = self.map.get(si, sj).filter(|z| z.is_finite()) else { continue };
+                let lo = self.floor_at(si, sj);
+                if top <= lo + 1e-9 {
+                    continue;
+                }
+                let z1 = to.to_local(from.to_world(Vec3::new(q.x, q.y, lo))).z;
+                let z2 = to.to_local(from.to_world(Vec3::new(q.x, q.y, top))).z;
+                map.set(i, j, z1.max(z2));
+                floor.set(i, j, z1.min(z2));
+                bottom = bottom.min(z1.min(z2));
+            }
+        }
+        if !bottom.is_finite() {
+            return Err(CamError::Geometry("the earlier setup leaves no material".into()));
+        }
+        Ok((StockMap { map, bottom, floor: Some(floor) }, true))
     }
 
     /// Sweeps a 3-axis cut from `a` to `b` (tip positions) with `tool`.
     pub fn cut(&mut self, tool: &Tool, a: Vec3, b: Vec3) {
         let bottom = self.bottom;
+        let floor = &self.floor;
         let r = tool.radius();
         let m = &mut self.map;
         let lo = Vec2::new(a.x.min(b.x) - r, a.y.min(b.y) - r);
@@ -95,7 +213,8 @@ impl StockMap {
                     && cur.is_finite()
                     && z < cur
                 {
-                    m.set(i, j, z.max(bottom));
+                    let lo = floor.as_ref().and_then(|f| f.get(i, j)).filter(|z| z.is_finite()).unwrap_or(bottom);
+                    m.set(i, j, z.max(lo));
                 }
             }
         }
@@ -118,9 +237,11 @@ impl StockMap {
             for i in i0..=i1 {
                 let p = m.point(i, j);
                 // Below the stock's bottom there is nothing to hit.
-                let Some(z) = lowest_bottom(tool, p, a, b, a2, b2, r).map(|z| z.max(self.bottom)) else { continue };
+                let lo = self.floor_at(i, j);
+                let Some(z) = lowest_bottom(tool, p, a, b, a2, b2, r).map(|z| z.max(lo)) else { continue };
                 if let Some(cur) = m.get(i, j)
                     && cur.is_finite()
+                    && cur > lo + tol
                     && z < cur - tol
                 {
                     return true;
@@ -262,13 +383,13 @@ pub fn simulate(
                 continue;
             }
             let d = s - mz;
+            let (i, j) = (k % nx, k / nx);
             if d > tol {
                 rest += d;
                 rest_max = rest_max.max(d);
-            } else if d < -tol && *mz > stock.bottom + tol {
+            } else if d < -tol && *mz > stock.floor_at(i, j) + tol {
                 // On a near-vertical wall the model's height is ambiguous within a cell: the
                 // cell is a gouge only when its neighbours agree it lies on the surface.
-                let (i, j) = (k % nx, k / nx);
                 let wall = [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)]
                     .iter()
                     .filter_map(|(a, b)| model.get(*a, *b))
@@ -398,6 +519,11 @@ pub struct Simulator {
 impl Simulator {
     pub fn new(shape: StockShape, operations: Vec<SimOperation>, cell: f64, rapid_feed: f64) -> Result<Simulator> {
         let stock = StockMap::new(&shape, cell)?;
+        Simulator::with_stock(shape, stock, operations, rapid_feed)
+    }
+
+    /// A simulator starting from `stock` (the material an earlier setup left).
+    pub fn with_stock(shape: StockShape, stock: StockMap, operations: Vec<SimOperation>, rapid_feed: f64) -> Result<Simulator> {
         let n = operations.len();
         let total_moves = operations.iter().map(|o| o.toolpath.len()).sum();
         let feed_of = |m: &crate::toolpath::Move| if m.feed > 0.0 { m.feed } else { rapid_feed.max(1e-9) };
@@ -578,9 +704,15 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
     let step = step.max(1);
     let nx = m.nx.div_ceil(step);
     let ny = m.ny.div_ceil(step);
+    let cell_of = |i: usize, j: usize| ((i * step).min(m.nx.saturating_sub(1)), (j * step).min(m.ny.saturating_sub(1)));
+    // The bottom under a vertex; a column cut through (its top at its own floor) is not drawn.
+    let fl = |i: usize, j: usize| -> f64 {
+        let (ii, jj) = cell_of(i, j);
+        stock.floor_at(ii, jj)
+    };
     let at = |i: usize, j: usize| -> Option<f64> {
-        let (ii, jj) = ((i * step).min(m.nx.saturating_sub(1)), (j * step).min(m.ny.saturating_sub(1)));
-        m.get(ii, jj).filter(|z| z.is_finite())
+        let (ii, jj) = cell_of(i, j);
+        m.get(ii, jj).filter(|z| z.is_finite()).filter(|z| stock.floor.is_none() || *z > stock.floor_at(ii, jj) + 1e-9)
     };
     let pt = |i: usize, j: usize, z: f64| -> Vec3 {
         let p = m.point((i * step).min(m.nx.saturating_sub(1)), (j * step).min(m.ny.saturating_sub(1)));
@@ -599,6 +731,18 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
         }
     }
     let bottom = stock.bottom;
+    // The floor under each top vertex.
+    let floors: Vec<f64> = (0..mesh.positions.len()).map(|_| bottom).collect();
+    let mut floors = floors;
+    for j in 0..ny {
+        for i in 0..nx {
+            if let Some(k) = index[j * nx + i]
+                && let Some(f) = floors.get_mut(k as usize)
+            {
+                *f = fl(i, j);
+            }
+        }
+    }
     let push_tri = |mesh: &mut Mesh, a: u32, b: u32, c: u32, face: u32| {
         mesh.triangles.push([a, b, c]);
         mesh.tri_face.push(face);
@@ -619,9 +763,10 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
     let add_skirt = |mesh: &mut Mesh, a: u32, b: u32| {
         let pa = mesh.positions[a as usize];
         let pb = mesh.positions[b as usize];
+        let (fa, fb) = (floors.get(a as usize).copied().unwrap_or(bottom), floors.get(b as usize).copied().unwrap_or(bottom));
         let base = mesh.positions.len() as u32;
         let n = (pb - pa).cross(Vec3::new(0.0, 0.0, 1.0)).normalized().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-        for p in [pa, pb, Vec3::new(pb.x, pb.y, bottom), Vec3::new(pa.x, pa.y, bottom)] {
+        for p in [pa, pb, Vec3::new(pb.x, pb.y, fb), Vec3::new(pa.x, pa.y, fa)] {
             mesh.positions.push(p);
             mesh.normals.push(n);
         }
@@ -680,8 +825,23 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
     let mut bottom_index: Vec<Option<u32>> = vec![None; nx * ny];
     for (i, j) in &bottom_pts {
         bottom_index[j * nx + i] = Some(mesh.positions.len() as u32);
-        mesh.positions.push(pt(*i, *j, bottom));
-        mesh.normals.push(Vec3::new(0.0, 0.0, -1.0));
+        mesh.positions.push(pt(*i, *j, fl(*i, *j)));
+        // A floor of its own (stock carried over from the other side) has steps: shade them from
+        // the floor's slope, as the top is shaded from its own.
+        let n = if stock.floor.is_some() {
+            let f = |di: isize, dj: isize| -> f64 {
+                let (ii, jj) = (*i as isize + di, *j as isize + dj);
+                if ii < 0 || jj < 0 || ii >= nx as isize || jj >= ny as isize || index[jj as usize * nx + ii as usize].is_none() {
+                    return fl(*i, *j);
+                }
+                fl(ii as usize, jj as usize)
+            };
+            let h = m.cell * step as f64;
+            Vec3::new((f(1, 0) - f(-1, 0)) / (2.0 * h), (f(0, 1) - f(0, -1)) / (2.0 * h), -1.0).normalized().unwrap_or(Vec3::new(0.0, 0.0, -1.0))
+        } else {
+            Vec3::new(0.0, 0.0, -1.0)
+        };
+        mesh.normals.push(n);
     }
     let _ = base;
     for j in 0..ny.saturating_sub(1) {

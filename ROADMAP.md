@@ -675,7 +675,10 @@ are milled (`thread`), tapped (G84) or turned (`turn_thread`). Operations live i
 Manufacture folder as parametric steps: chained signatures make an edited, suppressed or moved
 operation and every later one stale, and generation regenerates only those. Opening an
 operation or a tool shows the editor: a Fields tab with an input for every value and a JSON
-tab with the same draft as text, both applied through `cam.operation.set`.
+tab with the same draft as text, both applied through `cam.operation.set`. Setups run in sequence: a later setup starts from the
+stock the earlier ones left (turned over exactly along the tool axis, two-sided per column),
+`flip` turns its origin to the new top corner, rest machining sees the earlier cuts, and its
+chain depends on the earlier setup's.
 
 Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image
 (grey-level) laser engraving, drag-to-reorder in the Browser, CAM

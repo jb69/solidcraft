@@ -79,6 +79,16 @@ pub enum Target {
     Canvas {
         id: u64,
     },
+    /// A manufacturing setup, operation or tool in the browser's Manufacture folder.
+    CamSetup {
+        id: u64,
+    },
+    CamOperation {
+        id: u64,
+    },
+    CamTool {
+        id: u64,
+    },
     /// The Section Analysis in the browser's Analysis folder.
     Section,
     /// A component's Bodies, Sketches or Construction folder, under the design (`scope` `c0`)
@@ -367,6 +377,9 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
         Target::Group { id, scope } => crate::browser::group_items(app, *id, scope),
         Target::Folder { component, folder, scope } => crate::browser::folder_items(app, *component, folder, scope),
         Target::Canvas { id } => crate::browser::canvas_items(app, *id),
+        Target::CamSetup { id } => crate::browser::cam::setup_items(app, *id),
+        Target::CamOperation { id } => crate::browser::cam::operation_items(app, *id),
+        Target::CamTool { id } => crate::browser::cam::tool_items(app, *id),
         Target::Origin => crate::browser::origin_items(app),
         Target::NamedViews => vec![act("ui.newView", "New Named View", "perspective")],
         Target::Section => crate::browser::section_items(app),
@@ -1212,6 +1225,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
             }
         }
         "ui.newView" => drop(crate::browser::save_view(app, None)),
+        "ui.camEdit" | "ui.camEditTool" | "ui.camPost" => crate::browser::cam::run_action(app, &item.id, &p),
         "ui.restoreView" => {
             if let Some(v) = p.get("view").and_then(Value::as_str) {
                 crate::browser::restore_view(app, v);
@@ -2100,11 +2114,19 @@ mod manufacture_tests {
         h.step(&json!({"click":{"handle":"workspace:menu:manufacture"}})).unwrap();
         assert!(crate::manufacture_workspace::active(&h.app));
         assert_eq!(crate::workspace::visible_tabs(&h.app), vec!["MANUFACTURE"]);
-        for panel in ["SETUP", "OPERATIONS", "TOOLPATHS", "INSPECT"] {
-            assert!(crate::workspace::panels("MANUFACTURE").contains(&panel));
+        for panel in ["SETUP", "2D MILLING", "3D MILLING", "DRILLING", "MULTI-AXIS", "TURNING", "LASER", "TOOLPATHS", "INSPECT"] {
+            assert!(crate::workspace::panels("MANUFACTURE").contains(&panel), "{panel}");
+        }
+        // Every operation kind has a button on one of the category panels.
+        for kind in solidcraft_engine::cam::ops::OpKind::NAMES {
+            let id = format!("cam.operation.{kind}");
+            let spec = solidcraft_engine::find_command(&id).unwrap_or_else(|| panic!("{id}"));
+            let (tab, panel) = crate::workspace::destination(spec).unwrap();
+            assert_eq!(tab, "MANUFACTURE", "{id}");
+            assert!(matches!(panel, "2D MILLING" | "3D MILLING" | "DRILLING" | "MULTI-AXIS" | "TURNING" | "LASER"), "{id} on {panel}");
         }
         // The CAM commands sit on that tab and nowhere in the design tabs.
-        for id in ["cam.tool.add", "cam.setup.create", "cam.operation.add", "cam.generate", "cam.simulate.show", "cam.post", "cam.inspect"] {
+        for id in ["cam.tool.add", "cam.setup.create", "cam.operation.face", "cam.generate", "cam.simulate.show", "cam.post", "cam.inspect"] {
             let spec = solidcraft_engine::find_command(id).unwrap();
             assert_eq!(crate::workspace::destination(spec).map(|(t, _)| t), Some("MANUFACTURE"), "{id}");
         }
@@ -2112,6 +2134,11 @@ mod manufacture_tests {
         h.app.start("cam.tool.add");
         assert!(h.app.ui.palette_open);
         assert!(h.app.sbox.text.starts_with("cam.tool.add {"));
+        h.app.ui.palette_open = false;
+        h.app.start("cam.operation.slot");
+        assert!(h.app.sbox.text.starts_with("cam.operation.slot {") && h.app.sbox.text.contains("\"width\""), "{}", h.app.sbox.text);
+        h.app.start("cam.operation.tap");
+        assert!(h.app.sbox.text.contains("\"cycle\":\"tap\"") && h.app.sbox.text.contains("\"pitch\""), "{}", h.app.sbox.text);
         h.app.ui.palette_open = false;
         // A simulation shown by a script marks the workspace current; leaving ends it.
         let tool = h.app.run("cam.tool.add", json!({"name": "6 mm flat", "kind": "flat", "diameter": 6})).unwrap()["id"].clone();
@@ -2126,6 +2153,17 @@ mod manufacture_tests {
         assert!(!crate::manufacture_workspace::active(&h.app));
         assert!(h.app.session.cam.preview.is_none());
         assert_eq!(h.app.ui.tab, "MODEL");
+        // The browser lists the setup and its operations in order as a Manufacture folder,
+        // with menus to regenerate, reorder, duplicate, suppress and delete.
+        h.frames(2);
+        let rows: Vec<String> = crate::browser::drawn_rows().into_iter().map(|r| r.0).collect();
+        assert!(rows.iter().any(|r| r == "Manufacture"), "{rows:?}");
+        assert!(rows.iter().any(|r| r.starts_with("1. ")), "{rows:?}");
+        let op_id = h.app.session.doc.manufacture.setups[0].operations[0].id;
+        let ids: Vec<String> = items(&h.app, &Target::CamOperation { id: op_id }).into_iter().map(|i| i.id).collect();
+        for id in ["ui.camEdit", "cam.generate", "cam.simulate.show", "cam.operation.move", "cam.operation.duplicate", "cam.operation.set", "cam.operation.remove"] {
+            assert!(ids.iter().any(|i| i == id), "{id} in {ids:?}");
+        }
         // Shown again from the design tabs, the preview brings the workspace with it.
         h.app.run("cam.simulate.show", json!({"progress": 0.25})).unwrap();
         h.frames(2);

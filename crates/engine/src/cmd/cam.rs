@@ -35,8 +35,10 @@ pub struct Generated {
     /// The operation frame relative to the WCS.
     pub frame: Frame,
     pub setup: u64,
-    /// The session's geometry revision the toolpath was generated at (a later one may be stale).
-    pub revision: u64,
+    /// The operation's signature when it was generated: its own definition, its tool, its
+    /// setup, the model's geometry revision and the signatures of every operation before it in
+    /// the setup. A different signature now means the toolpath is stale (see `signatures`).
+    pub signature: u64,
 }
 
 /// What `cam.generate` left in the session, and the simulation preview the viewport draws.
@@ -78,7 +80,116 @@ pub struct CamPreview {
     pub hide_model: bool,
 }
 
+/// A command for one operation kind: `cam.operation.<kind>` runs `cam.operation.add` with
+/// `type` set, so the ribbon has a button per kind.
+macro_rules! op_kind_cmd {
+    ($f:ident, $kind:literal) => {
+        fn $f(s: &mut Session, p: &Value) -> Result<Value> {
+            let mut p = p.clone();
+            if let Value::Object(o) = &mut p {
+                o.insert("type".into(), json!($kind));
+            }
+            operation_add(s, &p)
+        }
+    };
+    ($f:ident, $kind:literal, $($k:literal => $v:expr),+) => {
+        fn $f(s: &mut Session, p: &Value) -> Result<Value> {
+            let mut p = p.clone();
+            if let Value::Object(o) = &mut p {
+                o.insert("type".into(), json!($kind));
+                $( o.entry($k).or_insert(json!($v)); )+
+            }
+            operation_add(s, &p)
+        }
+    };
+}
+op_kind_cmd!(op_face, "face");
+op_kind_cmd!(op_pocket2d, "pocket2d");
+op_kind_cmd!(op_adaptive2d, "adaptive2d");
+op_kind_cmd!(op_contour2d, "contour2d");
+op_kind_cmd!(op_slot, "slot");
+op_kind_cmd!(op_trace, "trace");
+op_kind_cmd!(op_engrave, "engrave");
+op_kind_cmd!(op_chamfer2d, "chamfer2d");
+op_kind_cmd!(op_bore, "bore");
+op_kind_cmd!(op_circular, "circular");
+op_kind_cmd!(op_thread, "thread");
+op_kind_cmd!(op_drill, "drill");
+op_kind_cmd!(op_tap, "drill", "cycle" => "tap");
+op_kind_cmd!(op_pocket3d, "pocket3d");
+op_kind_cmd!(op_adaptive3d, "adaptive3d");
+op_kind_cmd!(op_parallel, "parallel");
+op_kind_cmd!(op_contour3d, "contour3d");
+op_kind_cmd!(op_steep_shallow, "steep_shallow");
+op_kind_cmd!(op_scallop, "scallop");
+op_kind_cmd!(op_pencil, "pencil");
+op_kind_cmd!(op_horizontal, "horizontal");
+op_kind_cmd!(op_spiral, "spiral");
+op_kind_cmd!(op_radial, "radial");
+op_kind_cmd!(op_morphed_spiral, "morphed_spiral");
+op_kind_cmd!(op_project, "project");
+op_kind_cmd!(op_morph, "morph");
+op_kind_cmd!(op_rotary, "rotary");
+op_kind_cmd!(op_swarf, "swarf");
+op_kind_cmd!(op_multi_axis_contour, "multi_axis_contour");
+op_kind_cmd!(op_flow, "flow");
+op_kind_cmd!(op_laser_cut, "laser_cut");
+op_kind_cmd!(op_laser_engrave, "laser_engrave");
+op_kind_cmd!(op_turn_face, "turn_face");
+op_kind_cmd!(op_turn_profile, "turn_profile");
+op_kind_cmd!(op_turn_groove, "turn_groove");
+op_kind_cmd!(op_turn_thread, "turn_thread");
+
+const OP_PARAMS: &str = "setup?: id (default the only setup); tool?: id (default the library's first tool); the kind's parameters and the common ones of cam.operation.add (name, geometry, heights, linking, tolerance, stock_to_leave_*, orientation): adds an operation of this kind. cam.operation.kinds {type} lists its parameters and defaults";
+
+fn not_built(s: &Session) -> std::result::Result<(), String> {
+    let _ = s;
+    Err("not built yet".into())
+}
+fn not_built_run(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(EngineError::Other("not built yet".into()))
+}
+
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("cam.operation.face", "Face", op_face).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.pocket2d", "2D Pocket", op_pocket2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.adaptive2d", "2D Adaptive", op_adaptive2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.contour2d", "2D Contour", op_contour2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.slot", "Slot", op_slot).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.trace", "Trace", op_trace).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.engrave", "Engrave", op_engrave).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.chamfer2d", "2D Chamfer", op_chamfer2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.bore", "Bore", op_bore).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.circular", "Circular", op_circular).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.thread", "Thread Mill", op_thread).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.drill", "Drill", op_drill).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.tap", "Tap", op_tap).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.pocket3d", "3D Pocket", op_pocket3d).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.adaptive3d", "3D Adaptive", op_adaptive3d).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.parallel", "Parallel", op_parallel).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.contour3d", "3D Contour", op_contour3d).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.steep_shallow", "Steep and Shallow", op_steep_shallow).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.scallop", "Scallop", op_scallop).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.pencil", "Pencil", op_pencil).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.horizontal", "Horizontal", op_horizontal).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.spiral", "Spiral", op_spiral).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.radial", "Radial", op_radial).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.morphed_spiral", "Morphed Spiral", op_morphed_spiral).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.project", "Project", op_project).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.morph", "Morph", op_morph).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.ramp", "Ramp", not_built_run).at("MANUFACTURE", "3D MILLING").icon("cam").enabled(not_built).params("not built yet: waterline finishing that ramps between levels"),
+    CommandSpec::new("cam.operation.geodesic", "Geodesic", not_built_run).at("MANUFACTURE", "3D MILLING").icon("cam").enabled(not_built).params("not built yet: passes at constant geodesic distance over free-form surfaces and undercuts"),
+    CommandSpec::new("cam.operation.rotary", "Rotary", op_rotary).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.swarf", "Swarf", op_swarf).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.multi_axis_contour", "Multi-Axis Contour", op_multi_axis_contour).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.flow", "Flow", op_flow).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.multi_axis_blend", "Multi-Axis Blend", not_built_run).at("MANUFACTURE", "MULTI-AXIS").icon("cam").enabled(not_built).params("not built yet: surface-normal passes blended between two boundaries"),
+    CommandSpec::new("cam.operation.turn_face", "Turn Face", op_turn_face).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.turn_profile", "Turn Profile", op_turn_profile).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.turn_groove", "Turn Groove", op_turn_groove).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.turn_thread", "Turn Thread", op_turn_thread).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.laser_cut", "Laser Cut", op_laser_cut).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.laser_engrave", "Laser Engrave", op_laser_engrave).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
     CommandSpec::new("cam.tool.add", "Add Tool", tool_add).at("MANUFACTURE", "SETUP")
         .icon("cam")
         .params("name; kind: flat | ball | bull | chamfer | drill | spot | tapered_ball; diameter (mm); corner_radius? (bull); tip_angle_deg? (chamfer, drill, spot; default 90 / 118); tip_radius? and taper_angle_deg? (tapered_ball); number? (T word); flute_length?, overall_length?, shank_diameter?, holder_diameter?, flutes?; feeds?: {spindle_rpm, cutting, plunge, ramp, lead_in, lead_out, retract, clockwise, coolant: flood | mist | air | through_tool | off}: adds a tool to the design's library. Returns the tool with its id"),
@@ -99,16 +210,20 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("cam")
         .params("setup: id; machine: a preset (cam.machine.list: three_axis … carvera, carvera_air, z1, each with a _4axis variant) or a full machine object; tcp?: bool (the control has tool-centre-point control); rapid_feed?; linearisation_tolerance?; max_rotary_step_deg?; limits?: {A: [min,max], C: [min,max]}: sets the setup's machine"),
     CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists the machine presets").noundo(),
-    CommandSpec::new("cam.operation.add", "Add Operation", operation_add).at("MANUFACTURE", "OPERATIONS")
+    CommandSpec::new("cam.operation.add", "Add Operation", operation_add)
         .icon("cam")
         .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
     CommandSpec::new("cam.operation.set", "Edit Operation", operation_set).icon("cam").params("operation: id; any cam.operation.add field (type included): changes an operation; cam.generate again afterwards"),
     CommandSpec::new("cam.operation.remove", "Remove Operation", operation_remove).icon("cam").params("operation: id"),
+    CommandSpec::new("cam.operation.move", "Move Operation", operation_move)
+        .icon("cam")
+        .params("operation: id; to?: index in its setup | before?: operation id | after?: operation id | up?: true | down?: true: reorders the setup's operations. Operations are parametric steps: each depends on the ones before it (rest machining sees their stock), so the moved one and those after it go stale"),
+    CommandSpec::new("cam.operation.duplicate", "Duplicate Operation", operation_duplicate).icon("cam").params("operation: id: a copy right after it, named \"<name> (copy)\""),
     CommandSpec::new("cam.operation.list", "Operations", operation_list).icon("cam").params("setup?: id: the operations with their status").noundo(),
-    CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "OPERATIONS").icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
+    CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "INSPECT").icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
     CommandSpec::new("cam.generate", "Generate Toolpaths", generate).at("MANUFACTURE", "TOOLPATHS")
         .icon("cam")
-        .params("setup?: id (default every setup); operation?: id (just that one): computes the toolpaths of the enabled operations in order, simulating the stock as it goes for rest machining. Returns each operation's notice (status, values such as time_s and cutting_length_mm, issues with codes such as no_toolpath, tool_too_large, tool_too_short, below_bottom, tilt_limit) and the setup totals")
+        .params("setup?: id (default every setup); operation?: id (just that one); all?: bool (regenerate every operation, not only the stale ones): computes the toolpaths of the enabled operations in order, simulating the stock as it goes for rest machining. Returns each operation's notice (status, values such as time_s and cutting_length_mm, issues with codes such as no_toolpath, tool_too_large, tool_too_short, below_bottom, tilt_limit) and the setup totals")
         .noundo(),
     CommandSpec::new("cam.toolpath", "Toolpath", toolpath)
         .icon("cam")
@@ -188,11 +303,12 @@ fn tool_kind(p: &Value, cmd: &str, current: Option<ToolKind>) -> Result<ToolKind
         "chamfer" => ToolKind::Chamfer { tip_angle_deg: tip(90.0) },
         "drill" => ToolKind::Drill { tip_angle_deg: tip(118.0) },
         "spot" | "spot_drill" | "center_drill" | "centre_drill" => ToolKind::SpotDrill { tip_angle_deg: tip(90.0) },
+        "laser" | "laser_beam" | "diode" => ToolKind::Laser { wavelength_nm: num(p, "wavelength_nm").unwrap_or(445.0) },
         "tapered_ball" | "taper_ball" | "tapered" => ToolKind::TaperedBall {
             tip_radius: num(p, "tip_radius").ok_or_else(|| bad(cmd, "a tapered ball tool needs `tip_radius`"))?,
             taper_angle_deg: num(p, "taper_angle_deg").unwrap_or(5.0),
         },
-        other => return Err(bad(cmd, format!("unknown tool kind `{other}`: flat | ball | bull | chamfer | drill | spot | tapered_ball"))),
+        other => return Err(bad(cmd, format!("unknown tool kind `{other}`: flat | ball | bull | chamfer | drill | spot | tapered_ball | laser"))),
     })
 }
 
@@ -498,7 +614,7 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
 fn machine_list(_s: &mut Session, _p: &Value) -> Result<Value> {
     let presets: Vec<(&str, cam::machine::Machine)> = cam::machine::Machine::PRESETS.iter().filter_map(|id| cam::machine::Machine::preset(id).map(|m| (*id, m))).collect();
     Ok(
-        json!({"machines": presets.iter().map(|(id, m)| json!({"preset": id, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS}),
+        json!({"machines": presets.iter().map(|(id, m)| json!({"preset": id, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "laser": m.laser, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS}),
     )
 }
 
@@ -532,11 +648,29 @@ fn operation_from(p: &Value, cmd: &str, base: Value, setup: &Setup, tools: &cam:
     let ty = ty.trim().to_ascii_lowercase().replace(['-', ' '], "_");
     let ty = match ty.as_str() {
         "pocket" | "2d_pocket" | "pocket_2d" => "pocket2d".to_string(),
-        "contour" | "2d_contour" | "contour_2d" | "profile" | "slot" | "trace" => "contour2d".to_string(),
-        "adaptive" | "2d_adaptive" | "adaptive_2d" => "adaptive2d".to_string(),
-        "chamfer" | "2d_chamfer" => "chamfer2d".to_string(),
-        "3d_pocket" | "pocket_3d" | "adaptive_clearing" | "3d_adaptive" | "roughing" | "rough" => "pocket3d".to_string(),
-        "3d_contour" | "contour_3d" | "waterline" => "contour3d".to_string(),
+        "contour" | "2d_contour" | "contour_2d" | "profile" => "contour2d".to_string(),
+        "adaptive" | "2d_adaptive" | "adaptive_2d" | "dynamic_mill" => "adaptive2d".to_string(),
+        "chamfer" | "2d_chamfer" | "deburr" => "chamfer2d".to_string(),
+        "slot_mill" | "peel_mill" => "slot".to_string(),
+        "vcarve" | "v_carve" | "engraving" => "engrave".to_string(),
+        "helix" | "helical_bore" | "boring" => "bore".to_string(),
+        "circle" | "circle_mill" | "circular_pocket" | "counterbore" => "circular".to_string(),
+        "thread_mill" | "thread_milling" | "threading" => "thread".to_string(),
+        "drilling" | "hole" | "holes" => "drill".to_string(),
+        "3d_pocket" | "pocket_3d" | "pocket_clearing" | "offset_roughing" | "roughing" | "rough" => "pocket3d".to_string(),
+        "adaptive_clearing" | "3d_adaptive" | "adaptive_3d" | "adaptive_roughing" | "optirough" => "adaptive3d".to_string(),
+        "3d_contour" | "contour_3d" | "waterline" | "z_level" => "contour3d".to_string(),
+        "flat" | "flat_areas" | "flats" => "horizontal".to_string(),
+        "blend" | "morph_between" => "morph".to_string(),
+        "projection" | "curve_projection" => "project".to_string(),
+        "flowline" | "5axis_flow" => "flow".to_string(),
+        "flank" | "flank_milling" => "swarf".to_string(),
+        "laser" | "laser_cutting" | "cut_laser" => "laser_cut".to_string(),
+        "laser_engraving" | "laser_mark" | "laser_raster" | "engrave_laser" => "laser_engrave".to_string(),
+        "face_turning" | "turning_face" => "turn_face".to_string(),
+        "turning" | "turn" | "od_turning" | "profile_turning" | "turning_profile" => "turn_profile".to_string(),
+        "grooving" | "groove" | "turning_groove" | "part_off" => "turn_groove".to_string(),
+        "thread_turning" | "turning_thread" | "threading_turn" | "lathe_thread" => "turn_thread".to_string(),
         "morph_spiral" | "morphedspiral" => "morphed_spiral".to_string(),
         "steep_and_shallow" | "steepshallow" => "steep_shallow".to_string(),
         "multiaxis_contour" | "multi_axis" | "5axis_contour" => "multi_axis_contour".to_string(),
@@ -616,6 +750,13 @@ fn operation_from(p: &Value, cmd: &str, base: Value, setup: &Setup, tools: &cam:
     }
     let op: Operation = serde_json::from_value(v).map_err(|e| bad(cmd, format!("operation fields: {e}")))?;
     let tool = tools.get(op.tool).ok_or_else(|| bad(cmd, format!("no tool {} (cam.tool.list)", op.tool)))?;
+    let laser_op = matches!(op.kind, OpKind::LaserCut { .. } | OpKind::LaserEngrave { .. });
+    if laser_op && !tool.is_laser() {
+        return Err(bad(cmd, format!("a {} operation needs a laser tool (kind: laser); T{} {} is a cutter", op.kind.type_name(), tool.number, tool.name)));
+    }
+    if !laser_op && tool.is_laser() {
+        return Err(bad(cmd, format!("a {} operation needs a cutter; T{} {} is a laser", op.kind.type_name(), tool.number, tool.name)));
+    }
     if !(op.tolerance.is_finite() && op.tolerance > 0.0 && op.tolerance <= 10.0) {
         return Err(bad(cmd, "`tolerance` must be between 0 and 10 mm"));
     }
@@ -729,7 +870,7 @@ fn operation_brief(s: &Session, st: &Setup, o: &Operation) -> Value {
         "axes": o.kind.axes(),
         "setup": st.id,
         "generated": made.is_some(),
-        "stale": made.is_some_and(|g| g.revision != s.geometry_revision),
+        "stale": made.is_some_and(|g| is_stale(s, st, o.id, g)),
         "status": made.map_or("not generated", |g| g.notice.status()),
     })
 }
@@ -744,7 +885,7 @@ fn operation_json(s: &Session, st: &Setup, o: &Operation, issues: &[Issue]) -> V
         n.issue(i.clone());
     }
     if let Some(g) = s.cam.operations.get(&o.id) {
-        v["generated"] = json!({"stale": g.revision != s.geometry_revision, "notice": g.notice.to_json()});
+        v["generated"] = json!({"stale": is_stale(s, st, o.id, g), "notice": g.notice.to_json()});
     }
     v["notice"] = n.to_json();
     v
@@ -752,14 +893,14 @@ fn operation_json(s: &Session, st: &Setup, o: &Operation, issues: &[Issue]) -> V
 
 fn operation_add(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.operation.add";
-    let setup_id = id_param(p, "setup", cmd)?;
+    let setup_id = setup_param(s, p, cmd)?;
     let st = s.doc.manufacture.setup(setup_id).cloned().ok_or_else(|| bad(cmd, format!("no setup {setup_id} (cam.setup.create)")))?;
     if st.operations.len() >= 500 {
         return Err(bad(cmd, "a setup holds at most 500 operations"));
     }
     let ty = str_(p, "type").unwrap_or("pocket2d");
     let base = json!({
-        "id": 0, "name": format!("{} {}", ty, st.operations.len() + 1), "enabled": true, "tool": p.get("tool").cloned().unwrap_or(Value::Null),
+        "id": 0, "name": format!("{} {}", ty, st.operations.len() + 1), "enabled": true, "tool": p.get("tool").cloned().or_else(|| s.doc.manufacture.tools.tools.first().map(|t| json!(t.id))).unwrap_or(Value::Null),
         "geometry": {"source": "stock"}, "heights": cam::linking::Heights::default(), "linking": cam::linking::Linking::default(),
         "tolerance": 0.01, "stock_to_leave_radial": 0.0, "stock_to_leave_axial": 0.0, "rest_machining": false, "type": "__new__",
     });
@@ -780,12 +921,109 @@ fn operation_set(s: &mut Session, p: &Value) -> Result<Value> {
     let base = serde_json::to_value(&current).map_err(|e| EngineError::Other(e.to_string()))?;
     let (mut op, issues) = operation_from(p, cmd, base, &st, &s.doc.manufacture.tools)?;
     op.id = id;
-    s.cam.operations.remove(&id);
+    // The old toolpath stays until the next generate: its signature no longer matches, so it
+    // (and every operation after it) shows as stale rather than missing.
     let out = operation_json(s, &st, &op, &issues);
     if let Some(slot) = s.doc_mut().manufacture.operation_mut(id) {
         *slot = op;
     }
     Ok(out)
+}
+
+/// The chained signatures of a setup's operations, in order: each hashes the operation's
+/// definition, its tool, the setup (bodies, fixtures, WCS, stock, machine), the model's
+/// geometry revision and the signature of the operation before it. Changing an operation,
+/// its tool, the setup or the model, or reordering, changes its signature and every one after.
+pub fn signatures(s: &Session, st: &Setup) -> Vec<(u64, u64)> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.geometry_revision.hash(&mut h);
+    for part in [
+        serde_json::to_string(&st.bodies),
+        serde_json::to_string(&st.fixtures),
+        serde_json::to_string(&st.wcs),
+        serde_json::to_string(&st.stock),
+        serde_json::to_string(&st.machine),
+    ] {
+        part.unwrap_or_default().hash(&mut h);
+    }
+    let mut prev = h.finish();
+    let mut out = Vec::with_capacity(st.operations.len());
+    for op in &st.operations {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        prev.hash(&mut h);
+        serde_json::to_string(op).unwrap_or_default().hash(&mut h);
+        serde_json::to_string(&s.doc.manufacture.tools.get(op.tool)).unwrap_or_default().hash(&mut h);
+        prev = h.finish();
+        out.push((op.id, prev));
+    }
+    out
+}
+
+/// Whether an operation's toolpath is stale: its signature now differs from the one it was
+/// generated with.
+fn is_stale(s: &Session, st: &Setup, op: u64, g: &Generated) -> bool {
+    signatures(s, st).iter().find(|(id, _)| *id == op).is_none_or(|(_, sig)| *sig != g.signature)
+}
+
+fn operation_move(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.operation.move";
+    let id = id_param(p, "operation", cmd)?;
+    let (setup_id, from, n) = s
+        .doc
+        .manufacture
+        .setups
+        .iter()
+        .find_map(|st| st.operations.iter().position(|o| o.id == id).map(|i| (st.id, i, st.operations.len())))
+        .ok_or_else(|| bad(cmd, format!("no operation {id}")))?;
+    let st_ops: Vec<u64> = s.doc.manufacture.setup(setup_id).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
+    let pos_of = |other: u64| st_ops.iter().position(|o| *o == other).ok_or_else(|| bad(cmd, format!("operation {other} is not in the same setup")));
+    let to = if let Some(i) = p.get("to").and_then(Value::as_u64) {
+        (i as usize).min(n - 1)
+    } else if let Some(b) = p.get("before").and_then(Value::as_u64) {
+        let t = pos_of(b)?;
+        if t > from { t - 1 } else { t }
+    } else if let Some(a) = p.get("after").and_then(Value::as_u64) {
+        let t = pos_of(a)?;
+        if t >= from { t } else { t + 1 }
+    } else if bool_(p, "up").unwrap_or(false) {
+        from.saturating_sub(1)
+    } else if bool_(p, "down").unwrap_or(false) {
+        (from + 1).min(n - 1)
+    } else {
+        return Err(bad(cmd, "say where: to (index), before or after (an operation id), up or down"));
+    };
+    if to != from
+        && let Some(st) = s.doc_mut().manufacture.setup_mut(setup_id)
+    {
+        let op = st.operations.remove(from);
+        st.operations.insert(to, op);
+    }
+    let order: Vec<u64> = s.doc.manufacture.setup(setup_id).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
+    let stale_from = from.min(to);
+    Ok(json!({"operation": id, "setup": setup_id, "index": to, "order": order, "stale_from_index": stale_from, "hint": "the moved operation and every one after its old and new places regenerate on the next cam.generate"}))
+}
+
+fn operation_duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.operation.duplicate";
+    let id = id_param(p, "operation", cmd)?;
+    let (setup_id, idx, mut op) = s
+        .doc
+        .manufacture
+        .setups
+        .iter()
+        .find_map(|st| st.operations.iter().position(|o| o.id == id).map(|i| (st.id, i, st.operations[i].clone())))
+        .ok_or_else(|| bad(cmd, format!("no operation {id}")))?;
+    op.id = s.doc_mut().manufacture.next_id();
+    op.name = format!("{} (copy)", op.name);
+    let new_id = op.id;
+    if let Some(st) = s.doc_mut().manufacture.setup_mut(setup_id) {
+        if st.operations.len() >= 500 {
+            return Err(bad(cmd, "a setup holds at most 500 operations"));
+        }
+        st.operations.insert(idx + 1, op);
+    }
+    Ok(json!({"operation": new_id, "setup": setup_id, "index": idx + 1}))
 }
 
 fn operation_remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -859,6 +1097,19 @@ fn kind_description(name: &str) -> &'static str {
         "chamfer2d" => "a chamfer along loops with a chamfer mill",
         "drill" => "drilling cycles at holes (geometry: holes with points or cylindrical faces)",
         "bore" => "helical boring of round holes with an end mill",
+        "slot" => "a slot along curves: the tool centre on the curve, offset passes across a wider slot (geometry: sketch, loops or faces)",
+        "trace" => "the tool centre follows the curves to the bottom height in depth passes (geometry: sketch, loops or faces)",
+        "engrave" => "a V tool's tip follows the curves; width sets the depth from the tool's angle",
+        "circular" => "circular milling of round holes larger than the tool: helix in, concentric circles out to the wall",
+        "thread" => "thread milling: a helix of the pitch up the hole (or round a boss when external) in radial passes (geometry: holes with the major diameter)",
+        "adaptive3d" => "3D adaptive clearing: Z-level roughing with engagement-controlled rings and trochoids at each level",
+        "morph" => "3-axis passes morphed between two rails, following the surface (geometry: rails)",
+        "laser_cut" => "laser cutting along curves with the kerf offset to a side, in passes (a laser tool; geometry: sketch, loops or faces)",
+        "laser_engrave" => "laser engraving: raster fill of the regions inside the loops, then their outline (a laser tool)",
+        "turn_face" => "turning on the rotary axis: faces the part's end back to a position (4-axis machine)",
+        "turn_profile" => "turning on the rotary axis: the model's profile along the axis, all the way round (4-axis machine)",
+        "turn_groove" => "turning on the rotary axis: a groove at a position, of a width and depth (4-axis machine)",
+        "turn_thread" => "turning on the rotary axis: a thread of a pitch over a length, in passes; the tool's form is the thread's (4-axis machine)",
         "pocket3d" => "Z-level roughing between the stock and the model surface, with flat-area levels and rest machining",
         "parallel" => "parallel finishing passes following the surface",
         "contour3d" => "waterline finishing: the surface's level contours at each stepdown",
@@ -874,7 +1125,6 @@ fn kind_description(name: &str) -> &'static str {
         "swarf" => "5-axis: the side of the tool along a wall between a bottom and a top chain (geometry: chains)",
         "multi_axis_contour" => "5-axis: parallel passes with the tool axis on the surface normal, leaned by lead and tilt",
         "flow" => "5-axis: passes morphed between two rails, surface-normal (geometry: rails)",
-        "thread" => "thread milling (not built yet)",
         _ => "",
     }
 }
@@ -1267,7 +1517,7 @@ fn generate_one(
             .suggest(json!({"command": "cam.machine.set", "machine": if op.kind.axes() == 4 { "four_axis_a" } else { "trunnion_ac" }})),
         );
     }
-    Ok(Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup: st.id, revision: s.geometry_revision })
+    Ok(Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup: st.id, signature: 0 })
 }
 
 fn generate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1298,6 +1548,9 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out_setups = Vec::new();
     let mut total_time = 0.0;
     let mut worst = "ok";
+    let all = bool_(p, "all").unwrap_or(false);
+    let mut regenerated = 0usize;
+    let mut reused = 0usize;
     for st in &setups {
         let tol = st.operations.iter().filter(|o| o.enabled).map(|o| o.tolerance).fold(0.05, f64::min).max(0.002);
         let meshes = setup_meshes(s, st, tol, false)?;
@@ -1313,14 +1566,49 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
         let mut stock_map =
             stock_shape.as_ref().and_then(|sh| cam::simulate::stock_cell(sh, 0.1).ok().and_then(|c| cam::simulate::StockMap::new(sh, c).ok()));
         let mut ops_out = Vec::new();
+        let sigs = signatures(s, st);
         for op in &st.operations {
+            let sig = sigs.iter().find(|(id, _)| *id == op.id).map_or(0, |x| x.1);
+            let cached = s.cam.operations.get(&op.id).cloned();
             if only_op.is_some_and(|id| id != op.id) {
+                // Another operation of the setup: its toolpath still removes stock for the ones
+                // after it (rest machining), so sweep it if it was generated.
+                if op.enabled
+                    && let (Some(sm), Some(g), Some(tool)) = (stock_map.as_mut(), cached.as_ref(), s.doc.manufacture.tools.get(op.tool))
+                    && op.orientation.is_none()
+                {
+                    let _ = cam::simulate::simulate(sm, tool, &g.toolpath, None, None, None, None, 0.05);
+                }
                 continue;
             }
             if !op.enabled {
                 ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "status": "disabled"}));
                 continue;
             }
+            // Parametric: an operation whose signature (its definition, tool, setup, the model
+            // and every operation before it) is unchanged keeps its toolpath.
+            if !all
+                && only_op.is_none()
+                && let Some(g) = cached.as_ref().filter(|g| g.signature == sig)
+            {
+                if let Some(sm) = stock_map.as_mut()
+                    && op.orientation.is_none()
+                    && let Some(tool) = s.doc.manufacture.tools.get(op.tool)
+                {
+                    let _ = cam::simulate::simulate(sm, tool, &g.toolpath, None, None, None, None, 0.05);
+                }
+                total_time += g.stats.time_s;
+                if g.notice.status() == "error" || (g.notice.status() == "warning" && worst == "ok") {
+                    worst = g.notice.status();
+                }
+                reused += 1;
+                ops_out.push(json!({
+                    "id": op.id, "name": op.name, "type": op.kind.type_name(), "tool": op.tool,
+                    "status": g.notice.status(), "notice": g.notice.to_json(), "stats": g.stats, "reused": true,
+                }));
+                continue;
+            }
+            regenerated += 1;
             let mut g = match generate_one(s, st, op, &meshes, &fixtures, model_bounds, stock_map.as_ref()) {
                 Ok(g) => g,
                 Err(e) => {
@@ -1332,7 +1620,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                         stats: ToolpathStats::default(),
                         frame: op.orientation.unwrap_or(Frame::IDENTITY),
                         setup: st.id,
-                        revision: s.geometry_revision,
+                        signature: 0,
                     }
                 }
             };
@@ -1357,6 +1645,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                 "id": op.id, "name": op.name, "type": op.kind.type_name(), "tool": op.tool,
                 "status": g.notice.status(), "notice": g.notice.to_json(), "stats": g.stats,
             }));
+            g.signature = sig;
             s.cam.operations.insert(op.id, Arc::new(g));
         }
         setup_notice.value("time_s", r3(ops_out.iter().filter_map(|o| o["stats"]["time_s"].as_f64()).sum::<f64>()));
@@ -1366,7 +1655,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
         out_setups.push(json!({"id": st.id, "name": st.name, "operations": ops_out, "notice": setup_notice.to_json()}));
     }
     Ok(
-        json!({"setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": s.geometry_revision, "hint": "cam.notices lists every operation's report; cam.simulate checks the stock; cam.post writes the G-code"}),
+        json!({"setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": s.geometry_revision, "regenerated": regenerated, "reused": reused, "hint": "cam.notices lists every operation's report; cam.simulate checks the stock; cam.post writes the G-code"}),
     )
 }
 
@@ -1408,7 +1697,7 @@ fn toolpath(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "operation": id, "coordinates": if design { "design" } else { "wcs" }, "total": g.toolpath.len(), "offset": offset, "returned": moves.len(),
         "format": "[kind, x, y, z, feed_mm_min] plus [ax, ay, az] on every move when the toolpath tilts the tool",
-        "moves": moves, "bounds": bounds, "stats": g.stats, "cycles": g.toolpath.cycles.len(), "stale": g.revision != s.geometry_revision,
+        "moves": moves, "bounds": bounds, "stats": g.stats, "cycles": g.toolpath.cycles.len(), "stale": s.doc.manufacture.operation(id).is_none_or(|(st, _)| is_stale(s, st, id, &g)),
     }))
 }
 
@@ -1452,7 +1741,7 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
         total.checked_moves += rep.checked_moves;
         total.gouge_cells = total.gouge_cells.max(rep.gouge_cells);
         total.gouge_max_mm = total.gouge_max_mm.max(rep.gouge_max_mm);
-        ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "report": rep, "notice": rep.notice().to_json(), "stale": g.revision != s.geometry_revision}));
+        ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "report": rep, "notice": rep.notice().to_json(), "stale": is_stale(s, &st, op.id, &g)}));
     }
     // Final rest and gouges from the finished stock.
     let final_rep = cam::simulate::simulate(
@@ -1508,11 +1797,15 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     let program = str_(p, "program").map(str::to_string).unwrap_or_else(|| if st.program.is_empty() { st.name.clone() } else { st.program.clone() });
     let mut missing = Vec::new();
     let mut held: Vec<(String, Tool, Arc<Toolpath>)> = Vec::new();
+    let mut stale = Vec::new();
     for op in st.operations.iter().filter(|o| o.enabled) {
         let Some(g) = s.cam.operations.get(&op.id).cloned() else {
             missing.push(op.id);
             continue;
         };
+        if is_stale(s, &st, op.id, &g) {
+            stale.push(op.name.clone());
+        }
         let tool = s.doc.manufacture.tools.get(op.tool).cloned().ok_or_else(|| bad(cmd, format!("operation {} uses a missing tool", op.id)))?;
         held.push((op.name.clone(), tool, g.toolpath.clone()));
     }
@@ -1526,6 +1819,12 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     if !missing.is_empty() {
         notice.issue(
             Issue::warning("not_generated", format!("{} operation(s) were left out: no toolpath yet", missing.len()))
+                .suggest(json!({"command": "cam.generate", "setup": id})),
+        );
+    }
+    if !stale.is_empty() {
+        notice.issue(
+            Issue::warning("stale", format!("{} operation(s) changed since they were generated and were posted as they were: {}", stale.len(), stale.join(", ")))
                 .suggest(json!({"command": "cam.generate", "setup": id})),
         );
     }
@@ -1770,10 +2069,10 @@ fn notices(s: &mut Session, p: &Value) -> Result<Value> {
         for op in &st.operations {
             let v = match s.cam.operations.get(&op.id) {
                 Some(g) => {
-                    json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": g.notice.status(), "stale": g.revision != s.geometry_revision, "info": g.notice.info, "values": g.notice.values, "issues": g.notice.issues})
+                    json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": g.notice.status(), "stale": is_stale(s, st, op.id, g), "info": g.notice.info, "values": g.notice.values, "issues": g.notice.issues})
                 }
                 None => {
-                    json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": if op.enabled { "not generated" } else { "disabled" }})
+                    json!({"operation": op.id, "name": op.name, "type": op.kind.type_name(), "setup": st.id, "status": if op.enabled { "not generated" } else { "disabled" }, "stale": op.enabled})
                 }
             };
             out.push(v);
@@ -1789,7 +2088,7 @@ fn inspect(s: &mut Session, _p: &Value) -> Result<Value> {
         for op in &st.operations {
             match s.cam.operations.get(&op.id) {
                 None if op.enabled => attention.push(json!({"operation": op.id, "name": op.name, "why": "not generated", "command": "cam.generate"})),
-                Some(g) if g.revision != s.geometry_revision => attention.push(json!({"operation": op.id, "name": op.name, "why": "the design changed since it was generated", "command": "cam.generate"})),
+                Some(g) if is_stale(s, st, op.id, g) => attention.push(json!({"operation": op.id, "name": op.name, "why": "the design, the operation, its tool or an operation before it changed since it was generated", "command": "cam.generate"})),
                 Some(g) if g.notice.status() != "ok" => attention.push(json!({"operation": op.id, "name": op.name, "why": g.notice.status(), "issues": g.notice.issues.iter().map(|i| i.code.clone()).collect::<Vec<_>>()})),
                 _ => {}
             }

@@ -9,6 +9,8 @@
 //! [`multi_axis`] (rotary, swarf, multi-axis contour, flow).
 
 pub mod multi_axis;
+pub mod laser;
+pub mod turning;
 pub mod three_d;
 pub mod two_d;
 
@@ -131,6 +133,43 @@ pub enum OpKind {
         #[serde(default)]
         side: Side,
     },
+    /// A slot along open chains or loops: the tool centre follows the curve; a slot wider than
+    /// the tool is cut with offset passes across its width, from the centre out.
+    Slot {
+        /// Slot width (0: the tool's diameter, one pass on the curve).
+        #[serde(default)]
+        width: f64,
+        #[serde(default)]
+        stepdown: f64,
+        #[serde(default)]
+        direction: Direction,
+    },
+    /// Tracing: the tool centre follows the selected curves (open chains or loops) down to the
+    /// bottom height in depth passes.
+    Trace {
+        #[serde(default)]
+        stepdown: f64,
+        #[serde(default)]
+        direction: Direction,
+    },
+    /// Engraving with a V (chamfer or engraving) tool: the tip follows the curves; `width`
+    /// sets the depth from the tool's angle (0: the bottom height).
+    Engrave {
+        #[serde(default)]
+        width: f64,
+        #[serde(default)]
+        stepdown: f64,
+    },
+    /// Circular milling of round holes larger than the tool: a helix into the centre, then
+    /// concentric circles out to the wall at each depth level.
+    Circular {
+        #[serde(default)]
+        stepover: f64,
+        #[serde(default)]
+        stepdown: f64,
+        #[serde(default)]
+        direction: Direction,
+    },
     /// Drilling cycles at hole positions.
     Drill {
         #[serde(default)]
@@ -139,6 +178,9 @@ pub enum OpKind {
         peck: f64,
         #[serde(default)]
         dwell_s: f64,
+        /// Thread pitch for the tapping cycle (mm per turn).
+        #[serde(default)]
+        pitch: f64,
         /// Extra depth past the bottom height (through holes).
         #[serde(default)]
         break_through: f64,
@@ -321,8 +363,121 @@ pub enum OpKind {
         #[serde(default = "ninety")]
         max_tilt_deg: f64,
     },
-    /// Thread milling (not built yet).
-    Thread {},
+    /// Thread milling with a single-point thread mill: a helix of the thread's pitch up the
+    /// hole (or around a boss when `external`), in radial passes to the full thread depth.
+    Thread {
+        /// Thread pitch, mm per turn (required).
+        #[serde(default)]
+        pitch: f64,
+        /// Radial passes to the full depth.
+        #[serde(default = "one")]
+        passes: u32,
+        /// An external thread around a boss (the hole positions are the boss centres and the
+        /// diameter the major diameter).
+        #[serde(default)]
+        external: bool,
+    },
+    /// 3D adaptive clearing: Z-level roughing with engagement-controlled rings and trochoids at
+    /// each level (the 2D adaptive motion on the surface's free region).
+    Adaptive3d {
+        #[serde(default)]
+        optimal_load: f64,
+        #[serde(default)]
+        stepdown: f64,
+        #[serde(default)]
+        minimum_radius: f64,
+        #[serde(default)]
+        direction: Direction,
+        #[serde(default = "yes")]
+        flat_area_detection: bool,
+    },
+    /// Morph: 3-axis passes morphed between two rails, following the surface.
+    Morph {
+        #[serde(default)]
+        stepover: f64,
+        #[serde(default)]
+        direction: Direction,
+    },
+    /// Laser cutting along curves (geometry: sketch, loops or faces), the kerf offset to the
+    /// chosen side, in passes.
+    LaserCut {
+        /// Beam power, 0..1 of the module's.
+        #[serde(default = "full")]
+        power: f64,
+        /// Speed, mm/min.
+        #[serde(default = "laser_cut_speed")]
+        speed: f64,
+        #[serde(default = "one")]
+        passes: u32,
+        #[serde(default = "side_on")]
+        side: Side,
+        /// Kerf width (0: the laser tool's spot diameter).
+        #[serde(default)]
+        kerf: f64,
+        #[serde(default = "yes")]
+        air: bool,
+    },
+    /// Laser engraving: raster fill of the regions inside the loops, then their outline.
+    LaserEngrave {
+        #[serde(default = "half")]
+        power: f64,
+        #[serde(default = "laser_engrave_speed")]
+        speed: f64,
+        /// Distance between raster lines (0: the spot diameter).
+        #[serde(default)]
+        line_interval: f64,
+        #[serde(default)]
+        angle_deg: f64,
+        #[serde(default = "yes")]
+        bidirectional: bool,
+        #[serde(default = "yes")]
+        outline: bool,
+        #[serde(default = "yes")]
+        air: bool,
+    },
+    /// Turning on the rotary axis: facing the part's end back to `position` (0: the model's
+    /// end) in steps of `stepdown`.
+    TurnFace {
+        #[serde(default)]
+        stepdown: f64,
+        #[serde(default)]
+        position: f64,
+    },
+    /// Turning on the rotary axis: the model's profile, as `rotary` along the axis.
+    TurnProfile {
+        #[serde(default)]
+        stepover: f64,
+    },
+    /// Turning on the rotary axis: a groove at `position`, `width` wide (0: the tool) and
+    /// `depth` deep from the stock's radius.
+    TurnGroove {
+        #[serde(default)]
+        position: f64,
+        #[serde(default)]
+        width: f64,
+        #[serde(default = "two")]
+        depth: f64,
+        #[serde(default)]
+        stepdown: f64,
+        #[serde(default)]
+        stepover: f64,
+    },
+    /// Turning on the rotary axis: a thread of `pitch` from `start` over `length` (0: the
+    /// part's extent), `depth` below the stock's radius (0: a 60° form), in `passes`.
+    TurnThread {
+        #[serde(default = "one_mm")]
+        pitch: f64,
+        #[serde(default)]
+        depth: f64,
+        #[serde(default = "three")]
+        passes: u32,
+        #[serde(default)]
+        start: f64,
+        #[serde(default)]
+        length: f64,
+        #[serde(default)]
+        left_hand: bool,
+    },
 }
 
 fn yes() -> bool {
@@ -330,6 +485,30 @@ fn yes() -> bool {
 }
 fn one() -> u32 {
     1
+}
+fn three() -> u32 {
+    3
+}
+fn two() -> f64 {
+    2.0
+}
+fn one_mm() -> f64 {
+    1.0
+}
+fn full() -> f64 {
+    1.0
+}
+fn half() -> f64 {
+    0.5
+}
+fn laser_cut_speed() -> f64 {
+    300.0
+}
+fn laser_engrave_speed() -> f64 {
+    2000.0
+}
+fn side_on() -> Side {
+    Side::On
 }
 fn ninety() -> f64 {
     90.0
@@ -364,7 +543,19 @@ impl OpKind {
             OpKind::Swarf { .. } => "swarf",
             OpKind::MultiAxisContour { .. } => "multi_axis_contour",
             OpKind::Flow { .. } => "flow",
-            OpKind::Thread {} => "thread",
+            OpKind::Thread { .. } => "thread",
+            OpKind::Slot { .. } => "slot",
+            OpKind::Trace { .. } => "trace",
+            OpKind::Engrave { .. } => "engrave",
+            OpKind::Circular { .. } => "circular",
+            OpKind::Adaptive3d { .. } => "adaptive3d",
+            OpKind::Morph { .. } => "morph",
+            OpKind::LaserCut { .. } => "laser_cut",
+            OpKind::LaserEngrave { .. } => "laser_engrave",
+            OpKind::TurnFace { .. } => "turn_face",
+            OpKind::TurnProfile { .. } => "turn_profile",
+            OpKind::TurnGroove { .. } => "turn_groove",
+            OpKind::TurnThread { .. } => "turn_thread",
         }
     }
 
@@ -374,10 +565,16 @@ impl OpKind {
         "pocket2d",
         "adaptive2d",
         "contour2d",
+        "slot",
+        "trace",
+        "engrave",
         "chamfer2d",
         "drill",
         "bore",
+        "circular",
+        "thread",
         "pocket3d",
+        "adaptive3d",
         "parallel",
         "contour3d",
         "scallop",
@@ -392,14 +589,20 @@ impl OpKind {
         "swarf",
         "multi_axis_contour",
         "flow",
-        "thread",
+        "morph",
+        "laser_cut",
+        "laser_engrave",
+        "turn_face",
+        "turn_profile",
+        "turn_groove",
+        "turn_thread",
     ];
 
     /// Axes the kind needs: 3 for 2.5D and 3D work (3+2 through the orientation), 4 for rotary,
     /// 5 for swarf and surface-normal work.
     pub fn axes(&self) -> usize {
         match self {
-            OpKind::Rotary { .. } => 4,
+            OpKind::Rotary { .. } | OpKind::TurnFace { .. } | OpKind::TurnProfile { .. } | OpKind::TurnGroove { .. } | OpKind::TurnThread { .. } => 4,
             OpKind::Swarf { .. } | OpKind::MultiAxisContour { .. } | OpKind::Flow { .. } => 5,
             _ => 3,
         }
@@ -417,7 +620,16 @@ impl OpKind {
                 | OpKind::Drill { .. }
                 | OpKind::Bore { .. }
                 | OpKind::Swarf { .. }
-                | OpKind::Thread {}
+                | OpKind::Thread { .. }
+                | OpKind::Slot { .. }
+                | OpKind::Trace { .. }
+                | OpKind::Engrave { .. }
+                | OpKind::Circular { .. }
+                | OpKind::LaserCut { .. }
+                | OpKind::LaserEngrave { .. }
+                | OpKind::TurnFace { .. }
+                | OpKind::TurnGroove { .. }
+                | OpKind::TurnThread { .. }
         )
     }
 }
@@ -646,8 +858,15 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
         | OpKind::Contour2d { .. }
         | OpKind::Chamfer2d { .. }
         | OpKind::Drill { .. }
-        | OpKind::Bore { .. } => two_d::generate(op, ctx)?,
+        | OpKind::Bore { .. }
+        | OpKind::Slot { .. }
+        | OpKind::Trace { .. }
+        | OpKind::Engrave { .. }
+        | OpKind::Circular { .. }
+        | OpKind::Thread { .. } => two_d::generate(op, ctx)?,
         OpKind::Pocket3d { .. }
+        | OpKind::Adaptive3d { .. }
+        | OpKind::Morph { .. }
         | OpKind::Parallel { .. }
         | OpKind::Contour3d { .. }
         | OpKind::Scallop { .. }
@@ -659,7 +878,8 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
         | OpKind::Horizontal { .. }
         | OpKind::SteepShallow { .. } => three_d::generate(op, ctx)?,
         OpKind::Rotary { .. } | OpKind::Swarf { .. } | OpKind::MultiAxisContour { .. } | OpKind::Flow { .. } => multi_axis::generate(op, ctx)?,
-        OpKind::Thread {} => return Err(CamError::Unsupported("thread milling".into())),
+        OpKind::LaserCut { .. } | OpKind::LaserEngrave { .. } => laser::generate(op, ctx)?,
+        OpKind::TurnFace { .. } | OpKind::TurnProfile { .. } | OpKind::TurnGroove { .. } | OpKind::TurnThread { .. } => turning::generate(op, ctx)?,
     };
     let st = tp.stats(5000.0, None);
     notice.value("moves", st.moves);
@@ -670,12 +890,22 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
     if tp.is_empty() {
         notice.issue(Issue::warning("no_toolpath", "the operation produced no moves: check the geometry selection, the heights and the tool size"));
     }
-    if st.min_z < ctx.heights.bottom - 1e-6
-        && !matches!(
-            op.kind,
-            OpKind::Drill { .. } | OpKind::Rotary { .. } | OpKind::Swarf { .. } | OpKind::MultiAxisContour { .. } | OpKind::Flow { .. }
-        )
-    {
+    // Work about a rotary axis (rotary, turning) and multi-axis work are not depths along Z;
+    // laser work has no depth.
+    let along_z = !matches!(
+        op.kind,
+        OpKind::Rotary { .. }
+            | OpKind::Swarf { .. }
+            | OpKind::MultiAxisContour { .. }
+            | OpKind::Flow { .. }
+            | OpKind::TurnFace { .. }
+            | OpKind::TurnProfile { .. }
+            | OpKind::TurnGroove { .. }
+            | OpKind::TurnThread { .. }
+            | OpKind::LaserCut { .. }
+            | OpKind::LaserEngrave { .. }
+    );
+    if st.min_z < ctx.heights.bottom - 1e-6 && along_z && !matches!(op.kind, OpKind::Drill { .. }) {
         notice.issue(
             Issue::warning("below_bottom", format!("moves reach z {:.3}, below the bottom height {:.3}", st.min_z, ctx.heights.bottom))
                 .parameter("bottom", ctx.heights.bottom),
@@ -683,7 +913,7 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
     }
     // Flute length check: the deepest cut below the top of the surrounding material.
     let depth = ctx.heights.top - st.min_z;
-    if depth > ctx.tool.flute_length + 1e-6 && !tp.is_empty() {
+    if along_z && depth > ctx.tool.flute_length + 1e-6 && !tp.is_empty() {
         notice.issue(
             Issue::warning(
                 "tool_too_short",

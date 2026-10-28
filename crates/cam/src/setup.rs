@@ -83,6 +83,18 @@ pub enum StockShape {
 }
 
 impl StockShape {
+    /// The stock's largest distance from the X axis (a rotary axis along X): a cylinder's
+    /// radius when it lies along X, else the farthest corner of the box in Y and Z.
+    pub fn radius_about_x(&self) -> f64 {
+        match *self {
+            StockShape::Cylinder { axis: Axis::X, radius, .. } => radius,
+            _ => {
+                let b = self.bounds();
+                [b.min.y.abs(), b.max.y.abs()].iter().fold(0.0_f64, |m, y| m.max(*y)).hypot([b.min.z.abs(), b.max.z.abs()].iter().fold(0.0_f64, |m, z| m.max(*z)))
+            }
+        }
+    }
+
     pub fn bounds(&self) -> Aabb3 {
         let mut b = Aabb3::default();
         match *self {

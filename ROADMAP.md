@@ -664,6 +664,19 @@ published limits, checks of speeds, feeds, collets, work area and tool changes, 
 post and the `makera_essential` tool kit (`docs/makera-pitch.md` is the proposal to Makera for
 a test machine).
 
-Not built yet: thread milling, CAM dialogs (the ribbon's buttons open the command box filled
-in), arc output (G2/G3) in posts, multi-axis stock removal in the simulator (tilted moves are
-collision-checked only), a run on a real Makera machine.
+The MANUFACTURE tab has a panel per category (2D MILLING, 3D MILLING, DRILLING, MULTI-AXIS)
+with a button per operation kind (`docs/cam-operations.md` surveys the packages' operation
+types); slot, trace, engrave, circular, thread milling, tapping, 3D adaptive clearing and
+morph were added from that survey.
+
+Laser (cut and raster engrave, with each Makera module's power and the controls' laser modes)
+and turning on the rotary axis (face, profile, groove, thread) have their own panels; threads
+are milled (`thread`), tapped (G84) or turned (`turn_thread`). Operations live in the Browser's
+Manufacture folder as parametric steps: chained signatures make an edited, suppressed or moved
+operation and every later one stale, and generation regenerates only those.
+
+Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image
+(grey-level) laser engraving, drag-to-reorder in the Browser, CAM
+dialogs (the ribbon's buttons open the command box filled in), arc output (G2/G3) in posts,
+multi-axis stock removal in the simulator (tilted moves are collision-checked only), a run on a
+real Makera machine.

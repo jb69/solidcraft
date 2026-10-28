@@ -2750,6 +2750,17 @@ impl Document {
         *self == normalized
     }
 
+    /// Only the manufacturing data (tools, setups, operations) changed: nothing in the model to
+    /// evaluate. The same whole-Document proof as [`Document::differs_only_in_render`].
+    pub fn differs_only_in_manufacture(&self, previous: &Document) -> bool {
+        if self.manufacture == previous.manufacture {
+            return false;
+        }
+        let mut normalized = previous.clone();
+        normalized.manufacture = self.manufacture.clone();
+        *self == normalized
+    }
+
     /// Only components' part properties (metadata and free properties) changed: nothing to
     /// evaluate. The same whole-Document proof as [`Document::differs_only_in_render`].
     pub fn differs_only_in_part_properties(&self, previous: &Document) -> bool {

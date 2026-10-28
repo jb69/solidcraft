@@ -755,6 +755,10 @@ fn ribbon_label(app: &SolveApp, label: &str) -> String {
         .tr_label(label)
         .split_whitespace()
         .map(|word| {
+            // "2D" and "3D" stay as they are; other words are word-cased.
+            if word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return word.to_uppercase();
+            }
             let lower = word.to_lowercase();
             let mut chars = lower.chars();
             chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()

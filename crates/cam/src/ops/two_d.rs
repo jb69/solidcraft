@@ -47,10 +47,18 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
             (*tabs, *tab_width, *tab_height),
         ),
         OpKind::Chamfer2d { width, tip_offset, side } => chamfer(op, ctx, *width, *tip_offset, *side),
-        OpKind::Drill { cycle, peck, dwell_s, break_through, optimize_order } => {
-            drill(op, ctx, *cycle, *peck, *dwell_s, *break_through, *optimize_order)
+        OpKind::Drill { cycle, peck, dwell_s, pitch, break_through, optimize_order } => {
+            drill(op, ctx, *cycle, *peck, *dwell_s, *pitch, *break_through, *optimize_order)
         }
         OpKind::Bore { pitch, direction } => bore(op, ctx, *pitch, *direction),
+        OpKind::Slot { width, stepdown, direction } => slot(op, ctx, *width, *stepdown, *direction),
+        OpKind::Trace { stepdown, direction } => {
+            let lk = linker(op, ctx);
+            follow_curves(ctx, &lk, ctx.heights.bottom + ctx.stock_to_leave_axial, *stepdown, *direction)
+        }
+        OpKind::Engrave { width, stepdown } => engrave(op, ctx, *width, *stepdown),
+        OpKind::Circular { stepover, stepdown, direction } => circular(op, ctx, *stepover, *stepdown, *direction),
+        OpKind::Thread { pitch, passes, external } => thread(op, ctx, *pitch, *passes, *external),
         _ => Err(CamError::Param("not a 2D operation".into())),
     }
 }
@@ -302,8 +310,50 @@ fn adaptive(
     let mut trochoids = 0usize;
     let mut rings = 0usize;
     for z in &zs {
+        let (r, t) = adaptive_level(&mut tp, &lk, &cl, &smoothed, *z, load, direction, from_z, ctx.tolerance)?;
+        rings += r;
+        trochoids += t;
+        from_z = *z;
+    }
+    lk.retract_clearance(&mut tp)?;
+    notice.value("levels", zs.len());
+    notice.value("rings", rings);
+    notice.value("trochoids", trochoids);
+    notice.value("optimal_load_mm", r3(load));
+    Ok((tp, notice))
+}
+
+/// The cutter-location region with its inside corners rounded to `min_r` (shrink then grow).
+pub fn round_corners(cl: &[Poly], min_r: f64, tol: f64) -> Result<Vec<Poly>> {
+    let inner = offset::offset_set(cl, -min_r, tol)?;
+    if inner.is_empty() { Ok(cl.to_vec()) } else { offset::offset_set(&inner, min_r, tol) }
+}
+
+/// One level of adaptive clearing of the cutter-location region `cl` (its corner-rounded form
+/// `smoothed` gives the rings): inside-out rings at the optimal load with trochoids where a
+/// ring first meets uncut material. Returns the rings and trochoids made.
+#[allow(clippy::too_many_arguments)]
+pub fn adaptive_level(
+    tp: &mut Toolpath,
+    lk: &Linker,
+    cl: &[Poly],
+    smoothed: &[Poly],
+    z: f64,
+    load: f64,
+    direction: Direction,
+    from_z: f64,
+    tol: f64,
+) -> Result<(usize, usize)> {
+    let mut trochoids = 0usize;
+    let mut rings = 0usize;
+    let ctx_tol = tol;
+    {
+        let z = &z;
+        let ctx = CtxTol { tolerance: ctx_tol };
+        let cl = cl.to_vec();
+        let op_linking = lk.linking;
         // Rings from the inside out at the optimal load.
-        let family = offset::inward_family(&smoothed, load, ctx.tolerance, 100_000)?;
+        let family = offset::inward_family(smoothed, load, ctx.tolerance, 100_000)?;
         let mut passes: Vec<Pass> = Vec::new();
         let mut last = tp.last_position().map(|p| Vec2::new(p.x, p.y));
         for rings_at in family.iter().rev() {
@@ -341,18 +391,18 @@ fn adaptive(
                 rings += 1;
             }
         }
-        let mut linking = op.linking;
+        let mut linking = op_linking;
         linking.stay_down_distance = linking.stay_down_distance.max(load * 3.0);
-        let lk2 = Linker { linking, ..lk };
-        lk2.run(&mut tp, &passes, Some(&cl), from_z)?;
-        from_z = *z;
+        let lk2 = Linker { linking, ..*lk };
+        lk2.run(tp, &passes, Some(&cl), from_z)?;
     }
-    lk.retract_clearance(&mut tp)?;
-    notice.value("levels", zs.len());
-    notice.value("rings", rings);
-    notice.value("trochoids", trochoids);
-    notice.value("optimal_load_mm", r3(load));
-    Ok((tp, notice))
+    Ok((rings, trochoids))
+}
+
+/// Just a tolerance, so the adaptive ring code reads `ctx.tolerance` whether it runs in 2D or
+/// per 3D level.
+struct CtxTol {
+    tolerance: f64,
 }
 
 /// The cutter-location loops for a contour: offset by the tool radius to the chosen side.
@@ -514,10 +564,16 @@ fn drill(
     cycle: DrillCycleKind,
     peck: f64,
     dwell_s: f64,
+    pitch: f64,
     break_through: f64,
     optimize_order: bool,
 ) -> Result<(Toolpath, Notice)> {
     let tool = ctx.tool;
+    if cycle == DrillCycleKind::Tap && pitch <= 0.0 {
+        return Err(CamError::Param("tapping needs `pitch` (mm per turn)".into()));
+    }
+    // Tapping feeds at the pitch times the spindle speed.
+    let tap_feed = pitch * tool.feeds.spindle_rpm;
     let mut holes = ctx.geometry.holes.clone();
     if holes.is_empty() {
         return Err(CamError::Geometry("drilling needs hole positions (cylindrical faces or points)".into()));
@@ -563,6 +619,7 @@ fn drill(
         tp.rapid(Vec3::new(h.x, h.y, tp.last_position().map_or(ctx.heights.clearance, |p| p.z.max(retract))))?;
         tp.rapid(Vec3::new(h.x, h.y, retract))?;
         tp.rapid(Vec3::new(h.x, h.y, ctx.heights.feed.min(retract).max(top.z)))?;
+        let feed = if cycle == DrillCycleKind::Tap { tap_feed } else { f.plunge };
         tp.cycles.push(DrillCycle {
             kind: cycle,
             top,
@@ -571,13 +628,13 @@ fn drill(
             retract_height: retract,
             peck,
             dwell_s,
-            feed: f.plunge,
+            feed,
         });
         match cycle {
-            DrillCycleKind::Simple | DrillCycleKind::Dwell | DrillCycleKind::FeedOut => {
-                tp.push(Move::new(MoveKind::Plunge, Vec3::new(h.x, h.y, bottom_z), f.plunge))?;
-                if cycle == DrillCycleKind::FeedOut {
-                    tp.push(Move::new(MoveKind::Retract, Vec3::new(h.x, h.y, retract), f.plunge))?;
+            DrillCycleKind::Simple | DrillCycleKind::Dwell | DrillCycleKind::FeedOut | DrillCycleKind::Tap => {
+                tp.push(Move::new(MoveKind::Plunge, Vec3::new(h.x, h.y, bottom_z), feed))?;
+                if cycle == DrillCycleKind::FeedOut || cycle == DrillCycleKind::Tap {
+                    tp.push(Move::new(MoveKind::Retract, Vec3::new(h.x, h.y, retract), feed))?;
                 } else {
                     tp.rapid(Vec3::new(h.x, h.y, retract))?;
                 }
@@ -608,6 +665,295 @@ fn drill(
     }
     notice.value("holes", holes.len());
     notice.value("cycle", format!("{cycle:?}").to_lowercase());
+    if cycle == DrillCycleKind::Tap {
+        notice.value("tap_feed_mm_min", r3(tap_feed));
+        notice.issue(Issue::info("tapping", "the control must tap rigidly (G84) or hold the tap in a tension-compression holder; without canned cycles the post expands the cycle as a feed in and a feed out at the pitch feed"));
+    }
+    Ok((tp, notice))
+}
+
+/// A simple offset of an open polyline: each point moved along the average normal of its
+/// neighbouring segments by `d` (left of the direction of travel for positive `d`).
+fn offset_open(pts: &[Vec2], d: f64) -> Vec<Vec2> {
+    let n = pts.len();
+    if n < 2 || d.abs() < 1e-12 {
+        return pts.to_vec();
+    }
+    let seg_normal = |i: usize| -> Vec2 {
+        let a = pts[i];
+        let b = pts[i + 1];
+        let t = (b - a).normalized().unwrap_or(Vec2::new(1.0, 0.0));
+        Vec2::new(-t.y, t.x)
+    };
+    (0..n)
+        .map(|i| {
+            let nrm = if i == 0 {
+                seg_normal(0)
+            } else if i == n - 1 {
+                seg_normal(n - 2)
+            } else {
+                (seg_normal(i - 1) + seg_normal(i)).normalized().unwrap_or(seg_normal(i))
+            };
+            pts[i] + nrm * d
+        })
+        .collect()
+}
+
+/// The curves of the geometry selection, as passes at height `z`: loops closed, chains open.
+fn curve_passes(ctx: &Context, z: f64, direction: Direction) -> Vec<Pass> {
+    let mut passes = Vec::new();
+    for ring in polyline::normalize_set(&ctx.geometry.loops) {
+        let oriented = orient_for(&ring, direction, false);
+        passes.push(Pass { points: oriented.iter().map(|p| Vec3::new(p.x, p.y, z)).collect(), closed: true });
+    }
+    for chain in &ctx.geometry.open {
+        passes.push(Pass { points: chain.iter().map(|p| Vec3::new(p.x, p.y, z)).collect(), closed: false });
+    }
+    passes
+}
+
+/// The tool centre along the selected curves to `bottom` in depth passes (tracing, engraving).
+fn follow_curves(ctx: &Context, lk: &Linker, bottom: f64, stepdown: f64, direction: Direction) -> Result<(Toolpath, Notice)> {
+    if ctx.geometry.loops.is_empty() && ctx.geometry.open.is_empty() {
+        return Err(CamError::Geometry("tracing needs curves: a sketch, loops or faces whose edges to follow".into()));
+    }
+    let stepdown = if stepdown > 0.0 { stepdown } else { ctx.tool.diameter.max(0.1) };
+    let zs = levels(ctx.heights.top, bottom, stepdown)?;
+    let mut tp = Toolpath::new();
+    let mut from_z = ctx.heights.feed;
+    let mut count = 0usize;
+    for z in &zs {
+        let passes = curve_passes(ctx, *z, direction);
+        count += passes.len();
+        lk.run(&mut tp, &passes, None, from_z)?;
+        from_z = *z;
+    }
+    lk.retract_clearance(&mut tp)?;
+    let mut notice = Notice::default();
+    notice.value("levels", zs.len());
+    notice.value("passes", count);
+    notice.value("depth_mm", r3(ctx.heights.top - bottom));
+    Ok((tp, notice))
+}
+
+fn slot(op: &Operation, ctx: &Context, width: f64, stepdown: f64, direction: Direction) -> Result<(Toolpath, Notice)> {
+    let tool = ctx.tool;
+    if ctx.geometry.loops.is_empty() && ctx.geometry.open.is_empty() {
+        return Err(CamError::Geometry("a slot needs its centre curves: a sketch, loops or faces whose edges to follow".into()));
+    }
+    let mut notice = Notice::default();
+    let d = tool.diameter;
+    let width = if width > 0.0 { width } else { d };
+    if width < d - 1e-9 {
+        notice.issue(
+            Issue::error("tool_too_large", format!("a {:.2} mm tool cannot cut a {:.2} mm slot", d, width)).parameter("tool", tool.id).limit(r3(width)),
+        );
+        return Ok((Toolpath::new(), notice));
+    }
+    let stepdown = if stepdown > 0.0 { stepdown } else { d * 0.5 };
+    // Passes across the width: the centre, then pairs stepping out to the walls.
+    let extra = (width - d) * 0.5 - ctx.stock_to_leave_radial;
+    let mut offsets: Vec<f64> = vec![0.0];
+    if extra > ctx.tolerance {
+        let n = (extra / (d * 0.5)).ceil().max(1.0) as usize;
+        for k in 1..=n {
+            let o = extra * k as f64 / n as f64;
+            offsets.push(o);
+            offsets.push(-o);
+        }
+    }
+    let bottom = ctx.heights.bottom + ctx.stock_to_leave_axial;
+    let zs = levels(ctx.heights.top, bottom, stepdown)?;
+    let lk = linker(op, ctx);
+    let mut tp = Toolpath::new();
+    let mut from_z = ctx.heights.feed;
+    let mut count = 0usize;
+    for z in &zs {
+        let mut passes: Vec<Pass> = Vec::new();
+        for o in &offsets {
+            for ring in polyline::normalize_set(&ctx.geometry.loops) {
+                let rings = if o.abs() < 1e-12 { vec![ring.clone()] } else { offset::offset_set(std::slice::from_ref(&ring), *o, ctx.tolerance)? };
+                for r in rings {
+                    let oriented = orient_for(&r, direction, false);
+                    passes.push(Pass { points: oriented.iter().map(|p| Vec3::new(p.x, p.y, *z)).collect(), closed: true });
+                }
+            }
+            for chain in &ctx.geometry.open {
+                let dense = polyline::densify(chain, (ctx.tolerance * 20.0).max(0.2));
+                let pts = offset_open(&dense, *o);
+                let pts = polyline::simplify_open(&pts, ctx.tolerance * 0.5);
+                passes.push(Pass { points: pts.iter().map(|p| Vec3::new(p.x, p.y, *z)).collect(), closed: false });
+            }
+        }
+        count += passes.len();
+        let mut linking = op.linking;
+        linking.stay_down_distance = linking.stay_down_distance.max(width);
+        let lk2 = Linker { linking, ..lk };
+        lk2.run(&mut tp, &passes, None, from_z)?;
+        from_z = *z;
+    }
+    lk.retract_clearance(&mut tp)?;
+    notice.value("levels", zs.len());
+    notice.value("passes", count);
+    notice.value("width_mm", r3(width));
+    Ok((tp, notice))
+}
+
+fn engrave(op: &Operation, ctx: &Context, width: f64, stepdown: f64) -> Result<(Toolpath, Notice)> {
+    let tool = ctx.tool;
+    let half = match tool.kind {
+        crate::tool::ToolKind::Chamfer { tip_angle_deg } | crate::tool::ToolKind::SpotDrill { tip_angle_deg } => {
+            Some((tip_angle_deg.clamp(1.0, 179.0) * 0.5).to_radians())
+        }
+        _ => None,
+    };
+    let mut lk = linker(op, ctx);
+    let mut bottom = ctx.heights.bottom + ctx.stock_to_leave_axial;
+    let mut pre = Notice::default();
+    // The engraved surface: the model's top when it lies below the top height (stock above
+    // the part is faced off first).
+    let surface = ctx.heights.top.min(ctx.model_z().1);
+    match half {
+        Some(h) if width > 0.0 => {
+            // The groove's width at the surface sets the tip depth.
+            let depth = (width * 0.5) / h.tan();
+            bottom = surface - depth;
+            lk.heights.bottom = bottom;
+            lk.heights.top = surface;
+            pre.value("depth_mm", r3(depth));
+        }
+        Some(_) => {}
+        None => {
+            pre.issue(Issue::warning("v_tool", "engraving expects a V (chamfer or engraving) tool; the tool's tip width is cut instead").parameter("tool", tool.id));
+        }
+    }
+    let (tp, mut notice) = follow_curves(ctx, &lk, bottom, if stepdown > 0.0 { stepdown } else { ctx.heights.top - bottom }, Direction::Climb)?;
+    notice.merge(pre);
+    notice.value("width_mm", r3(width));
+    Ok((tp, notice))
+}
+
+fn circular(op: &Operation, ctx: &Context, stepover: f64, stepdown: f64, direction: Direction) -> Result<(Toolpath, Notice)> {
+    let tool = ctx.tool;
+    let holes = &ctx.geometry.holes;
+    let d = ctx.geometry.hole_diameter;
+    if holes.is_empty() || d <= 0.0 {
+        return Err(CamError::Geometry("circular milling needs round holes with a diameter".into()));
+    }
+    let r_wall = d * 0.5 - tool.radius() - ctx.stock_to_leave_radial;
+    let mut notice = Notice::default();
+    if r_wall <= 0.0 {
+        notice.issue(
+            Issue::error("tool_too_large", format!("a {:.2} mm tool cannot mill a {:.2} mm hole", tool.diameter, d)).parameter("tool", tool.id).limit(r3(d)),
+        );
+        return Ok((Toolpath::new(), notice));
+    }
+    let stepover = if stepover > 0.0 { stepover } else { default_stepover(tool, false) };
+    let stepdown = if stepdown > 0.0 { stepdown } else { tool.diameter * 0.5 };
+    // Radii from the wall inward, then cut inside out.
+    let mut radii: Vec<f64> = Vec::new();
+    let mut r = r_wall;
+    while r > ctx.tolerance {
+        radii.push(r);
+        r -= stepover;
+    }
+    radii.reverse();
+    let bottom = ctx.heights.bottom + ctx.stock_to_leave_axial;
+    let zs = levels(ctx.heights.top, bottom, stepdown)?;
+    let lk = linker(op, ctx);
+    let mut tp = Toolpath::new();
+    let mut rings = 0usize;
+    for h in holes {
+        let c = Vec2::new(h.x, h.y);
+        let region = vec![polyline::circle(c, r_wall, ctx.tolerance)];
+        let mut from_z = ctx.heights.feed;
+        for z in &zs {
+            let mut passes: Vec<Pass> = Vec::new();
+            for r in &radii {
+                let ring = polyline::circle(c, *r, ctx.tolerance);
+                let oriented = orient_for(&ring, direction, true);
+                passes.push(Pass { points: oriented.iter().map(|p| Vec3::new(p.x, p.y, *z)).collect(), closed: true });
+                rings += 1;
+            }
+            let mut linking = op.linking;
+            linking.stay_down_distance = linking.stay_down_distance.max(stepover * 3.0);
+            let lk2 = Linker { linking, ..lk };
+            lk2.run(&mut tp, &passes, Some(&region), from_z)?;
+            from_z = *z;
+        }
+        lk.retract(&mut tp)?;
+    }
+    lk.retract_clearance(&mut tp)?;
+    notice.value("holes", holes.len());
+    notice.value("levels", zs.len());
+    notice.value("rings", rings);
+    Ok((tp, notice))
+}
+
+fn thread(op: &Operation, ctx: &Context, pitch: f64, passes: u32, external: bool) -> Result<(Toolpath, Notice)> {
+    let tool = ctx.tool;
+    crate::positive("pitch", pitch)?;
+    let holes = &ctx.geometry.holes;
+    let d = ctx.geometry.hole_diameter;
+    if holes.is_empty() || d <= 0.0 {
+        return Err(CamError::Geometry("thread milling needs round holes (or bosses) with their major diameter".into()));
+    }
+    let mut notice = Notice::default();
+    // Thread depth for a 60° form.
+    let depth_of_thread = 0.6134 * pitch;
+    let r_full = if external { d * 0.5 + tool.radius() } else { d * 0.5 - tool.radius() };
+    if !external && r_full <= 0.0 {
+        notice.issue(Issue::error("tool_too_large", format!("a {:.2} mm thread mill cannot enter a {:.2} mm thread", tool.diameter, d)).parameter("tool", tool.id).limit(r3(d)));
+        return Ok((Toolpath::new(), notice));
+    }
+    let n_pass = passes.clamp(1, 20);
+    let lk = linker(op, ctx);
+    let mut tp = Toolpath::new();
+    let f = &tool.feeds;
+    let bottom = ctx.heights.bottom + ctx.stock_to_leave_axial;
+    let top = ctx.heights.top;
+    let depth = top - bottom;
+    if depth <= 1e-9 {
+        return Err(CamError::Param("the thread's top must be above its bottom".into()));
+    }
+    let turns = depth / pitch;
+    let sign = if external { -1.0 } else { 1.0 };
+    for h in holes {
+        let c = Vec2::new(h.x, h.y);
+        for k in 1..=n_pass {
+            // Radial passes: the first takes most of the thread depth, the last the full form.
+            let bite = depth_of_thread * (1.0 - k as f64 / n_pass as f64);
+            let r = r_full - sign * bite;
+            let seg = polyline::arc_segments(r.abs().max(0.1), std::f64::consts::TAU, ctx.tolerance).max(12);
+            let n = ((turns * seg as f64).ceil() as usize).clamp(1, 1_000_000);
+            let start = c + Vec2::new(r, 0.0);
+            lk.retract(&mut tp)?;
+            // Approach: above the centre (internal) or the start (external), down to the bottom,
+            // then a lead to the thread radius.
+            let entry = if external { start + Vec2::new(tool.diameter, 0.0) } else { c };
+            tp.rapid(Vec3::new(entry.x, entry.y, tp.last_position().map_or(ctx.heights.clearance, |p| p.z.max(ctx.heights.retract))))?;
+            tp.rapid(Vec3::new(entry.x, entry.y, ctx.heights.feed.max(top)))?;
+            tp.push(Move::new(MoveKind::Plunge, Vec3::new(entry.x, entry.y, bottom), f.plunge))?;
+            tp.push(Move::new(MoveKind::Lead, Vec3::new(start.x, start.y, bottom), f.lead_in))?;
+            // Climb up the thread: counter-clockwise for a right-hand internal thread.
+            for i in 1..=n {
+                let t = i as f64 / n as f64;
+                let a = t * turns * std::f64::consts::TAU;
+                let p = c + Vec2::from_angle(a) * r;
+                tp.cut(Vec3::new(p.x, p.y, bottom + depth * t), f.cutting)?;
+            }
+            let end = c + Vec2::from_angle(turns * std::f64::consts::TAU) * r;
+            let exit = if external { end + (end - c).normalized().unwrap_or(Vec2::new(1.0, 0.0)) * tool.diameter } else { c };
+            tp.push(Move::new(MoveKind::Lead, Vec3::new(exit.x, exit.y, top), f.lead_out))?;
+            tp.rapid(Vec3::new(exit.x, exit.y, ctx.heights.retract))?;
+        }
+    }
+    lk.retract_clearance(&mut tp)?;
+    notice.value("holes", holes.len());
+    notice.value("turns", r3(turns));
+    notice.value("thread_depth_mm", r3(depth_of_thread));
+    notice.value("passes", n_pass);
+    notice.issue(Issue::info("single_point", "a single-point thread mill helix: a multi-tooth thread mill cuts the whole depth in one turn; set the bottom height to the thread's depth"));
     Ok((tp, notice))
 }
 

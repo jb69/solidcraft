@@ -16,6 +16,8 @@ mod occurrence_gizmo_tests;
 
 #[path = "browser_model.rs"]
 mod model;
+#[path = "browser_cam.rs"]
+pub(crate) mod cam;
 
 mod features;
 
@@ -82,6 +84,8 @@ pub struct TreeState {
     pub picked_canvases: Vec<u64>,
     /// Joints picked in the tree (a hidden one shows highlighted while it is picked).
     pub picked_joints: Vec<u64>,
+    /// A setup, operation or tool picked in the Manufacture folder.
+    pub picked_cam: Option<cam::CamPick>,
     /// Folders picked in the feature history (features use the engine selection).
     pub picked_timeline_groups: Vec<u64>,
     /// Last feature-history item clicked, for Shift ranges (`f:<id>` or `g:<id>`).
@@ -1050,6 +1054,7 @@ fn component_rows(app: &mut SolveApp, ui: &mut egui::Ui, id: u64, depth: usize, 
     features::rows(app, ui, id, &[], d, acts);
     if id == 0 {
         crate::dialogs_assembly::browser_joints(app, ui, d);
+        cam::rows(app, ui, d, acts);
     }
     let children = model_children(app, id);
     for occurrence in children {

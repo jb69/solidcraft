@@ -331,7 +331,7 @@ fn drill_cycles_and_canned_post() {
     let mut ctx = ctx_2d(&tool, Vec::new(), heights(0.0, -10.0));
     ctx.geometry.holes = vec![Vec3::new(10.0, 10.0, 0.0), Vec3::new(30.0, 10.0, 0.0)];
     ctx.geometry.hole_diameter = 5.0;
-    let o = op(OpKind::Drill { cycle: crate::toolpath::DrillCycleKind::Peck, peck: 3.0, dwell_s: 0.0, break_through: 0.0, optimize_order: true });
+    let o = op(OpKind::Drill { cycle: crate::toolpath::DrillCycleKind::Peck, peck: 3.0, dwell_s: 0.0, pitch: 0.0, break_through: 0.0, optimize_order: true });
     let (tp, notice) = generate(&o, &ctx).unwrap();
     assert_eq!(tp.cycles.len(), 2);
     assert_eq!(notice.values["holes"], 2);
@@ -687,7 +687,7 @@ fn hostile_params_never_panic() {
         OpKind::Pocket2d { stepover: -2.0, stepdown: f64::INFINITY, direction: Default::default(), inside_out: true, finishing_stepover: 0.0 },
         OpKind::Face { stepover: 1e-12, stepdown: 1e-12, angle_deg: f64::NAN, direction: Default::default(), extension: 0.0 },
         OpKind::Parallel { stepover: 0.0, angle_deg: 0.0, direction: Default::default(), slope_min_deg: 0.0, slope_max_deg: 90.0 },
-        OpKind::Thread {},
+        OpKind::Thread { pitch: 1.0, passes: 1, external: false },
     ] {
         let _ = generate(&op(kind), &ctx);
     }
@@ -705,7 +705,7 @@ fn drill_pecks_do_not_rapid_into_stock() {
     ctx.stock = StockShape::Box { min: Vec3::new(-1.0, -1.0, 0.0), max: Vec3::new(41.0, 31.0, 11.0) };
     ctx.geometry.holes = vec![Vec3::new(10.0, 10.0, 10.0)];
     ctx.geometry.hole_diameter = 6.0;
-    let o = op(OpKind::Drill { cycle: crate::toolpath::DrillCycleKind::Peck, peck: 2.0, dwell_s: 0.0, break_through: 1.0, optimize_order: true });
+    let o = op(OpKind::Drill { cycle: crate::toolpath::DrillCycleKind::Peck, peck: 2.0, dwell_s: 0.0, pitch: 0.0, break_through: 1.0, optimize_order: true });
     let (tp, _) = generate(&o, &ctx).unwrap();
     let mut stock = StockMap::new(&ctx.stock, 0.25).unwrap();
     // Replay move by move to find the first rapid that hits.
@@ -802,8 +802,10 @@ fn makera_kit_feeds_stay_within_the_machine() {
     for m in [Machine::makera_carvera(), Machine::makera_carvera_air(), Machine::makera_z1()] {
         for mat in [Material::Aluminium, Material::Wood, Material::Plastic] {
             let tools = makera_essential(&m, mat);
-            assert_eq!(tools.len(), 11);
-            for t in &tools {
+            // Eleven cutters, and a laser tool for the machine's module.
+            assert_eq!(tools.len(), 11 + usize::from(m.laser.is_some()));
+            assert_eq!(tools.iter().filter(|t| t.is_laser()).count(), usize::from(m.laser.is_some()));
+            for t in tools.iter().filter(|t| !t.is_laser()) {
                 t.validate().unwrap();
                 assert!(t.feeds.spindle_rpm <= m.spindle_rpm_max + 1e-9, "{} {:?}", t.name, mat);
                 assert!(t.feeds.cutting <= m.max_feed + 1e-9 && t.feeds.plunge <= m.max_feed + 1e-9, "{} {:?} {:?}", t.name, mat, t.feeds);
@@ -821,4 +823,29 @@ fn makera_kit_feeds_stay_within_the_machine() {
     // Wood on the Z1: feeds are capped by the Z1's 1 200 mm/min travel.
     let tools = makera_essential(&Machine::makera_z1(), Material::Wood);
     assert!(tools.iter().all(|t| t.feeds.cutting <= 960.0 + 1e-9));
+}
+
+#[test]
+fn laser_post_modes_per_dialect() {
+    let laser = Tool { kind: crate::tool::ToolKind::Laser { wavelength_nm: 445.0 }, ..flat(0.1) };
+    let mut tp = Toolpath::new();
+    tp.laser = true;
+    tp.air = true;
+    tp.rapid(Vec3::new(0.0, 0.0, 10.0)).unwrap();
+    tp.push(crate::toolpath::Move::new(MoveKind::Cut, Vec3::new(20.0, 0.0, 10.0), 1500.0).with_power(0.5)).unwrap();
+    tp.rapid(Vec3::new(20.0, 5.0, 10.0)).unwrap();
+    tp.push(crate::toolpath::Move::new(MoveKind::Cut, Vec3::new(0.0, 5.0, 10.0), 1500.0).with_power(0.5)).unwrap();
+    let ops = [PostOperation { name: "engrave", tool: &laser, toolpath: &tp }];
+    let m = post_program(&Post::makera(), &Machine::makera_carvera_air(), "lz", &ops, 0.01).unwrap();
+    let g = &m.gcode;
+    assert!(g.contains("M321\nG0 Z0\nM7\n"), "{g}");
+    assert!(g.contains("G1 X20.0 F1500.0 S0.5"), "{g}");
+    assert!(g.contains("M9\nM322\n"), "{g}");
+    assert!(!g.contains("M6 T"), "no tool change for the laser: {g}");
+    let grbl = post_program(&Post::grbl(), &Machine::three_axis(), "lz", &ops, 0.01).unwrap();
+    assert!(grbl.gcode.contains("M4\n") && grbl.gcode.contains("S500.0"), "{}", grbl.gcode);
+    // A laser on a machine without a module.
+    let issues = Machine::three_axis().check(&laser, &tp);
+    assert!(issues.iter().any(|i| i.code == "no_laser"), "{issues:?}");
+    assert!(Machine::makera_z1().check(&laser, &tp).iter().all(|i| i.code != "no_laser"));
 }

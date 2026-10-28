@@ -1,127 +1,156 @@
 # SolidCraft CAM for Makera machines: a proposal (draft)
 
-*A pitch to Makera for a test machine. Draft of 28 October 2026.*
+*A request to Makera for test machines, from the SolidCraft project. Draft of 28 October 2026.*
 
 ## In one paragraph
 
-SolidCraft is an open-source, pure-Rust parametric CAD application that an AI assistant can
-drive end to end. Its new CAM module plans 2.5-axis, 3-axis, continuous 4-axis and 5-axis
-toolpaths, simulates the stock as it is cut, and writes G-code, and it treats the AI assistant as
-a first-class user: every step is a JSON command with a self-describing result, and every
-result carries a notice that says what went well, what was clamped and what to change. We have
-made Makera's Carvera, Carvera Air and Z1 the first machines the module knows by name, with
-their work areas, spindles, feeds, tool changers, collets and rotary modules, a post that writes
-Makera's dialect, and a tool kit tuned to the machines. What we lack is a machine to cut with.
-We are asking Makera for a Carvera with the 4th-axis module to test against, and in return we
-offer an open CAD-to-CAM-to-G-code path for Makera's machines that people and their AI
-assistants can use for free.
+SolidCraft is a public, open-source (MIT or Apache-2.0), pure-Rust parametric CAD application
+that an AI assistant can drive end to end, developed in the open at
+`github.com/tangency-labs/solidcraft`. A CAM module for it is being built to be contributed to
+that main repository as part of the public tool: it plans 2D, 3D, rotary and multi-axis
+toolpaths, turning on the rotary axis and laser work, simulates the stock as it is cut, and
+writes G-code. Makera's Carvera, Carvera Air and Z1 are the first machines it knows by name:
+their work areas, spindles, feeds, tool changers, collets, rotary modules and laser modules, a
+post for Makera's dialect, and a tool kit for the machines. It is at an early stage and none of
+it has run on a Makera machine yet. We ask Makera to lend (or sell at cost) the machines to
+test it on. In return every Makera owner gets a free, open CAD-to-G-code path, tested on real
+hardware and maintained in public, that people and their AI assistants can use.
 
 ## What exists today
 
-- **CAD**: sketches with a constraint solver, a parametric feature timeline, a B-rep kernel,
-  assemblies, sheet metal, rendering, STEP import and export, a desktop app, a CLI and an MCP
-  server. Everything a user can do is a command, so an AI assistant does the same work the same way.
-- **CAM** (new, in the `cam` branch): facing, 2D pocket, adaptive, contour with tabs, chamfer,
-  drill cycles and bore; 3D roughing with rest machining, parallel, waterline, scallop, pencil,
-  spiral, radial, morphed spiral, projected, horizontal and steep-and-shallow finishing; 3+2
-  indexed work; continuous 4-axis rotary; 5-axis swarf, multi-axis contour and flow. Own
-  implementations of 2D offsetting, height maps, an exact drop cutter in any tool-axis frame,
-  linking (leads, helix and profile ramps, stay-down), machine kinematics with inverse
-  kinematics and linearisation, a Z-map stock simulation with gouge and collision reports, and
-  a visual simulator that plays the program back with the stock removed move by move.
-- **Makera support**: presets `carvera`, `carvera_air` and `z1` (each with a `_4axis`
-  variant), the `makera` post, machine checks and the `makera_essential` tool kit. Details below.
-- **Feedback loop for assistants**: every command result carries `{status, info, values,
-  issues}`; an issue has a stable code, a message, the parameter and its limit, and a
-  suggestion the assistant can apply. Unknown parameter names come back with the nearest valid one.
+- **CAD**: sketches with a constraint solver, a parametric timeline, a B-rep kernel,
+  assemblies, sheet metal, STEP import and export, a desktop app, a CLI and an MCP server.
+- **CAM** (in development, to be contributed to the main repository): a Manufacture workspace
+  whose ribbon has a button per operation kind, grouped by category, and a Manufacture folder in
+  the Browser where each setup's operations are parametric steps (changing one regenerates it
+  and the ones after it):
 
-## Why Makera
+| Category | Operations |
+|---|---|
+| 2D milling | face, 2D pocket, 2D adaptive, 2D contour (with tabs), slot, trace, engrave (V bit), 2D chamfer |
+| Drilling | drill (G81, G82, G83, G73, G85), tap (G84), bore, circular, thread milling |
+| 3D milling | 3D adaptive, 3D pocket (with rest machining), parallel, 3D contour (waterline), steep and shallow, scallop, pencil, horizontal, spiral, radial, morphed spiral, project, morph; ramp and geodesic are planned |
+| Multi-axis | rotary (continuous 4-axis), swarf, multi-axis contour, flow, 3+2 indexing of any 2D or 3D kind; multi-axis blend is planned |
+| Turning on the A axis | turn face, turn profile, turn groove, turn thread (the part turns on A, a vertical cutter cuts it) |
+| Laser | laser cut (kerf offset, passes) and laser engrave (raster) |
 
-- Makera's machines are the desktop mills most likely to sit next to the people who use AI
-  assistants to design parts, and the gap between "I have a model" and "I have a program that
-  runs on my Carvera" is the part they find hardest.
-- Makera publishes its machines' specifications and documents its control's commands, which is
-  what let us build this without touching anything proprietary.
-- A 4th-axis module on a Carvera is the simplest real continuous 4-axis setup there is, and
-  our rotary toolpaths and simulator are built for exactly that.
+  Turning and laser are the newest and still being finished; the whole module is early-stage.
+- **Simulation**: a Z-map of the stock cut move by move, with gouge, rapid-through-stock and
+  holder collision reports, and a visual player in the viewport.
 
-## What the Makera support does
+## The Makera support
 
 | | Carvera | Carvera Air | Z1 |
 |---|---|---|---|
 | Work area | 360 × 240 × 140 mm | 300 × 200 × 130 mm | 200 × 200 × 100 mm |
-| Spindle | 200 W, 0–15 000 rev/min | 200 W, 0–13 000 rev/min | 150 W, 0–13 000 rev/min |
-| Travel speed | 6 000 mm/min | 4 000 mm/min | 1 200 mm/min |
-| Tool changer | 6-slot automatic | quick change by hand | quick change by hand |
+| Spindle | 200 W, to 15 000 rev/min | 200 W, to 13 000 rev/min | 150 W, to 13 000 rev/min |
+| Maximum feed | 6 000 mm/min | 4 000 mm/min | 1 200 mm/min |
+| Tool changer | 6-slot automatic | by hand (quick change) | by hand (quick change) |
 | Collets | 1/8" (1/4", 6, 4, 3 mm optional) | 1/8" (1/4", 6, 4 mm optional) | 1/8" (1/4", 6, 4, 3 mm optional) |
-| Rotary module | Ø92 × 240 mm | Ø92 × 200 mm | Ø80 × 150 mm |
+| 4th-axis module | Ø92 × 240 mm | Ø92 × 200 mm | Ø80 × 150 mm |
 | Gantry clearance | 120 mm | 120 mm | 115 mm |
+| Laser | 2.5 W, built in | 5 W module | 5 W module |
 
-Figures from Makera's product pages and Makera's resellers' specification sheets; they are
-machine specifications, not promises about finished parts. We will correct any Makera tells us
-are wrong.
+These are Makera's published figures, as SolidCraft's presets carry them (`carvera`,
+`carvera_air`, `z1`, each with a `_4axis` variant). They are machine specifications, not claims
+about finished parts. We will correct any that Makera tells us are wrong.
 
 With a Makera preset on a setup:
 
-- **Checks** on every generate and post: spindle speed or feed past the machine's (the post
-  writes the maximum and says so), a shank no collet takes, a toolpath wider than the work
-  area, cuts past the rotary module's capacity, and tool changes beyond the six slots (or every
-  change on the Air and Z1), each as an issue the assistant can act on.
-- **The `makera` post** writes the control's dialect as Makera documents it: millimetres only,
-  `M6 T` tool changes with the control measuring the tool length itself, `M7`/`M9` for the air
-  blast, `G28` to park, the `A` word for the rotary module, no canned cycles, `;` comments,
-  `M2`, saved as `.cnc`.
-- **The tool kit** adds Makera's 1/8" bit set (single-flute flat end mills, ball end mills, a
-  90° chamfer bit, a 30° engraving bit and drills in 3.175, 2 and 1 mm) with feeds from chip
-  loads for aluminium, wood or plastic, scaled for the small cutters and held within the
-  machine's limits, plus a starting stepdown.
-- **The simulator** shows the stock being cut by the program before it is sent, and reports
-  gouges, rapids through stock and holder collisions, so a first-time user sees a crash on
-  screen rather than on the machine.
+- **Checks** run on every generate and post: spindle speed or feed past the machine's (the post
+  writes the maximum and says so), a shank no collet takes, a toolpath larger than the work
+  area, cuts beyond the 4th-axis module's capacity, tool changes beyond the six slots (or any
+  change on the Air and Z1), and a laser program on a machine without a laser.
+- **The `makera` post** writes the dialect as Makera documents it: millimetres only, `M6 T`
+  tool changes with the control measuring tool length (no `G43`), `M7`/`M9` air blast, `G28`
+  park, the `A` word for the 4th axis, no canned cycles (drilling and tapping are expanded),
+  `;` comments, `M2`, saved as `.cnc`. Laser mode: `M321` to enter, `G0 Z0` to the focus, no Z
+  words, `S` as a 0..1 fraction of the module's power, `M7` for air assist, `M9` and `M322` to
+  leave.
+- **The `makera_essential` kit** adds Makera's 1/8" bit set (flat and ball end mills, a 90°
+  chamfer bit, a 30° engraving bit, drills) with feeds for aluminium, wood or plastic, held
+  within the machine's limits, plus a laser tool for the machine's module when it has one.
 
-An assistant's whole job on a Carvera is six commands: add the kit, create a setup with
-`machine: "carvera"`, add operations, generate, simulate, post. Each answer tells it what to fix.
+## Test plan
 
-## What we are asking for
+Each test is a small part programmed in SolidCraft, simulated, posted with the `makera` post
+and cut. Every test also compares the cut part with the simulator's stock.
 
-1. **A Carvera with the 4th-axis module** (or a Carvera Air with its module, if the Carvera is
-   not possible) on loan or at cost, to run our programs on real stock and feed what we learn
-   back into the posts, the feeds and the checks.
-2. **Ten minutes of an engineer's time** to confirm the dialect details we took from the
-   documentation: the tool-change and parking conventions, how the control treats the rotary
-   feed, and anything the Z1 does differently.
-3. **Permission to say "tested on a Makera Carvera"** once it is.
+| Category | Machine and module | Test part | Passes when |
+|---|---|---|---|
+| 2D milling | Carvera (ATC, multi-tool job) | plate with pocket, island, slot, contour with tabs, chamfer, V-engraving | pocket and contour dimensions within ±0.05 mm; tool changes run unattended |
+| Drilling | Carvera | hole pattern: drilled, pecked, bored, circular-milled, tapped and thread-milled holes | hole diameters within ±0.05 mm; M3 / M4 threads take a GO gauge and refuse a NO-GO |
+| 3D milling | Carvera | 3D test block: adaptive rough, then parallel, waterline, scallop and pencil finishes | surface within ±0.1 mm of the model; finish (Ra) and scallop height near the predicted value |
+| Multi-axis | Carvera + 4th-axis module | rotary wrap and multi-axis contour on round stock | profile within ±0.1 mm; A direction and rotary feed as the simulator shows |
+| Turning | Carvera + 4th-axis module | stepped shaft: turn face, profile, groove, thread | diameters within ±0.05 mm; groove width and position within ±0.1 mm; an external thread takes its nut or ring gauge |
+| Laser | Carvera (2.5 W built in); Air or Z1 (5 W module) | cut-out and raster test card in plywood, card, acrylic | cut dimensions within ±0.1 mm of the kerf-compensated path; a power and speed grid that sets the kit's defaults |
+| Machine limits | Carvera Air and Z1, with 4th-axis modules | the same parts scaled to fit | checks catch every over-limit case; manual tool changes prompt as expected; feeds clamped to 4 000 and 1 200 mm/min |
+
+We will measure with calipers, a micrometer, thread gauges and a surface roughness gauge, and
+publish every program, measurement and photo. Tolerances above are our targets; we will agree
+them with Makera before cutting.
+
+## What we ask for
+
+| Tier | Machines | What it covers |
+|---|---|---|
+| **Ideal** | a Carvera with the 4th-axis module, plus a Carvera Air or Z1 with its laser and 4th-axis modules | every row of the test plan, on two machines |
+| **Minimum** | one Carvera with the 4th-axis module | milling, drilling, rotary, turning, threads, and the 2.5 W built-in laser |
+
+Either tier on **loan** for the test period (we return it at our cost) or **at cost**. We will
+cover materials, tooling wear and measuring equipment. We also ask for:
+
+- **One short call with an engineer** to answer the open questions below.
+- **Permission to say "tested on a Makera Carvera"** (and Air or Z1) once the tests pass.
 
 ## What Makera gets
 
-- An open-source CAD and CAM path to its machines, under MIT or Apache-2.0, with no licence
-  fees for its customers and no dependency on anyone's subscription.
-- Machines that AI assistants can program safely: the checks, the simulator and the feedback
-  loop are built for an assistant that has never seen a mill.
-- Test coverage: the Makera presets, post and kit are covered by automated tests that run on
-  every change, and we will add Makera-specific regression tests from anything the machine
-  teaches us.
-- Public credit in the documentation, the release notes and the app.
+- **Open-source CAD and CAM that targets Makera first**, in a public project under MIT or
+  Apache-2.0, with no licence fees or subscriptions for its customers. The Makera presets, post
+  and kit live in the main repository, so anyone can read, fix and extend them, and they are
+  maintained with the rest of SolidCraft rather than in a private fork.
+- **An AI-assistant-first workflow.** Every step is a JSON command with a self-describing
+  result and a notice: what went well, what was clamped, what to change, with a stable code
+  and a suggested fix. A whole Carvera job is six commands: add the kit, create a setup with
+  `machine: "carvera"`, add operations, generate, simulate, post.
+- **Posts tested on Makera's dialect**, with automated regression tests built from what the
+  machines teach us, run by the project's CI on every change to the main repository.
+- **Published results**: a public report with programs, measurements and photos, and credit
+  in the documentation, the release notes and the app.
 
-## What we will do first with the machine
+## Timeline
 
-1. Cut the test block the simulator already runs (face, 3D rough, 2D pocket, outside contour,
-   drill) in machinable wax, then aluminium, and compare the part with the model.
-2. Run the rotary test (a continuous 4-axis finish of a turned profile) on the 4th-axis module
-   and confirm the rotation direction and feed behaviour.
-3. Measure what the machine does with the kit's feeds and set them from measurements.
-4. Publish the programs, the measurements and the results.
+| Weeks | Work |
+|---|---|
+| 1–2 | 2D milling and drilling on the Carvera; feeds set from measurements |
+| 3–4 | 3D finishing, rotary, turning and threads on the 4th-axis module |
+| 5 | Laser cutting and engraving; the Air or Z1 limit tests |
+| 6 | Fixes contributed to the main repository; public report published |
 
 ## Where to look
 
-- Source: the `cam` branch of `github.com/jb69/solidcraft` (`crates/cam`, `docs/cam.md`).
+- Project: `github.com/tangency-labs/solidcraft`, the public SolidCraft repository the CAM
+  module is being contributed to.
+- Work in progress: the `cam` branch of `github.com/jb69/solidcraft` (`crates/cam`,
+  `docs/cam.md`, `docs/cam-operations.md`) until it is merged upstream.
 - Try it without a machine: the desktop app's Manufacture workspace, or the MCP server with the
   `solidcraft-cam` skill, which walks an assistant through a Carvera job.
 
 ## Open questions for Makera
 
-- Does the stock firmware accept arbitrary large `A` values on continuous rotary jobs, or should
-  the post wrap them (as the community post does)?
+Milling and rotary:
+
+- Does the stock firmware accept large `A` values on continuous rotary jobs, or should the post
+  wrap them?
 - Is `G28` the right park before a tool change on all three machines, and is `M2` the preferred end?
 - Does the Z1 share the Carvera's command set in full?
-- Which tools, collets and holders does Makera want the kit to carry, and at which feeds?
+- Can the spindle reverse for tapping (expanded G84), or should taps be thread-milled only?
+- Which tools, collets and holders should the kit carry, and at which feeds?
+
+Laser:
+
+- Is `S` a 0..1 fraction of the module's power on all three machines (2.5 W and 5 W alike)?
+- Is the focus set by `M321` and then `G0 Z0` on every machine, and should the program write no
+  Z words in laser mode?
+- Does air assist use `M7` / `M9` in laser mode, as in milling?
+- Which feed and power ranges does Makera recommend for each module and material?

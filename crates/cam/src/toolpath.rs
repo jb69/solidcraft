@@ -35,14 +35,25 @@ pub struct Move {
     pub axis: Vec3,
     /// mm/min; 0 for a rapid.
     pub feed: f64,
+    /// Beam power for a laser move, 0..1 of the module's power (0: no beam).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub power: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl Move {
     pub fn new(kind: MoveKind, to: Vec3, feed: f64) -> Move {
-        Move { kind, to, axis: Vec3::new(0.0, 0.0, 1.0), feed }
+        Move { kind, to, axis: Vec3::new(0.0, 0.0, 1.0), feed, power: 0.0 }
     }
     pub fn with_axis(mut self, axis: Vec3) -> Move {
         self.axis = axis;
+        self
+    }
+    pub fn with_power(mut self, power: f64) -> Move {
+        self.power = power;
         self
     }
     pub fn is_cutting(&self) -> bool {
@@ -57,6 +68,13 @@ pub struct Toolpath {
     /// Drilling cycles the post may emit as canned cycles (also expanded into `moves`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cycles: Vec<DrillCycle>,
+    /// A laser program: moves carry beam power, the post runs the control's laser mode and the
+    /// stock simulation leaves it alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub laser: bool,
+    /// Air assist on for a laser program.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub air: bool,
 }
 
 /// A drilling cycle at one hole, for posts that emit canned cycles.
@@ -87,6 +105,9 @@ pub enum DrillCycleKind {
     ChipBreak,
     /// G85: feed in, feed out (boring/reaming).
     FeedOut,
+    /// G84: tapping, the feed being the pitch times the spindle speed, feed out with the
+    /// spindle reversed (rigid tapping, or a tension-compression holder).
+    Tap,
 }
 
 /// Measures of a toolpath.
@@ -196,6 +217,8 @@ impl Toolpath {
         Toolpath {
             moves: self.moves.iter().map(|m| Move { to: f(m.to), axis: g(m.axis), ..*m }).collect(),
             cycles: self.cycles.iter().map(|c| DrillCycle { top: f(c.top), axis: g(c.axis), ..*c }).collect(),
+            laser: self.laser,
+            air: self.air,
         }
     }
 

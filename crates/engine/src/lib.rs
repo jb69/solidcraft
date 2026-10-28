@@ -703,7 +703,9 @@ impl Session {
     fn render_only_change(&self, before: &Snapshot) -> bool {
         self.active_sketch == before.active_sketch
             && self.pending_moves == before.pending_moves
-            && (self.doc.differs_only_in_render(&before.doc) || self.doc.differs_only_in_part_properties(&before.doc))
+            && (self.doc.differs_only_in_render(&before.doc)
+                || self.doc.differs_only_in_part_properties(&before.doc)
+                || self.doc.differs_only_in_manufacture(&before.doc))
     }
 
     fn refresh_render(&mut self, previous: &Arc<Document>) {

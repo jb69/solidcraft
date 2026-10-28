@@ -90,6 +90,24 @@ pub enum ToolChanger {
     Automatic { slots: u32 },
 }
 
+/// A laser module on the machine.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LaserModule {
+    pub power_w: f64,
+    pub wavelength_nm: f64,
+    /// Built into the machine (true) or an optional module fitted to the spindle (false).
+    pub builtin: bool,
+    /// Spot diameter the posts and kits assume, mm.
+    pub spot_mm: f64,
+}
+
+impl Default for LaserModule {
+    fn default() -> Self {
+        LaserModule { power_w: 5.0, wavelength_nm: 445.0, builtin: false, spot_mm: 0.1 }
+    }
+}
+
 /// A machine: kinematics, travel, speeds and the control's capabilities.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -124,6 +142,8 @@ pub struct Machine {
     pub collets: Vec<f64>,
     /// A rotary module's stock capacity, diameter and length (mm), when one is fitted.
     pub rotary_capacity: Option<(f64, f64)>,
+    /// The laser module, when the machine has (or takes) one.
+    pub laser: Option<LaserModule>,
     /// The control compensates the rotary axes itself (TCP / RTCP): the post writes workpiece
     /// coordinates and angles. Without it the post computes machine coordinates and linearises.
     pub tcp: bool,
@@ -154,6 +174,7 @@ impl Default for Machine {
             tool_changer: ToolChanger::Unknown,
             collets: Vec::new(),
             rotary_capacity: None,
+            laser: None,
             tcp: false,
             linearisation_tolerance: 0.01,
             max_rotary_step_deg: 5.0,
@@ -221,6 +242,7 @@ impl Machine {
             spindle_power_w: 200.0,
             tool_changer: ToolChanger::Automatic { slots: 6 },
             collets: vec![3.175, 6.35, 6.0, 4.0, 3.0],
+            laser: Some(LaserModule { power_w: 2.5, wavelength_nm: 445.0, builtin: true, spot_mm: 0.1 }),
             ..Default::default()
         }
     }
@@ -254,6 +276,7 @@ impl Machine {
             spindle_power_w: 200.0,
             tool_changer: ToolChanger::Manual,
             collets: vec![3.175, 6.35, 6.0, 4.0],
+            laser: Some(LaserModule { power_w: 5.0, wavelength_nm: 445.0, builtin: false, spot_mm: 0.1 }),
             ..Default::default()
         }
     }
@@ -285,6 +308,7 @@ impl Machine {
             spindle_power_w: 150.0,
             tool_changer: ToolChanger::Manual,
             collets: vec![3.175, 6.35, 6.0, 4.0, 3.0],
+            laser: Some(LaserModule { power_w: 5.0, wavelength_nm: 445.0, builtin: false, spot_mm: 0.1 }),
             ..Default::default()
         }
     }
@@ -356,6 +380,22 @@ impl Machine {
         use crate::notice::Issue;
         let mut out = Vec::new();
         let who = if self.model.is_empty() { self.name.clone() } else { self.model.clone() };
+        if toolpath.laser {
+            if self.laser.is_none() {
+                out.push(Issue::error("no_laser", format!("the {who} has no laser module; a laser program cannot run on it")).parameter("machine", self.name.clone()));
+            }
+            if self.max_feed > 0.0 {
+                let fastest = toolpath.moves.iter().map(|m| m.feed).fold(0.0, f64::max);
+                if fastest > self.max_feed + 1e-9 {
+                    out.push(
+                        Issue::warning("feed_limit", format!("the laser moves at {} mm/min; the {who} moves at {} mm/min at most; the post writes the maximum", fastest.round(), self.max_feed.round()))
+                            .parameter("speed", fastest)
+                            .limit(self.max_feed),
+                    );
+                }
+            }
+            return out;
+        }
         let f = &tool.feeds;
         if self.spindle_rpm_max > 0.0 && f.spindle_rpm > self.spindle_rpm_max + 1e-9 {
             out.push(

@@ -205,6 +205,11 @@ pub fn simulate(
     crate::positive("tolerance", tol)?;
     let before = stock.volume();
     let mut rep = SimulationReport::default();
+    if tp.laser {
+        // A laser marks or cuts through; the Z-map stock does not model either.
+        rep.remaining_volume_mm3 = before;
+        return Ok(rep);
+    }
     let z = Vec3::new(0.0, 0.0, 1.0);
     let mut prev = start;
     for m in &tp.moves {
@@ -492,7 +497,7 @@ impl Simulator {
                 let a = from_pt.lerp(m.to, f0);
                 let b = from_pt.lerp(m.to, f1);
                 let vertical = (m.axis - Vec3::new(0.0, 0.0, 1.0)).len() < 1e-6;
-                if vertical && m.kind != MoveKind::Rapid && !(m.kind == MoveKind::Retract && m.feed <= 0.0) {
+                if vertical && !op.toolpath.laser && m.kind != MoveKind::Rapid && !(m.kind == MoveKind::Retract && m.feed <= 0.0) {
                     self.stock.cut(&op.tool, a, b);
                 }
                 let feed = if m.feed > 0.0 { m.feed } else { self.rapid_feed };

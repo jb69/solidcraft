@@ -66,7 +66,10 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
         "cam.machine.set" => Some(json!({"setup": setup, "machine": "carvera"})),
         "cam.operation.add" => Some(json!({"setup": setup, "tool": tool, "type": "pocket3d", "name": "Rough", "stepover": 3, "stepdown": 2, "stock_to_leave_radial": 0.2, "stock_to_leave_axial": 0.1})),
         "cam.operation.set" => Some(json!({"operation": null})),
-        _ => None,
+        _ => {
+            let tools: Vec<(u64, bool)> = m.tools.tools.iter().map(|t| (t.id, t.is_laser())).collect();
+            id.strip_prefix("cam.operation.").filter(|k| !matches!(*k, "add" | "remove" | "list" | "kinds")).map(|k| kind_template(k, setup, tool, &tools))
+        }
     };
     if let Some(template) = template {
         crate::shortcut_box::open(app, None);
@@ -91,6 +94,53 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
         Err(e) => app.set_status(e, true),
     }
     true
+}
+
+/// A filled-in `cam.operation.<kind>` call: the kind's parameters at their defaults and the
+/// geometry the kind reads, for the command box.
+fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u64, bool)]) -> Value {
+    use solidcraft_engine::cam::ops::OpKind;
+    let (kind_name, extra): (&str, Value) = match kind {
+        "tap" => ("drill", json!({"cycle": "tap", "pitch": 1.0})),
+        other => (other, json!({})),
+    };
+    let mut params = serde_json::from_value::<OpKind>(json!({"type": kind_name})).ok().and_then(|k| serde_json::to_value(k).ok()).unwrap_or(json!({}));
+    if let Value::Object(o) = &mut params {
+        o.remove("type");
+        if let Value::Object(e) = extra {
+            for (k, v) in e {
+                o.insert(k, v);
+            }
+        }
+    }
+    let geometry = match kind_name {
+        "face" => json!({"source": "stock"}),
+        "pocket2d" | "adaptive2d" | "chamfer2d" => json!({"source": "faces", "points": [[0, 0, 0]]}),
+        "contour2d" | "project" => json!({"source": "silhouette"}),
+        "slot" | "trace" | "engrave" => json!({"source": "sketch", "feature": 0}),
+        "drill" | "bore" | "circular" | "thread" => json!({"source": "holes", "points": [[0, 0, 0]]}),
+        "swarf" => json!({"source": "chains", "bottom": [[0, 0, 0], [10, 0, 0]], "top": [[0, 0, 10], [10, 0, 10]]}),
+        "flow" | "morph" => json!({"source": "rails", "first": [[0, 0, 0], [10, 0, 0]], "second": [[0, 10, 0], [10, 10, 0]]}),
+        "laser_cut" => json!({"source": "sketch", "feature": 0}),
+        "laser_engrave" => json!({"source": "faces", "points": [[0, 0, 0]]}),
+        _ => Value::Null,
+    };
+    // Laser work wants the laser tool, turning a vertical cutter: pick the library's first of
+    // the kind when there is one.
+    let tool = match kind_name {
+        "laser_cut" | "laser_engrave" => tools.iter().find(|t| t.1).map(|t| t.0).or(tool),
+        _ => tools.iter().find(|t| !t.1).map(|t| t.0).or(tool),
+    };
+    let mut call = json!({"setup": setup, "tool": tool, "name": kind_name});
+    if let (Value::Object(c), Value::Object(p)) = (&mut call, params) {
+        for (k, v) in p {
+            c.insert(k, v);
+        }
+        if !geometry.is_null() {
+            c.insert("geometry".into(), geometry);
+        }
+    }
+    call
 }
 
 fn status_color(t: &Tokens, status: &str) -> Color32 {
@@ -138,8 +188,9 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
                         }
                         for op in &st.operations {
                             let made = s.cam.operations.get(&op.id);
+                            let state = crate::browser::cam::op_state(app, op.id);
                             let (status, stale) = match made {
-                                Some(g) => (g.notice.status(), g.revision != s.revision),
+                                Some(g) => (g.notice.status(), state == "stale"),
                                 None if op.enabled => ("not generated", false),
                                 None => ("disabled", false),
                             };

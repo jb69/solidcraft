@@ -29,10 +29,15 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
 }
 
 /// The radial frame at `theta` about the operation's x axis: z points away from the axis.
-fn radial_frame(theta: f64) -> Frame {
+pub(super) fn radial_frame(theta: f64) -> Frame {
     let x = Vec3::new(1.0, 0.0, 0.0);
     let z = rotate(Vec3::new(0.0, 0.0, 1.0), x, theta);
     Frame { origin: Vec3::new(0.0, 0.0, 0.0), x, y: z.cross(x), z }
+}
+
+/// Turning the model's profile: rotary finishing along the axis, the full way round.
+pub(super) fn rotary_along(op: &Operation, ctx: &Context, stepover: f64) -> Result<(Toolpath, Notice)> {
+    rotary(op, ctx, true, stepover, (0.0, 360.0), 0.0)
 }
 
 fn rotary(_op: &Operation, ctx: &Context, along_axis: bool, stepover: f64, angles: (f64, f64), inner_radius: f64) -> Result<(Toolpath, Notice)> {
@@ -53,13 +58,7 @@ fn rotary(_op: &Operation, ctx: &Context, along_axis: bool, stepover: f64, angle
         (b.min.x, b.max.x)
     };
     // Stock radius about the axis, clearance beyond it.
-    let sb = ctx.stock.bounds();
-    let stock_r = [sb.min, sb.max]
-        .iter()
-        .flat_map(|p| [Vec2::new(p.y, p.z)])
-        .map(|v| v.len())
-        .fold(0.0, f64::max)
-        .max((sb.max.y - sb.min.y).max(sb.max.z - sb.min.z) * 0.5);
+    let stock_r = ctx.stock.radius_about_x();
     let clearance_r = stock_r + (ctx.heights.clearance - ctx.stock_z().1).max(2.0);
     let floor = inner_radius.max(0.0);
     let step = (8.0 * ctx.tolerance * tool.radius()).sqrt().clamp(ctx.tolerance * 2.0, tool.diameter);

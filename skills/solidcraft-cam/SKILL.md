@@ -17,7 +17,18 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
    of the stock's top.
 2. `cam.operation.kinds {}` once per session: every operation type with its parameters and
    defaults. Do not invent parameter names; an unknown one is reported as `unknown_parameter`
-   with the nearest valid name.
+   with the nearest valid name. `cam.operation.<kind>` (face, pocket2d, adaptive2d, contour2d,
+   slot, trace, engrave, chamfer2d, drill, tap, bore, circular, thread, pocket3d, adaptive3d,
+   parallel, contour3d, steep_shallow, scallop, pencil, horizontal, spiral, radial,
+   morphed_spiral, project, morph, rotary, swarf, multi_axis_contour, flow) is
+   `cam.operation.add` with the type set; `setup` and `tool` default to the only setup and
+   the first tool. `docs/cam-operations.md` says which to use for what. Laser work
+   (`laser_cut`, `laser_engrave`) needs a laser tool (`cam.tool.kit` adds one for a machine
+   with a module) and turning (`turn_face`, `turn_profile`, `turn_groove`, `turn_thread`) a
+   `_4axis` machine with a cylinder stock along x.
+4. Operations are parametric steps: changing one (or its tool, the setup or the model) makes
+   it and every later one stale, and `cam.generate` regenerates only those. Reorder with
+   `cam.operation.move`; read `regenerated` and `reused` in the result.
 3. `cam.machine.list` and `cam.post.list` when the machine matters (4/5-axis work needs a
    4/5-axis machine on the setup and the `fiveaxis` post). For a Makera Carvera, Carvera Air
    or Z1 put the preset on the setup (`machine: "carvera"`, `"carvera_air"`, `"z1"`, or the

@@ -215,7 +215,7 @@ fn rotary_part_posts_with_a_words() {
     assert!(cuts.len() > 20, "{}", cuts.len());
     for m in &cuts {
         let r = (m[2].as_f64().unwrap().powi(2) + m[3].as_f64().unwrap().powi(2)).sqrt();
-        assert!(r <= 10.0 + 0.2 && r >= 6.9, "{m}");
+        assert!((6.9..=10.2).contains(&r), "{m}");
         assert!(m.get(5).is_some(), "tilted move without axis: {m}");
     }
     assert!(tp["stats"]["max_tilt_deg"].as_f64().unwrap() > 90.0);
@@ -380,7 +380,8 @@ fn carvera_program_uses_the_kit_the_checks_and_the_makera_post() {
     let mut s = block();
     let kit = run(&mut s, "cam.tool.kit", json!({"material": "aluminium", "machine": "carvera"}));
     let tools = kit["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 11, "{kit}");
+    // Eleven cutters and the Carvera's built-in laser.
+    assert_eq!(tools.len(), 12, "{kit}");
     assert_eq!(kit["notice"]["status"], "ok");
     let flat = tools[0]["id"].as_u64().unwrap();
     let drill = tools[8]["id"].as_u64().unwrap();
@@ -416,4 +417,237 @@ fn carvera_program_uses_the_kit_the_checks_and_the_makera_post() {
     let g = run(&mut s, "cam.generate", json!({"setup": setup}));
     let face = &g["setups"][0]["operations"][0];
     assert!(face["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "spindle_speed" && i["limit"] == 13000.0), "{face}");
+}
+
+#[test]
+fn every_operation_kind_has_a_command_and_the_new_kinds_cut() {
+    let mut s = block();
+    let flat = add_flat(&mut s, 3.0);
+    let v = run(&mut s, "cam.tool.add", json!({"name": "60° V", "kind": "chamfer", "tip_angle_deg": 60, "diameter": 6}))["id"].as_u64().unwrap();
+    let setup = run(&mut s, "cam.setup.create", json!({"name": "Top"}))["id"].as_u64().unwrap();
+    // A command per kind, with setup and tool defaulting to the only setup and the first tool.
+    for kind in solidcraft_cam::ops::OpKind::NAMES {
+        let spec = crate::find_command(&format!("cam.operation.{kind}")).unwrap_or_else(|| panic!("cam.operation.{kind}"));
+        assert_eq!(spec.tab, "MANUFACTURE", "{kind}");
+    }
+    let kinds = run(&mut s, "cam.operation.kinds", json!({}));
+    let names: Vec<&str> = kinds["kinds"].as_array().unwrap().iter().map(|k| k["type"].as_str().unwrap()).collect();
+    for k in ["slot", "trace", "engrave", "circular", "thread", "adaptive3d", "morph"] {
+        assert!(names.contains(&k), "{names:?}");
+    }
+    // A slot around a rectangle, 4 mm wide with a 3 mm tool, 2 mm deep.
+    let rect = json!([[[5, 5], [35, 5], [35, 25], [5, 25]]]);
+    let slot = run(&mut s, "cam.operation.slot", json!({"name": "Slot", "width": 4, "stepdown": 1, "geometry": {"source": "loops", "loops": rect}, "heights": {"bottom": {"from": "model_top", "offset": -2}}}));
+    assert_eq!(slot["tool"], flat, "{slot}");
+    assert_eq!(slot["setup"], setup);
+    let trace = run(&mut s, "cam.operation.trace", json!({"name": "Trace", "geometry": {"source": "loops", "loops": rect}, "heights": {"bottom": {"from": "model_top", "offset": -0.5}}}));
+    let engrave = run(&mut s, "cam.operation.engrave", json!({"name": "Engrave", "tool": v, "width": 1.0, "geometry": {"source": "loops", "loops": rect}}));
+    let circular = run(&mut s, "cam.operation.circular", json!({"name": "Circular", "stepdown": 3, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
+    let thread = run(&mut s, "cam.operation.thread", json!({"name": "Thread", "pitch": 1.0, "passes": 2, "geometry": {"source": "holes", "points": [[13, 10, 5]]}, "heights": {"bottom": {"from": "model_top", "offset": -6}}}));
+    let tap = run(&mut s, "cam.operation.tap", json!({"name": "Tap", "pitch": 1.0, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}));
+    let adaptive = run(&mut s, "cam.operation.adaptive3d", json!({"name": "Adaptive 3D", "stepdown": 2, "optimal_load": 1.0}));
+    let morph = run(&mut s, "cam.operation.morph", json!({"name": "Morph", "stepover": 2, "geometry": {"source": "rails", "first": [[2, 2, 10], [38, 2, 10]], "second": [[2, 28, 10], [38, 28, 10]]}}));
+    let g = run(&mut s, "cam.generate", json!({}));
+    let ops = g["setups"][0]["operations"].as_array().unwrap();
+    for o in ops {
+        assert_ne!(o["status"], "error", "{o}");
+        assert!(o["stats"]["moves"].as_u64().unwrap() > 0, "{o}");
+    }
+    let by_id = |id: &Value| ops.iter().find(|o| &o["id"] == id).unwrap().clone();
+    // The slot has three offset passes per level (centre and the two walls) at three levels
+    // (from the stock top, 1 mm above the part, 2 mm into it at 1 mm a level).
+    let sl = by_id(&slot["id"]);
+    assert_eq!(sl["notice"]["info"].as_str().unwrap().split(':').next(), Some("slot"), "{sl}");
+    assert_eq!(sl["notice"]["values"]["levels"], 3, "{sl}");
+    assert_eq!(sl["notice"]["values"]["passes"], 9, "{sl}");
+    assert!((sl["stats"]["min_z"].as_f64().unwrap() - 8.0).abs() < 1e-6);
+    let tr = by_id(&trace["id"]);
+    assert!((tr["stats"]["min_z"].as_f64().unwrap() - 9.5).abs() < 1e-6, "{tr}");
+    // Engraving a 1 mm wide groove with a 60° V: depth = 0.5 / tan 30° = 0.866.
+    let en = by_id(&engrave["id"]);
+    assert!((en["stats"]["min_z"].as_f64().unwrap() - (10.0 - 0.866)).abs() < 0.01, "{en}");
+    // Circular milling of the 6 mm hole with a 3 mm tool: two levels, rings at the wall.
+    let ci = by_id(&circular["id"]);
+    assert_eq!(ci["notice"]["values"]["holes"], 1, "{ci}");
+    assert!(ci["notice"]["values"]["rings"].as_u64().unwrap() >= 4, "{ci}");
+    // The thread climbs 7 mm (from the stock top, 1 mm above the part) at 1 mm per turn, twice.
+    let th = by_id(&thread["id"]);
+    assert!((th["notice"]["values"]["turns"].as_f64().unwrap() - 7.0).abs() < 1e-6, "{th}");
+    assert_eq!(th["notice"]["values"]["passes"], 2);
+    let tp = run(&mut s, "cam.toolpath", json!({"operation": thread["id"], "limit": 100000}));
+    let r = (tp["bounds"]["max"][0].as_f64().unwrap() - 13.0).abs();
+    assert!((r - 1.5).abs() < 0.05, "thread radius {r}: {}", tp["bounds"]);
+    let ta = by_id(&tap["id"]);
+    assert_eq!(ta["notice"]["values"]["cycle"], "tap");
+    assert!((ta["notice"]["values"]["tap_feed_mm_min"].as_f64().unwrap() - 10000.0).abs() < 1e-6, "{ta}");
+    let ad = by_id(&adaptive["id"]);
+    assert!(ad["notice"]["values"]["rings"].as_u64().unwrap() > 0, "{ad}");
+    let mo = by_id(&morph["id"]);
+    assert!(mo["notice"]["values"]["passes"].as_u64().unwrap() >= 13, "{mo}");
+    // On the top face between the rails, down to the part's bottom where it crosses the hole.
+    let tp = run(&mut s, "cam.toolpath", json!({"operation": morph["id"], "limit": 100000}));
+    let zs: Vec<f64> = tp["moves"].as_array().unwrap().iter().filter(|m| m[0] == "cut").map(|m| m[3].as_f64().unwrap()).collect();
+    assert!(zs.iter().all(|z| *z >= -1e-6 && *z <= 10.0 + 1e-6), "{zs:?}");
+    assert!(zs.iter().filter(|z| (**z - 10.0).abs() < 1e-6).count() > zs.len() / 2, "mostly on the top face");
+    // The makera post writes G84 as an expanded cycle and the generic one as a canned cycle.
+    let p = run(&mut s, "cam.post", json!({"post": "generic"}));
+    assert!(p["gcode"].as_str().unwrap().contains("G84"), "{}", &p["gcode"].as_str().unwrap()[..300]);
+}
+
+#[test]
+fn laser_programs_post_in_makera_laser_mode() {
+    let mut s = block();
+    let kit = run(&mut s, "cam.tool.kit", json!({"material": "wood", "machine": "carvera"}));
+    let tools = kit["tools"].as_array().unwrap();
+    let laser = tools.iter().find(|t| t["kind"] == "laser").unwrap_or_else(|| panic!("{kit}"))["id"].as_u64().unwrap();
+    let flat = tools[0]["id"].as_u64().unwrap();
+    run(&mut s, "cam.setup.create", json!({"name": "Carvera", "machine": "carvera"}));
+    let rect = json!([[[5, 5], [35, 5], [35, 25], [5, 25]]]);
+    run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 2, "stepdown": 0.5, "heights": {"bottom": {"from": "model_top", "offset": 0}}}));
+    let engrave = run(&mut s, "cam.operation.laser_engrave", json!({"tool": laser, "power": 0.4, "speed": 2500, "line_interval": 0.5, "geometry": {"source": "loops", "loops": rect}}));
+    let cut = run(&mut s, "cam.operation.laser_cut", json!({"tool": laser, "power": 1.0, "speed": 250, "passes": 2, "geometry": {"source": "loops", "loops": rect}}));
+    // A cutter cannot run a laser operation.
+    let e = fails(&mut s, "cam.operation.laser_cut", json!({"tool": flat, "geometry": {"source": "loops", "loops": rect}}));
+    let _ = e;
+    let g = run(&mut s, "cam.generate", json!({}));
+    let ops = g["setups"][0]["operations"].as_array().unwrap();
+    let by = |id: &Value| ops.iter().find(|o| &o["id"] == id).unwrap().clone();
+    let en = by(&engrave["id"]);
+    assert_eq!(en["status"], "ok", "{en}");
+    // 20 mm tall region at 0.5 mm: about 40 lines.
+    let lines = en["notice"]["values"]["lines"].as_u64().unwrap();
+    assert!((38..=42).contains(&lines), "{en}");
+    let cu = by(&cut["id"]);
+    assert_eq!(cu["notice"]["values"]["passes"], 2, "{cu}");
+    // The stock simulation leaves laser work alone.
+    let sim = run(&mut s, "cam.simulate", json!({}));
+    assert_eq!(sim["notice"]["values"]["gouge_cells"], 0, "{}", sim["notice"]);
+    let post = run(&mut s, "cam.post", json!({}));
+    let code = post["gcode"].as_str().unwrap();
+    let on = code.find("\nM321\n").unwrap_or_else(|| panic!("{code}"));
+    let off = code.find("\nM322\n").unwrap_or_else(|| panic!("{code}"));
+    assert!(on < off && code[..on].contains("M6 T1"), "milling first, then the laser");
+    let laser_part = &code[on..off];
+    assert!(laser_part.contains("\nG0 Z0\n"), "focus at the work's Z0");
+    assert!(laser_part.contains("S0.4") && laser_part.contains("S1.0"), "power as a fraction");
+    assert!(laser_part.contains("F2500.0") && laser_part.contains("F250.0"));
+    for l in laser_part.lines().filter(|l| l.starts_with("G1") || l.starts_with("G0 X")) {
+        assert!(!l.contains('Z'), "no Z in laser mode: {l}");
+    }
+    // A laser program on a machine without a laser module is an error.
+    run(&mut s, "cam.machine.set", json!({"machine": "three_axis", "setup": g["setups"][0]["id"]}));
+    let g = run(&mut s, "cam.generate", json!({}));
+    let en = g["setups"][0]["operations"].as_array().unwrap().iter().find(|o| o["id"] == engrave["id"]).unwrap().clone();
+    assert!(en["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "no_laser"), "{en}");
+}
+
+#[test]
+fn turning_on_the_rotary_axis_faces_grooves_and_threads() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"diameter": 20, "height": 60, "base": [-30, 0, 0], "axis": "X", "body_name": "Shaft"}));
+    let flat = add_flat(&mut s, 3.0);
+    let v = run(&mut s, "cam.tool.add", json!({"name": "60° V", "kind": "chamfer", "tip_angle_deg": 60, "diameter": 6}))["id"].as_u64().unwrap();
+    let setup = run(
+        &mut s,
+        "cam.setup.create",
+        json!({"name": "Rotary", "machine": "carvera_4axis", "stock": {"mode": "fixed_cylinder", "axis": "x", "radius": 11, "start": -30, "end": 33}}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let face = run(&mut s, "cam.operation.turn_face", json!({"tool": flat, "stepdown": 1}));
+    let groove = run(&mut s, "cam.operation.turn_groove", json!({"tool": flat, "position": 0, "width": 4, "depth": 2, "stepdown": 1}));
+    let thread = run(&mut s, "cam.operation.turn_thread", json!({"tool": v, "pitch": 1.5, "passes": 3, "start": -25, "length": 15}));
+    let profile = run(&mut s, "cam.operation.turn_profile", json!({"tool": flat, "stepover": 30}));
+    let kinds = run(&mut s, "cam.operation.kinds", json!({"type": "turn_thread"}));
+    assert_eq!(kinds["kinds"][0]["axes"], 4);
+    let g = run(&mut s, "cam.generate", json!({"setup": setup}));
+    let ops = g["setups"][0]["operations"].as_array().unwrap();
+    for o in ops {
+        assert_ne!(o["status"], "error", "{o}");
+    }
+    let by = |id: &Value| ops.iter().find(|o| &o["id"] == id).unwrap().clone();
+    // Facing back 3 mm of stock at 1 mm a level.
+    let fa = by(&face["id"]);
+    assert_eq!(fa["notice"]["values"]["levels"], 3, "{fa}");
+    assert!((fa["notice"]["values"]["face_x_mm"].as_f64().unwrap() - 30.0).abs() < 1e-6, "{fa}");
+    // The groove's floor is 2 mm below the 11 mm stock radius.
+    let gr = by(&groove["id"]);
+    assert!((gr["notice"]["values"]["radius_mm"].as_f64().unwrap() - 9.0).abs() < 1e-6, "{gr}");
+    // Ten turns of 1.5 mm over 15 mm, three passes, each cut point at the pass radius.
+    let th = by(&thread["id"]);
+    assert!((th["notice"]["values"]["turns"].as_f64().unwrap() - 10.0).abs() < 1e-9, "{th}");
+    assert_eq!(th["notice"]["values"]["passes"], 3);
+    let depth = th["notice"]["values"]["thread_depth_mm"].as_f64().unwrap();
+    assert!((depth - 0.6134 * 1.5).abs() < 1e-3, "{th}");
+    let tp = run(&mut s, "cam.toolpath", json!({"operation": thread["id"], "limit": 200000}));
+    let cuts: Vec<&Value> = tp["moves"].as_array().unwrap().iter().filter(|m| m[0] == "cut").collect();
+    assert!(cuts.len() > 300, "{}", cuts.len());
+    let rmin = cuts.iter().map(|m| (m[2].as_f64().unwrap().powi(2) + m[3].as_f64().unwrap().powi(2)).sqrt()).fold(f64::INFINITY, f64::min);
+    assert!((rmin - (11.0 - depth)).abs() < 0.01, "deepest pass at {rmin}");
+    let xs: Vec<f64> = cuts.iter().map(|m| m[1].as_f64().unwrap()).collect();
+    assert!(xs.iter().all(|x| *x >= -25.0 - 1e-6 && *x <= -10.0 + 1e-6));
+    assert_ne!(by(&profile["id"])["status"], "error");
+    // The makera post writes the turns as A words with the tool vertical.
+    let post = run(&mut s, "cam.post", json!({"setup": setup}));
+    assert_eq!(post["post"], "makera");
+    let code = post["gcode"].as_str().unwrap();
+    assert!(code.lines().filter(|l| l.contains(" A")).count() > 300, "{}", &code[..600]);
+}
+
+#[test]
+fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
+    let mut s = block();
+    let flat = add_flat(&mut s, 6.0);
+    let small = add_flat(&mut s, 3.0);
+    let setup = run(&mut s, "cam.setup.create", json!({"name": "Top"}))["id"].as_u64().unwrap();
+    let face = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"].as_u64().unwrap();
+    let rough = run(&mut s, "cam.operation.pocket3d", json!({"tool": flat, "stepover": 3, "stepdown": 3}))["id"].as_u64().unwrap();
+    let rest = run(&mut s, "cam.operation.pocket3d", json!({"tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}))["id"].as_u64().unwrap();
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!(g["regenerated"], 3, "{g}");
+    let stale = |s: &mut Session| -> Vec<bool> {
+        run(s, "cam.notices", json!({}))["notices"].as_array().unwrap().iter().map(|n| n["stale"].as_bool().unwrap_or_else(|| panic!("{n}"))).collect()
+    };
+    assert_eq!(stale(&mut s), vec![false, false, false]);
+    // Nothing changed: generating again reuses every toolpath.
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(0), Some(3)), "{g}");
+    // Editing the second operation leaves the first as it was and makes it and the third stale;
+    // posting now says so.
+    run(&mut s, "cam.operation.set", json!({"operation": rough, "stepdown": 2}));
+    assert_eq!(stale(&mut s), vec![false, true, true]);
+    let post = run(&mut s, "cam.post", json!({}));
+    assert!(post["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "stale"), "{}", post["notice"]);
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(2), Some(1)), "{g}");
+    assert_eq!(stale(&mut s), vec![false, false, false]);
+    // A tool change reaches only the operations from the first that uses it.
+    run(&mut s, "cam.tool.set", json!({"tool": small, "feeds": {"cutting": 500}}));
+    assert_eq!(stale(&mut s), vec![false, false, true]);
+    // Suppressing the first operation changes everything after it.
+    run(&mut s, "cam.generate", json!({}));
+    run(&mut s, "cam.operation.set", json!({"operation": face, "enabled": false}));
+    let n = run(&mut s, "cam.notices", json!({}));
+    let rows = n["notices"].as_array().unwrap();
+    assert!(rows[1]["stale"] == true && rows[2]["stale"] == true, "{n}");
+    run(&mut s, "cam.operation.set", json!({"operation": face, "enabled": true}));
+    run(&mut s, "cam.generate", json!({}));
+    // Reordering: the moved operation and those after its old and new places go stale.
+    let m = run(&mut s, "cam.operation.move", json!({"operation": rest, "before": rough}));
+    assert_eq!(m["order"], json!([face, rest, rough]), "{m}");
+    assert_eq!(stale(&mut s), vec![false, true, true]);
+    let m = run(&mut s, "cam.operation.move", json!({"operation": rest, "down": true}));
+    assert_eq!(m["order"], json!([face, rough, rest]));
+    // The model changing makes every operation stale.
+    run(&mut s, "cam.generate", json!({}));
+    run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": [0, 0, 10], "operation": "join", "targets": ["Block"]}));
+    assert_eq!(stale(&mut s), vec![true, true, true]);
+    // Duplicating puts the copy right after the original.
+    let d = run(&mut s, "cam.operation.duplicate", json!({"operation": face}));
+    assert_eq!(d["index"], 1);
+    let ops = run(&mut s, "cam.operation.list", json!({"setup": setup}));
+    assert!(ops["operations"][1]["name"].as_str().unwrap().ends_with("(copy)"), "{ops}");
+    // all: true regenerates every operation.
+    let g = run(&mut s, "cam.generate", json!({"all": true}));
+    assert_eq!(g["regenerated"], 4, "{g}");
 }

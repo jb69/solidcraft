@@ -29,6 +29,11 @@ pub enum ToolKind {
     },
     /// Spot drill or centre drill (a short drill, used for spotting only).
     SpotDrill { tip_angle_deg: f64 },
+    /// A laser beam (a diode module): the diameter is the spot size, there is no body.
+    Laser {
+        /// Wavelength, nm (445 for the blue diodes of desktop machines).
+        wavelength_nm: f64,
+    },
     /// Tapered ball end mill (for deep 5-axis finishing).
     TaperedBall {
         /// Radius of the ball tip; the shank widens above it at the taper angle.
@@ -138,7 +143,7 @@ impl Tool {
     /// Corner radius of the profile: 0 for a flat tool, the radius for a ball.
     pub fn corner_radius(&self) -> f64 {
         match self.kind {
-            ToolKind::FlatEnd | ToolKind::Chamfer { .. } | ToolKind::Drill { .. } | ToolKind::SpotDrill { .. } => 0.0,
+            ToolKind::FlatEnd | ToolKind::Chamfer { .. } | ToolKind::Drill { .. } | ToolKind::SpotDrill { .. } | ToolKind::Laser { .. } => 0.0,
             ToolKind::BallEnd => self.radius(),
             ToolKind::BullNose { corner_radius } => corner_radius.clamp(0.0, self.radius()),
             ToolKind::TaperedBall { tip_radius, .. } => tip_radius.clamp(0.0, self.radius()),
@@ -157,6 +162,7 @@ impl Tool {
         let r = self.radius();
         let rho = rho.clamp(0.0, r);
         match self.kind {
+            ToolKind::Laser { .. } => 0.0,
             ToolKind::Chamfer { tip_angle_deg } | ToolKind::Drill { tip_angle_deg } | ToolKind::SpotDrill { tip_angle_deg } => {
                 let half = (tip_angle_deg.clamp(1.0, 179.0) * 0.5).to_radians();
                 rho / half.tan()
@@ -192,6 +198,10 @@ impl Tool {
         matches!(self.kind, ToolKind::FlatEnd | ToolKind::BallEnd | ToolKind::BullNose { .. })
     }
 
+    pub fn is_laser(&self) -> bool {
+        matches!(self.kind, ToolKind::Laser { .. })
+    }
+
     /// Checks the tool's numbers.
     pub fn validate(&self) -> Result<()> {
         positive("tool diameter", self.diameter)?;
@@ -222,6 +232,11 @@ impl Tool {
                     return Err(CamError::Param("taper angle must be between 0 and 90 degrees".into()));
                 }
             }
+            ToolKind::Laser { wavelength_nm } => {
+                if !(wavelength_nm.is_finite() && wavelength_nm > 0.0) {
+                    return Err(CamError::Param("the laser's wavelength must be positive".into()));
+                }
+            }
             ToolKind::FlatEnd | ToolKind::BallEnd => {}
         }
         let f = &self.feeds;
@@ -244,7 +259,7 @@ impl Tool {
     /// The tip's effective cutting radius at height `h` above the tip (the shank above the
     /// flutes, the holder above the stick-out), for collision checks.
     pub fn radius_at(&self, h: f64) -> f64 {
-        if h < 0.0 {
+        if h < 0.0 || matches!(self.kind, ToolKind::Laser { .. }) {
             return 0.0;
         }
         if h <= self.flute_length {

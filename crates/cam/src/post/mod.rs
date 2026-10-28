@@ -60,6 +60,14 @@ pub struct Post {
     pub percent_lines: bool,
     /// File extension the control's software opens.
     pub extension: String,
+    /// Laser mode: the lines entering and leaving it (empty: the post has no laser support),
+    /// the line that puts the beam at its focus after entering, the value of the `S` word at
+    /// full power, and whether Z words are written in laser mode.
+    pub laser_on: String,
+    pub laser_off: String,
+    pub laser_focus: String,
+    pub laser_s_max: f64,
+    pub laser_z: bool,
 }
 
 impl Default for Post {
@@ -97,6 +105,11 @@ impl Post {
             mist_code: "M7".into(),
             percent_lines: true,
             extension: "nc".into(),
+            laser_on: "M4".into(),
+            laser_off: "M5".into(),
+            laser_focus: String::new(),
+            laser_s_max: 1000.0,
+            laser_z: true,
         }
     }
 
@@ -122,6 +135,13 @@ impl Post {
             mist_code: "M7".into(),
             percent_lines: false,
             extension: "cnc".into(),
+            // Makera's laser mode: M321 drops the tool and sets the focus as the work's Z0;
+            // power is a fraction of the module's; M322 leaves the mode.
+            laser_on: "M321".into(),
+            laser_off: "M322".into(),
+            laser_focus: "G0 Z0".into(),
+            laser_s_max: 1.0,
+            laser_z: false,
             ..Post::generic()
         }
     }
@@ -140,6 +160,11 @@ impl Post {
             header: vec!["G90 G94 G17 G21".into()],
             end: "M30".into(),
             max_axes: 3,
+            // Grbl's laser mode ($32): M4 for dynamic power, S 0..1000.
+            laser_on: "M4".into(),
+            laser_off: "M5".into(),
+            laser_s_max: 1000.0,
+            laser_z: true,
             ..Post::generic()
         }
     }
@@ -209,6 +234,9 @@ struct Writer<'a> {
     last_abc: Option<(f64, f64)>,
     last_feed: Option<f64>,
     last_g: Option<&'static str>,
+    last_s: Option<f64>,
+    /// Laser mode: no Z words.
+    no_z: bool,
 }
 
 impl Writer<'_> {
@@ -231,7 +259,7 @@ impl Writer<'_> {
     }
 
     /// A motion line with only the words that changed.
-    fn motion(&mut self, g: &'static str, xyz: Vec3, abc: Option<(char, f64, char, f64)>, feed: Option<f64>) {
+    fn motion(&mut self, g: &'static str, xyz: Vec3, abc: Option<(char, f64, char, f64)>, feed: Option<f64>, power: Option<f64>) {
         let mut words: Vec<String> = Vec::new();
         if self.last_g != Some(g) {
             words.push(g.to_string());
@@ -245,7 +273,7 @@ impl Writer<'_> {
         if changed(xyz.y, self.last_xyz.map(|l| l.y)) {
             words.push(format!("Y{}", p.num(xyz.y)));
         }
-        if changed(xyz.z, self.last_xyz.map(|l| l.z)) {
+        if !self.no_z && changed(xyz.z, self.last_xyz.map(|l| l.z)) {
             words.push(format!("Z{}", p.num(xyz.z)));
         }
         if let Some((n1, a, n2, b)) = abc {
@@ -262,6 +290,12 @@ impl Writer<'_> {
         {
             words.push(format!("F{}", p.num(f)));
             self.last_feed = Some(f);
+        }
+        if let Some(s) = power
+            && self.last_s.is_none_or(|l| p.num(l) != p.num(s))
+        {
+            words.push(format!("S{}", p.num(s)));
+            self.last_s = Some(s);
         }
         self.last_xyz = Some(xyz);
         if words.len() == 1 && words[0] == g {
@@ -288,7 +322,7 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
             "the setup's machine has three axes but the toolpath tilts the tool; set a 4- or 5-axis machine on the setup".into(),
         ));
     }
-    let mut w = Writer { post, out: String::new(), lines: 0, n: 0, last_xyz: None, last_abc: None, last_feed: None, last_g: None };
+    let mut w = Writer { post, out: String::new(), lines: 0, n: 0, last_xyz: None, last_abc: None, last_feed: None, last_g: None, last_s: None, no_z: false };
     let name: String = program_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == ' ').collect();
     if post.percent_lines {
         w.line("%");
@@ -308,6 +342,7 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
     let rot = machine.rotaries();
     let words: Vec<char> = rot.iter().map(|r| r.name).collect();
     let mut tcp_active = false;
+    let mut laser_active = false;
     let mut prev_tool: Option<u32> = None;
     let mut total_moves = 0usize;
     // What the machine objects to: spindle speeds and feeds past its own are written at the
@@ -345,6 +380,48 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
         }
         w.comment(&format!("operation: {}", op.name));
         let f = &op.tool.feeds;
+        if tp.laser {
+            // Laser mode: the control's own entry (which parks the cutter on Makera's
+            // machines), the beam at its focus, power as the S word on the burning moves.
+            if post.laser_on.is_empty() {
+                return Err(CamError::Machine(format!("the `{}` post has no laser support; use the makera or grbl post", post.id)));
+            }
+            if !laser_active {
+                if prev_tool.is_some() {
+                    w.line("M5");
+                    if post.coolant {
+                        w.line("M9");
+                    }
+                }
+                w.line(&post.laser_on.clone());
+                if !post.laser_focus.is_empty() {
+                    w.line(&post.laser_focus.clone());
+                }
+                laser_active = true;
+                prev_tool = None;
+                w.last_xyz = None;
+                w.last_g = None;
+                w.last_s = None;
+                w.no_z = !post.laser_z;
+                if tp.air && post.coolant && !post.mist_code.is_empty() {
+                    w.line(&post.mist_code.clone());
+                }
+            }
+            for m in &tp.moves {
+                let g: &'static str = if m.kind == MoveKind::Rapid || m.power <= 0.0 { "G0" } else { "G1" };
+                let feed = if g == "G0" { None } else { Some(machine.clamp_feed(if m.feed > 0.0 { m.feed } else { machine.rapid_feed }).0) };
+                let power = if g == "G0" { None } else { Some(m.power.clamp(0.0, 1.0) * post.laser_s_max) };
+                w.motion(g, m.to, None, feed, power);
+            }
+            total_moves += tp.moves.len();
+            continue;
+        } else if laser_active {
+            w.line(&post.laser_off.clone());
+            laser_active = false;
+            w.no_z = false;
+            w.last_xyz = None;
+            w.last_g = None;
+        }
         if prev_tool != Some(op.tool.number) {
             if prev_tool.is_some() {
                 w.line("M5");
@@ -399,6 +476,7 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
                     DrillCycleKind::Peck => "G83",
                     DrillCycleKind::ChipBreak => "G73",
                     DrillCycleKind::FeedOut => "G85",
+                    DrillCycleKind::Tap => "G84",
                 };
                 let mut first = true;
                 for c in tp.cycles.iter().filter(|c| c.kind == kind) {
@@ -455,7 +533,7 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
                     Some((words.first().copied().unwrap_or('A'), p.pose.primary_deg, words.get(1).copied().unwrap_or('C'), p.pose.secondary_deg))
                 }
             };
-            w.motion(g, p.pose.xyz, abc, feed);
+            w.motion(g, p.pose.xyz, abc, feed, None);
         }
         total_moves += posted.len();
         if posted.len() > tp.moves.len() {
@@ -467,6 +545,12 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
     }
     if tcp_active && !post.tcp_off.is_empty() {
         w.line(&post.tcp_off.clone());
+    }
+    if laser_active {
+        if post.coolant {
+            w.line("M9");
+        }
+        w.line(&post.laser_off.clone());
     }
     w.line("M5");
     if post.coolant {
@@ -500,5 +584,6 @@ fn tool_kind_name(t: &Tool) -> &'static str {
         crate::tool::ToolKind::Drill { .. } => "drill",
         crate::tool::ToolKind::SpotDrill { .. } => "spot drill",
         crate::tool::ToolKind::TaperedBall { .. } => "tapered ball end mill",
+        crate::tool::ToolKind::Laser { .. } => "laser",
     }
 }

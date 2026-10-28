@@ -4,7 +4,7 @@ SolidCraft computes milling toolpaths for the parts it models: 2.5-axis (facing,
 adaptive clearing, contouring, chamfering, drilling, boring), 3-axis surface work (Z-level
 roughing, parallel, waterline, scallop, pencil, spiral, radial, morphed spiral, project,
 horizontal, steep and shallow), indexed 3+2 (any operation with a tool orientation), continuous
-4-axis (rotary) and 5-axis (swarf, multi-axis contour, flow). It simulates the stock, carries
+4-axis (rotary) and 5-axis (swarf, multi-axis contour, flow); the full list with each package's name for it is in `docs/cam-operations.md`. It simulates the stock, carries
 the material each operation removes into the next one (rest machining), checks for gouges and
 collisions, and writes G-code through machine kinematics (3-axis, 4-axis, table-table,
 head-head, with or without tool-centre-point control).
@@ -77,9 +77,13 @@ ends it.
 
 CAM lives in the **Manufacture** workspace (the workspace switcher at the top left, or
 `ui.workspace {"workspace": "manufacture"}` over the control channel), not in Design. Its
-MANUFACTURE ribbon tab carries the commands in four panels: SETUP (Create Setup, Add Tool, Set
-Machine), OPERATIONS (Add Operation, Operation Kinds), TOOLPATHS (Generate Toolpaths, Show
-Simulation, Simulate, Post Process) and INSPECT (Inspect Manufacturing, CAM Notices). A panel on
+MANUFACTURE ribbon tab carries the commands in seven panels: SETUP (Create Setup, Add Tool,
+Tool Kit, Set Machine), 2D MILLING, 3D MILLING, DRILLING and MULTI-AXIS (a button per
+operation kind, see `docs/cam-operations.md`), TOOLPATHS (Generate Toolpaths, Show Simulation,
+Simulate, Post Process) and INSPECT (Inspect Manufacturing, CAM Notices, Operation Kinds). A
+button for a kind opens the command box with `cam.operation.<kind>` filled in (its parameters
+at their defaults and the geometry it reads); `setup` and `tool` default to the only setup and
+the library's first tool. A panel on
 the right lists the tools, setups and operations with each one's status and issues, with
 Generate, Simulate and Post buttons. The buttons for commands that take parameters open the
 command box with a filled-in call to edit and run (there are no CAM dialogs yet); the others run
@@ -114,8 +118,43 @@ setup:
 
 The Carvera's rotary module turns about X (`A`), continuous; Makera's firmware limits the rotary
 feed itself, so the post writes ordinary feeds. The firmware's manual-change prompt handles tools
-beyond the six slots, and all tools on the Air and Z1. Probing, work offsets and the laser are
-done on the machine (the controller's probing cycles set `G54`), not in the program.
+beyond the six slots, and all tools on the Air and Z1. Probing and work offsets are done on
+the machine (the controller's probing cycles set `G54`), not in the program.
+
+Laser: each preset carries its module (`laser`: the Carvera's built-in 2.5 W, the 5 W modules
+of the Air and Z1; 445 nm). The kit adds a laser tool (`kind: laser`, the spot as its
+diameter). `laser_cut` follows curves with the kerf offset to a side in passes; `laser_engrave`
+fills the regions inside loops with raster lines, then their outline. Moves carry the beam's
+power (0..1); the `makera` post enters laser mode with `M321`, puts the beam at its focus with
+`G0 Z0`, writes no Z words, writes power as `S0.5`, air assist as `M7`, and leaves with `M9` and
+`M322`. The `grbl` post uses `M4` with `S` 0..1000. A laser operation on a machine without a
+module is a `no_laser` error; the stock simulation leaves laser work alone.
+
+Turning on the rotary axis (a 4-axis machine; the part turns on A while a vertical cutter
+cuts it like a lathe tool): `turn_face` faces the part's end back in steps, `turn_profile` is
+the model's profile along the axis, `turn_groove` cuts a groove of a width and depth, and
+`turn_thread` cuts a helix of the pitch over a length in passes (equal area per pass), the
+tool's form giving the thread's (a 60° V bit for a V thread). Thread milling of holes and
+bosses on a 3-axis machine is `thread`.
+
+## Parametric operations in the Browser
+
+A setup's operations are a chain of parametric steps. Each has a signature that hashes its own
+definition, its tool, the setup (bodies, fixtures, WCS, stock, machine), the model's geometry
+and the signature of the operation before it, so editing, suppressing or moving an operation,
+changing its tool or the setup, or changing the model makes it and every operation after it
+stale, and leaves the ones before it as they are. `cam.generate` regenerates only the stale
+operations, in order, sweeping the stock through the ones it keeps so rest machining sees
+everything removed before it (`all: true` regenerates all; the result says how many were
+regenerated and reused). `cam.operation.move` reorders (to an index, before or after another
+operation, up or down) and `cam.operation.duplicate` copies an operation after itself.
+
+The Browser has a Manufacture folder (when the design has tools or setups): each setup with its
+operations numbered in order, each row coloured by its state (stale and warnings in amber,
+errors in red, suppressed dimmed) and the Tools. The eye suppresses an operation;
+double-click opens it in the command box as `cam.operation.set` with its current parameters;
+the menu has Edit, Regenerate, Simulate to Here, Move Up and Down, Duplicate, Suppress and
+Delete, and a setup's menu Generate, Regenerate All, Simulate and Post Process.
 
 ## Post processors
 

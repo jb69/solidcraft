@@ -4,7 +4,7 @@
 
 use solidcraft_geom::{Aabb2, Vec2, Vec3};
 
-use super::two_d::{pocket_level, raster_passes};
+use super::two_d::{adaptive_level, pocket_level, raster_passes, round_corners};
 use super::{Context, Direction, OpKind, default_stepover, levels, sample_segment, simplify3};
 use crate::heightmap::HeightMap;
 use crate::linking::{Linker, Pass};
@@ -21,8 +21,18 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
     }
     match &op.kind {
         OpKind::Pocket3d { stepover, stepdown, direction, flat_area_detection, order_by_depth } => {
-            pocket3d(op, ctx, *stepover, *stepdown, *direction, *flat_area_detection, *order_by_depth)
+            pocket3d(op, ctx, LevelMotion::Rings { stepover: *stepover }, *stepdown, *direction, *flat_area_detection, *order_by_depth)
         }
+        OpKind::Adaptive3d { optimal_load, stepdown, minimum_radius, direction, flat_area_detection } => pocket3d(
+            op,
+            ctx,
+            LevelMotion::Adaptive { load: *optimal_load, min_r: *minimum_radius },
+            *stepdown,
+            *direction,
+            *flat_area_detection,
+            true,
+        ),
+        OpKind::Morph { stepover, direction } => morph(op, ctx, *stepover, *direction),
         OpKind::Parallel { stepover, angle_deg, direction, slope_min_deg, slope_max_deg } => {
             parallel(op, ctx, *stepover, *angle_deg, *direction, (*slope_min_deg, *slope_max_deg), None)
         }
@@ -193,10 +203,19 @@ fn split_where(points: &[Vec3], keep: impl Fn(&Vec3) -> bool) -> Vec<Vec<Vec3>> 
     out
 }
 
+/// How a Z level is cleared: contour-parallel rings at the stepover, or adaptively at the
+/// optimal load with corners rounded to the minimum radius.
+#[derive(Clone, Copy)]
+enum LevelMotion {
+    Rings { stepover: f64 },
+    Adaptive { load: f64, min_r: f64 },
+}
+
+#[allow(clippy::too_many_arguments)]
 fn pocket3d(
     op: &Operation,
     ctx: &Context,
-    stepover: f64,
+    motion: LevelMotion,
     stepdown: f64,
     direction: Direction,
     flat_area_detection: bool,
@@ -204,8 +223,29 @@ fn pocket3d(
 ) -> Result<(Toolpath, Notice)> {
     let tool = ctx.tool;
     let vtool = ctx.virtual_tool();
-    let stepover = if stepover > 0.0 { stepover } else { default_stepover(tool, false) };
+    let stepover = match motion {
+        LevelMotion::Rings { stepover } if stepover > 0.0 => stepover,
+        LevelMotion::Adaptive { load, .. } if load > 0.0 => load,
+        LevelMotion::Rings { .. } => default_stepover(tool, false),
+        LevelMotion::Adaptive { .. } => tool.diameter * 0.2,
+    };
     let stepdown = if stepdown > 0.0 { stepdown } else { tool.diameter * 0.5 };
+    let min_r = match motion {
+        LevelMotion::Adaptive { min_r, .. } if min_r > 0.0 => min_r,
+        _ => tool.radius() * 0.5,
+    };
+    let adaptive = matches!(motion, LevelMotion::Adaptive { .. });
+    let mut trochoids = 0usize;
+    let mut level = |tp: &mut Toolpath, lk: &Linker, region: &[Poly], z: f64, from_z: f64| -> Result<usize> {
+        if adaptive {
+            let smoothed = round_corners(region, min_r, ctx.tolerance)?;
+            let (r, t) = adaptive_level(tp, lk, region, &smoothed, z, stepover, direction, from_z, ctx.tolerance)?;
+            trochoids += t;
+            Ok(r)
+        } else {
+            pocket_level(tp, lk, region, z, stepover, direction, true, from_z, ctx.tolerance)
+        }
+    };
     let surf = Surface::build(ctx, &vtool)?;
     let (_, stock_top) = ctx.stock_z();
     let top = ctx.heights.top.min(stock_top);
@@ -265,21 +305,65 @@ fn pocket3d(
         for group in groups {
             let mut fz = from_z;
             for (z, region) in group {
-                rings += pocket_level(&mut tp, &lk, &region, z, stepover, direction, true, fz, ctx.tolerance)?;
+                rings += level(&mut tp, &lk, &region, z, fz)?;
                 fz = z;
             }
             lk.retract(&mut tp)?;
         }
     } else {
         for (z, region) in &per_level {
-            rings += pocket_level(&mut tp, &lk, region, *z, stepover, direction, true, from_z, ctx.tolerance)?;
+            rings += level(&mut tp, &lk, region, *z, from_z)?;
             from_z = *z;
         }
     }
     lk.retract_clearance(&mut tp)?;
     notice.value("levels", zs.len());
     notice.value("rings", rings);
+    if adaptive {
+        notice.value("trochoids", trochoids);
+        notice.value("optimal_load_mm", r3(stepover));
+    }
     notice.value("cl_cells", surf.map.z.len());
+    Ok((tp, notice))
+}
+
+/// Morph: passes morphed between the two rails (in XY), dropped onto the surface.
+fn morph(op: &Operation, ctx: &Context, stepover: f64, direction: Direction) -> Result<(Toolpath, Notice)> {
+    let a = &ctx.geometry.chain_a;
+    let b = &ctx.geometry.chain_b;
+    if a.len() < 2 || b.len() < 2 {
+        return Err(CamError::Geometry("morph needs two rails of at least two points each (geometry: rails)".into()));
+    }
+    let tool = ctx.tool;
+    let vtool = ctx.virtual_tool();
+    let stepover = if stepover > 0.0 { stepover } else { default_stepover(tool, true) };
+    let surf = Surface::build(ctx, &vtool)?;
+    let step = sample_step(ctx);
+    let len: f64 = a.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>().max(b.windows(2).map(|w| w[0].dist(w[1])).sum());
+    let n = ((len / step).ceil() as usize).clamp(2, 200_000);
+    let ra = super::multi_axis::resample_open(a, n);
+    let rb = super::multi_axis::resample_open(b, n);
+    let width = ra.iter().zip(&rb).map(|(p, q)| Vec2::new(p.x, p.y).dist(Vec2::new(q.x, q.y))).fold(0.0, f64::max);
+    let m = ((width / stepover).ceil() as usize).clamp(1, 100_000);
+    let mut passes: Vec<Pass> = Vec::new();
+    for k in 0..=m {
+        let t = k as f64 / m as f64;
+        let mut row: Vec<Vec2> = (0..n).map(|i| ra[i].lerp(rb[i], t)).map(|p| Vec2::new(p.x, p.y)).collect();
+        if direction == Direction::Both && k % 2 == 1 {
+            row.reverse();
+        }
+        for piece in drop_polyline(ctx, &surf, &vtool, &row, step, None) {
+            passes.push(Pass { points: piece, closed: false });
+        }
+    }
+    let lk = linker(op, ctx);
+    let mut tp = Toolpath::new();
+    run_surface_passes(&lk, &mut tp, &passes, ctx, &surf, &vtool, if direction == Direction::Both { stepover * 2.5 } else { 0.0 })?;
+    lk.retract_clearance(&mut tp)?;
+    let mut notice = Notice::default();
+    notice.value("passes", passes.len());
+    notice.value("width_mm", r3(width));
+    notice.value("stepover_mm", r3(stepover));
     Ok((tp, notice))
 }
 

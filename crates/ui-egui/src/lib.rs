@@ -15,6 +15,7 @@ pub mod bom_panel;
 pub mod browser;
 pub mod browser_canvas;
 pub mod browser_prompts;
+pub mod cam_job;
 pub mod cam_panel;
 pub mod manufacture_workspace;
 pub mod canvas;
@@ -369,6 +370,8 @@ pub struct SolveApp {
     saving: Option<save_job::Saving>,
     pub viewport: viewport::ViewportState,
     pub render_workspace: render_workspace::State,
+    /// Toolpaths being generated off the window thread.
+    pub cam_job: Option<cam_job::CamJob>,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
     /// The Change Parameters window, when open.
@@ -527,6 +530,7 @@ impl SolveApp {
             saving: None,
             viewport: viewport::ViewportState::default(),
             render_workspace,
+            cam_job: None,
             tool: None,
             dialog: None,
             params: None,
@@ -1647,6 +1651,7 @@ impl SolveApp {
         self.resolve_fit(ui.ctx());
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
+        cam_job::poll(self, ui.ctx());
         cam_panel::show(self, ui.ctx());
         bom_panel::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());

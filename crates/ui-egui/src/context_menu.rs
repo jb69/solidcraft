@@ -1226,6 +1226,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         }
         "ui.newView" => drop(crate::browser::save_view(app, None)),
         "ui.camEdit" | "ui.camEditTool" | "ui.camPost" => crate::browser::cam::run_action(app, &item.id, &p),
+        "cam.generate" => crate::cam_job::start(app, if p.is_null() { json!({}) } else { p }),
         "ui.restoreView" => {
             if let Some(v) = p.get("view").and_then(Value::as_str) {
                 crate::browser::restore_view(app, v);
@@ -2168,5 +2169,52 @@ mod manufacture_tests {
         h.app.run("cam.simulate.show", json!({"progress": 0.25})).unwrap();
         h.frames(2);
         assert!(crate::manufacture_workspace::active(&h.app));
+    }
+}
+
+#[cfg(test)]
+mod cam_job_tests {
+    use super::*;
+    use crate::scenario::Harness;
+
+    #[test]
+    fn generating_runs_off_the_window_thread_and_the_rows_show_it() {
+        let mut h = Harness::new();
+        h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 10, "body_name": "Block"})).unwrap();
+        let tool = h.app.run("cam.tool.add", json!({"name": "6 mm flat", "kind": "flat", "diameter": 6})).unwrap()["id"].clone();
+        h.app.run("cam.setup.create", json!({})).unwrap();
+        let a = h.app.run("cam.operation.face", json!({"tool": tool, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}})).unwrap()["id"].as_u64().unwrap();
+        let b = h.app.run("cam.operation.contour2d", json!({"tool": tool, "side": "outside", "geometry": {"source": "silhouette"}})).unwrap()["id"].as_u64().unwrap();
+        h.app.start("cam.generate");
+        // Started: both wait their turn until the frames take the job's progress in.
+        assert!(h.app.cam_job.is_some());
+        assert_eq!(crate::browser::cam::op_state(&h.app, a), "queued");
+        assert_eq!(crate::browser::cam::op_state(&h.app, b), "queued");
+        // A second start while it runs is refused.
+        h.app.start("cam.generate");
+        assert!(h.app.cam_job.is_some());
+        let mut frames = 0;
+        while h.app.cam_job.is_some() && frames < 2000 {
+            h.frames(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            frames += 1;
+        }
+        assert!(h.app.cam_job.is_none(), "the job finished");
+        for op in [a, b] {
+            assert_eq!(crate::browser::cam::op_state(&h.app, op), "ok", "{op}");
+        }
+        // The Manufacture workspace draws both toolpaths; an operation's eye hides its own.
+        assert_eq!(solidcraft_engine::cmd::cam::shown_toolpaths(&h.app.session).len(), 2);
+        h.app.run("cam.toolpath.visibility", json!({"operation": a, "visible": false})).unwrap();
+        let shown: Vec<u64> = solidcraft_engine::cmd::cam::shown_toolpaths(&h.app.session).into_iter().map(|x| x.0).collect();
+        assert_eq!(shown, vec![b]);
+        assert_eq!(crate::browser::cam::op_state(&h.app, a), "ok", "hiding is not suppressing");
+        h.app.run("cam.toolpath.visibility", json!({"operation": a, "visible": true})).unwrap();
+        // Nothing changed: a second run reuses both and finishes at once.
+        h.app.start("cam.generate");
+        h.frames(2);
+        assert!(h.app.cam_job.is_none());
+        let status = h.app.status.as_ref().map(|s| s.0.clone()).unwrap_or_default();
+        assert!(status.contains("0 generated, 2 unchanged"), "{status}");
     }
 }

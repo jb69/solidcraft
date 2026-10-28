@@ -554,6 +554,43 @@ fn build_scene(
     sc
 }
 
+/// The visible operations' toolpaths (`cmd::cam::shown_toolpaths`) as lines in design
+/// coordinates: runs of feed moves in `feed`, rapids, links and retracts in `rapid`. Very long
+/// toolpaths are thinned for drawing.
+pub fn toolpath_lines(s: &Session, feed: Rgb, rapid: Rgb) -> Vec<SceneLine> {
+    use solidcraft_cam::toolpath::MoveKind;
+    let mut out = Vec::new();
+    for (_, g, wcs) in crate::cmd::cam::shown_toolpaths(s) {
+        let moves = &g.toolpath.moves;
+        let stride = (moves.len() / 250_000).max(1);
+        let mut run: Vec<Vec3> = Vec::new();
+        let mut run_rapid = false;
+        let mut prev: Option<Vec3> = None;
+        for (i, m) in moves.iter().enumerate() {
+            if stride > 1 && i % stride != 0 && i + 1 != moves.len() {
+                continue;
+            }
+            let p = wcs.to_world(m.to);
+            let is_rapid = matches!(m.kind, MoveKind::Rapid | MoveKind::Link | MoveKind::Retract);
+            if let Some(a) = prev {
+                if run.is_empty() || is_rapid != run_rapid {
+                    if run.len() >= 2 {
+                        out.push(SceneLine { points: std::mem::take(&mut run), color: if run_rapid { rapid } else { feed }, width: if run_rapid { 1.0 } else { 1.3 }, on_top: false });
+                    }
+                    run = vec![a];
+                    run_rapid = is_rapid;
+                }
+                run.push(p);
+            }
+            prev = Some(p);
+        }
+        if run.len() >= 2 {
+            out.push(SceneLine { points: run, color: if run_rapid { rapid } else { feed }, width: if run_rapid { 1.0 } else { 1.3 }, on_top: false });
+        }
+    }
+    out
+}
+
 /// Where the plane through `o` with normal `n` cuts a mesh: one segment per crossed triangle,
 /// nudged a hair to the kept side (so the clip leaves them drawn).
 pub fn section_segments(m: &solidcraft_geom::Mesh, o: Vec3, n: Vec3) -> Vec<(Vec3, Vec3)> {

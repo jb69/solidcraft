@@ -332,8 +332,15 @@ fn scene_key(app: &SolveApp) -> u64 {
     app.session.active_occurrence_path.hash(&mut h);
     app.preview.effective_replaced().hash(&mut h);
     app.preview.rolled_back.hash(&mut h);
-    // The machining simulation's preview is a fresh `Arc` per `cam.simulate.show`.
+    // The machining simulation's preview is a fresh `Arc` per `cam.simulate.show`; the drawn
+    // toolpaths change with the workspace, their eyes and each regenerated toolpath.
     app.session.cam.preview.as_ref().map(|p| std::sync::Arc::as_ptr(p) as usize).hash(&mut h);
+    if crate::manufacture_workspace::active(app) {
+        for (id, g, _) in solidcraft_engine::cmd::cam::shown_toolpaths(&app.session) {
+            (id, std::sync::Arc::as_ptr(&g) as usize).hash(&mut h);
+        }
+        true.hash(&mut h);
+    }
     app.tree.redefine.hash(&mut h);
     crate::theme::is_dark().hash(&mut h);
     crate::theme::vision().hash(&mut h);
@@ -748,6 +755,30 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         for w in seam.points.windows(2) {
             if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
                 sc.line(a.to_f32(), b.to_f32(), col, 2.6, true);
+            }
+        }
+    }
+    // Toolpaths on the workpiece (Manufacture workspace, no simulation playing): each visible
+    // operation's feed moves in the accent colour, rapids and links faint.
+    if s.cam.preview.is_none() && crate::manufacture_workspace::active(app) {
+        let feed = c4(tk.accent);
+        let rapid = c4(tk.text.gamma_multiply(0.22));
+        for (_, g, wcs) in solidcraft_engine::cmd::cam::shown_toolpaths(s) {
+            let moves = &g.toolpath.moves;
+            // Very long toolpaths are thinned for drawing.
+            let stride = (moves.len() / 250_000).max(1);
+            let mut prev: Option<[f32; 3]> = None;
+            for (i, m) in moves.iter().enumerate() {
+                if stride > 1 && i % stride != 0 && i + 1 != moves.len() {
+                    continue;
+                }
+                let p = wcs.to_world(m.to).to_f32();
+                if let Some(a) = prev {
+                    use solidcraft_engine::cam::toolpath::MoveKind;
+                    let col = if matches!(m.kind, MoveKind::Rapid | MoveKind::Link | MoveKind::Retract) { rapid } else { feed };
+                    sc.line(a, p, col, if col == feed { 1.3 } else { 1.0 }, false);
+                }
+                prev = Some(p);
             }
         }
     }

@@ -532,6 +532,7 @@
   "cmd.cam_tool_remove": "删除刀具",
   "cmd.cam_tool_set": "编辑刀具",
   "cmd.cam_toolpath": "刀路",
+  "cmd.cam_toolpath_visibility": "显示/隐藏刀路",
   "cmd.canvas_calibrate": "校准画布",
   "cmd.canvas_decal": "贴花",
   "cmd.canvas_delete": "删除画布",

@@ -651,3 +651,37 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     let g = run(&mut s, "cam.generate", json!({"all": true}));
     assert_eq!(g["regenerated"], 4, "{g}");
 }
+
+#[test]
+fn toolpaths_show_and_hide_on_the_workpiece() {
+    let mut s = block();
+    let flat = add_flat(&mut s, 6.0);
+    let setup = run(&mut s, "cam.setup.create", json!({}))["id"].as_u64().unwrap();
+    let a = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"].as_u64().unwrap();
+    let b = run(&mut s, "cam.operation.contour2d", json!({"tool": flat, "side": "outside", "geometry": {"source": "silhouette"}}))["id"].as_u64().unwrap();
+    // Nothing drawn before generating; both after.
+    assert!(super::cam::shown_toolpaths(&s).is_empty());
+    run(&mut s, "cam.generate", json!({}));
+    let shown = |s: &Session| super::cam::shown_toolpaths(s).into_iter().map(|x| x.0).collect::<Vec<_>>();
+    assert_eq!(shown(&s), vec![a, b]);
+    // The eye hides one; the design is not changed and nothing goes on the undo stack.
+    let undo = s.undo.len();
+    let doc = s.doc.to_json();
+    run(&mut s, "cam.toolpath.visibility", json!({"operation": a, "visible": false}));
+    assert_eq!(shown(&s), vec![b]);
+    assert_eq!((s.undo.len(), s.doc.to_json()), (undo, doc));
+    // A setup's eye hides all of its operations; all: true shows every one again.
+    run(&mut s, "cam.toolpath.visibility", json!({"setup": setup, "visible": false}));
+    assert!(shown(&s).is_empty());
+    run(&mut s, "cam.toolpath.visibility", json!({"all": true, "visible": true}));
+    assert_eq!(shown(&s), vec![a, b]);
+    // A suppressed operation draws nothing, whatever its eye.
+    run(&mut s, "cam.operation.set", json!({"operation": a, "enabled": false}));
+    assert_eq!(shown(&s), vec![b]);
+    // Bad requests are refused; a deleted operation leaves the hidden set.
+    fails(&mut s, "cam.toolpath.visibility", json!({"visible": false}));
+    fails(&mut s, "cam.toolpath.visibility", json!({"operation": 9999, "visible": false}));
+    run(&mut s, "cam.toolpath.visibility", json!({"operation": b, "visible": false}));
+    run(&mut s, "cam.operation.remove", json!({"operation": b}));
+    assert!(s.cam.hidden.is_empty());
+}

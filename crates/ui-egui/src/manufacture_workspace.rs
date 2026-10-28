@@ -81,6 +81,10 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
         app.pick_save_command(&format!("{name}.nc"), &["nc", "gcode", "ngc", "tap"], "cam.post", json!({}));
         return true;
     }
+    if id == "cam.generate" {
+        crate::cam_job::start(app, json!({}));
+        return true;
+    }
     if id == "cam.simulate.show" && app.session.cam.preview.is_some() {
         // Already showing: the panel drives it.
         return true;

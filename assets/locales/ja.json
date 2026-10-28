@@ -532,6 +532,7 @@
   "cmd.cam_tool_remove": "工具を削除",
   "cmd.cam_tool_set": "工具を編集",
   "cmd.cam_toolpath": "ツールパス",
+  "cmd.cam_toolpath_visibility": "ツールパスの表示/非表示",
   "cmd.canvas_calibrate": "キャンバスの尺度を設定",
   "cmd.canvas_decal": "デカール",
   "cmd.canvas_delete": "キャンバスを削除",

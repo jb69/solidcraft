@@ -50,6 +50,53 @@ pub struct CamCache {
     pub simulator: Option<SimulatorState>,
     /// What the viewport shows: the stock so far, the tool, the path.
     pub preview: Option<Arc<CamPreview>>,
+    /// Operations whose toolpaths are hidden in the viewport (the browser's eye). View state:
+    /// not saved with the design and not undone.
+    pub hidden: std::collections::BTreeSet<u64>,
+}
+
+/// The toolpaths to draw on the workpiece: every enabled, generated operation whose eye is on,
+/// with its setup's WCS (toolpaths are stored in the WCS).
+pub fn shown_toolpaths(s: &Session) -> Vec<(u64, Arc<Generated>, Frame)> {
+    let mut out = Vec::new();
+    for st in &s.doc.manufacture.setups {
+        for op in st.operations.iter().filter(|o| o.enabled && !s.cam.hidden.contains(&o.id)) {
+            if let Some(g) = s.cam.operations.get(&op.id) {
+                out.push((op.id, g.clone(), st.wcs));
+            }
+        }
+    }
+    out
+}
+
+fn toolpath_visibility(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.toolpath.visibility";
+    let visible = bool_(p, "visible").ok_or_else(|| bad(cmd, "`visible` (true or false) is required"))?;
+    let mut ids: Vec<u64> = p.get("operations").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+    if let Some(id) = p.get("operation").and_then(Value::as_u64) {
+        ids.push(id);
+    }
+    if let Some(sid) = p.get("setup").and_then(Value::as_u64) {
+        let st = s.doc.manufacture.setup(sid).ok_or_else(|| bad(cmd, format!("no setup {sid}")))?;
+        ids.extend(st.operations.iter().map(|o| o.id));
+    }
+    if bool_(p, "all").unwrap_or(false) {
+        ids.extend(s.doc.manufacture.setups.iter().flat_map(|st| st.operations.iter().map(|o| o.id)));
+    }
+    if ids.is_empty() {
+        return Err(bad(cmd, "say which: operation, operations, setup or all: true"));
+    }
+    for id in &ids {
+        if s.doc.manufacture.operation(*id).is_none() {
+            return Err(bad(cmd, format!("no operation {id}")));
+        }
+        if visible {
+            s.cam.hidden.remove(id);
+        } else {
+            s.cam.hidden.insert(*id);
+        }
+    }
+    Ok(json!({"visible": visible, "operations": ids, "hidden": s.cam.hidden.iter().collect::<Vec<_>>()}))
 }
 
 pub struct SimulatorState {
@@ -215,6 +262,10 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
     CommandSpec::new("cam.operation.set", "Edit Operation", operation_set).icon("cam").params("operation: id; any cam.operation.add field (type included): changes an operation; cam.generate again afterwards"),
     CommandSpec::new("cam.operation.remove", "Remove Operation", operation_remove).icon("cam").params("operation: id"),
+    CommandSpec::new("cam.toolpath.visibility", "Show/Hide Toolpath", toolpath_visibility)
+        .icon("eye")
+        .params("visible: bool; operation?: id | operations?: [ids] | setup?: id (its operations) | all?: true: shows or hides toolpaths on the workpiece in the Manufacture workspace (the browser's eye). View state, not saved or undone")
+        .noundo(),
     CommandSpec::new("cam.operation.move", "Move Operation", operation_move)
         .icon("cam")
         .params("operation: id; to?: index in its setup | before?: operation id | after?: operation id | up?: true | down?: true: reorders the setup's operations. Operations are parametric steps: each depends on the ones before it (rest machining sees their stock), so the moved one and those after it go stale"),
@@ -1034,6 +1085,7 @@ fn operation_remove(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(i) = st.operations.iter().position(|o| o.id == id) {
             st.operations.remove(i);
             s.cam.operations.remove(&id);
+            s.cam.hidden.remove(&id);
             return Ok(json!({"removed": id}));
         }
     }
@@ -1428,18 +1480,41 @@ fn resolve_geometry(
 }
 
 /// Generates one operation. `rest` is the stock map (WCS) after the previous operations.
-fn generate_one(
+/// One operation's inputs, prepared on the caller's thread (geometry resolution reads the
+/// session); [`compute`] turns them into a toolpath on any thread.
+struct Prepared {
+    op: Operation,
+    setup: u64,
+    tool: Tool,
+    machine: cam::machine::Machine,
+    orient: Frame,
+    model_mesh: Option<cam::dropcutter::DropMesh>,
+    fixture_mesh: Option<cam::dropcutter::DropMesh>,
+    model_bounds_op: Aabb3,
+    stock: cam::setup::StockShape,
+    heights: cam::linking::ResolvedHeights,
+    geometry: ResolvedGeometry,
+    notice: Notice,
+    signature: u64,
+}
+
+fn prepare_one(
     s: &Session,
     st: &Setup,
     op: &Operation,
     meshes: &[(String, Arc<Mesh>)],
     fixtures: &[(String, Arc<Mesh>)],
     model_bounds_wcs: Option<Aabb3>,
-    rest: Option<&cam::simulate::StockMap>,
-) -> Result<Generated> {
+    signature: u64,
+) -> Result<Prepared> {
     let cmd = "cam.generate";
-    let tool =
-        s.doc.manufacture.tools.get(op.tool).ok_or_else(|| bad(cmd, format!("operation {} uses tool {} which does not exist", op.id, op.tool)))?;
+    let tool = s
+        .doc
+        .manufacture
+        .tools
+        .get(op.tool)
+        .cloned()
+        .ok_or_else(|| bad(cmd, format!("operation {} uses tool {} which does not exist", op.id, op.tool)))?;
     let orient = op.orientation.unwrap_or(Frame::IDENTITY);
     let to_op = |p: Vec3| orient.to_local(st.wcs.to_local(p));
     let dir_to_op = |d: Vec3| orient.dir_to_local(st.wcs.dir_to_local(d));
@@ -1459,15 +1534,36 @@ fn generate_one(
     let stock_z = stock.z_range_in(&orient);
     let model_z = if model_bounds_op.is_empty() { stock_z } else { (model_bounds_op.min.z, model_bounds_op.max.z) };
     let geometry = resolve_geometry(s, st, op, &to_op, &dir_to_op, model_mesh.as_ref(), &mut notice)?;
-    let mut resolved = op.heights.resolve(stock_z, model_z).map_err(|e| engine_err(cmd, e))?;
+    let mut heights = op.heights.resolve(stock_z, model_z).map_err(|e| engine_err(cmd, e))?;
     if let Some(fz) = geometry.face_z
         && matches!(op.kind, OpKind::Pocket2d { .. } | OpKind::Adaptive2d { .. } | OpKind::Contour2d { .. })
         && op.heights.bottom == cam::linking::Heights::default().bottom
     {
         // The floor of a picked face is where the cut ends; the selection's top is the stock top.
-        resolved.bottom = fz;
+        heights.bottom = fz;
         notice.value("bottom_from_face_mm", r3(fz));
     }
+    Ok(Prepared {
+        op: op.clone(),
+        setup: st.id,
+        tool,
+        machine: st.machine.clone(),
+        orient,
+        model_mesh,
+        fixture_mesh,
+        model_bounds_op,
+        stock,
+        heights,
+        geometry,
+        notice,
+        signature,
+    })
+}
+
+/// The toolpath of a prepared operation, with the stock left by the operations before it for
+/// rest machining.
+fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
+    let Prepared { op, setup, tool, machine, orient, model_mesh, fixture_mesh, model_bounds_op, stock, heights, geometry, mut notice, signature } = pr;
     let rest_map = match rest {
         Some(r) if op.rest_machining => {
             if op.orientation.is_some() {
@@ -1483,20 +1579,20 @@ fn generate_one(
         _ => None,
     };
     let ctx = Context {
-        tool,
+        tool: &tool,
         model: model_mesh.as_ref(),
         fixtures: fixture_mesh.as_ref(),
         model_bounds: model_bounds_op,
         stock,
         frame: orient,
-        heights: resolved,
+        heights,
         geometry,
         tolerance: op.tolerance,
         stock_to_leave_radial: op.stock_to_leave_radial,
         stock_to_leave_axial: op.stock_to_leave_axial,
         rest: rest_map,
     };
-    let (tp, n) = match cam::ops::generate(op, &ctx) {
+    let (tp, n) = match cam::ops::generate(&op, &ctx) {
         Ok(x) => x,
         Err(e) => {
             let mut n = Notice::new(format!("{}: {e}", op.kind.type_name()));
@@ -1507,20 +1603,64 @@ fn generate_one(
     notice.merge(n);
     // To the WCS.
     let tp_wcs = tp.transformed(|p| orient.to_world(p), |a| orient.dir_to_world(a));
-    let stats = tp_wcs.stats(st.machine.rapid_feed, None);
-    if op.kind.axes() > st.machine.axis_count() {
+    let stats = tp_wcs.stats(machine.rapid_feed, None);
+    if op.kind.axes() > machine.axis_count() {
         notice.issue(
-            Issue::warning(
-                "machine_axes",
-                format!("the toolpath tilts the tool but the setup's machine `{}` has {} axes", st.machine.name, st.machine.axis_count()),
-            )
-            .suggest(json!({"command": "cam.machine.set", "machine": if op.kind.axes() == 4 { "four_axis_a" } else { "trunnion_ac" }})),
+            Issue::warning("machine_axes", format!("the toolpath tilts the tool but the setup's machine `{}` has {} axes", machine.name, machine.axis_count()))
+                .suggest(json!({"command": "cam.machine.set", "machine": if op.kind.axes() == 4 { "four_axis_a" } else { "trunnion_ac" }})),
         );
     }
-    Ok(Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup: st.id, signature: 0 })
+    // What the machine objects to (speeds, feeds, collets, work area).
+    for issue in machine.check(&tool, &tp_wcs) {
+        notice.issue(issue);
+    }
+    Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup, signature }
 }
 
-fn generate(s: &mut Session, p: &Value) -> Result<Value> {
+/// One step of a setup's generation, in order.
+enum Step {
+    /// Suppressed: reported as disabled.
+    Disabled { id: u64, name: String, kind: &'static str },
+    /// Not asked for (`operation` named another one), but generated: its toolpath still removes
+    /// stock for the ones after it.
+    Sweep { tool: Tool, toolpath: Arc<Toolpath> },
+    /// Unchanged since it was generated: kept, and swept.
+    Reuse { id: u64, name: String, kind: &'static str, tool: Tool, generated: Arc<Generated>, oriented: bool },
+    /// To generate.
+    Generate { id: u64, name: String, kind: &'static str, tool_id: u64, oriented: bool, prepared: Box<Prepared> },
+    /// Its inputs could not be prepared (a missing tool, geometry that does not resolve).
+    Failed { id: u64, name: String, kind: &'static str, tool_id: u64, setup: u64, frame: Frame, signature: u64, error: String },
+}
+
+struct SetupJob {
+    id: u64,
+    name: String,
+    steps: Vec<Step>,
+    stock_map: Option<cam::simulate::StockMap>,
+    notice: Notice,
+}
+
+/// A generation prepared on the window thread: everything [`GenerateJob::run`] needs, which may
+/// run on another thread. `operations` lists the ones it will generate, in order.
+pub struct GenerateJob {
+    setups: Vec<SetupJob>,
+    pub operations: Vec<u64>,
+    revision: u64,
+}
+
+/// What a running generation reports.
+pub enum GenerateEvent {
+    /// This operation's toolpath is being computed.
+    Started(u64),
+    /// This operation's toolpath is ready.
+    Done(u64, Arc<Generated>),
+    /// Every setup is done: the same result `cam.generate` returns.
+    Finished(Value),
+}
+
+/// Prepares a generation (`cam.generate`'s parameters): resolves each operation's geometry and
+/// meshes, and works out which operations are stale.
+pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
     let cmd = "cam.generate";
     let only_setup = p.get("setup").and_then(Value::as_u64);
     let only_op = p.get("operation").and_then(Value::as_u64);
@@ -1534,129 +1674,198 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad(cmd, format!("no operation {id}")));
     }
-    let setups: Vec<Setup> = s
+    let setups: Vec<&Setup> = s
         .doc
         .manufacture
         .setups
         .iter()
         .filter(|st| only_setup.is_none_or(|id| st.id == id) && only_op.is_none_or(|id| st.operations.iter().any(|o| o.id == id)))
-        .cloned()
         .collect();
     if setups.is_empty() {
         return Err(bad(cmd, "no setup to generate (cam.setup.create first)"));
     }
-    let mut out_setups = Vec::new();
-    let mut total_time = 0.0;
-    let mut worst = "ok";
     let all = bool_(p, "all").unwrap_or(false);
-    let mut regenerated = 0usize;
-    let mut reused = 0usize;
-    for st in &setups {
+    let mut jobs = Vec::new();
+    let mut operations = Vec::new();
+    for st in setups {
         let tol = st.operations.iter().filter(|o| o.enabled).map(|o| o.tolerance).fold(0.05, f64::min).max(0.002);
         let meshes = setup_meshes(s, st, tol, false)?;
         let fixtures = setup_meshes(s, st, tol, true)?;
         let model_bounds = setup_model_bounds(s, st);
-        let mut setup_notice = Notice::default();
+        let mut notice = Notice::default();
         if meshes.is_empty() {
-            setup_notice
-                .issue(Issue::warning("no_bodies", "the setup has no bodies: only 2D operations on explicit loops and swarf on chains can run"));
+            notice.issue(Issue::warning("no_bodies", "the setup has no bodies: only 2D operations on explicit loops and swarf on chains can run"));
         }
         // Progressive stock for rest machining (3-axis in the WCS).
         let stock_shape = model_bounds.as_ref().and_then(|b| st.stock.resolve(b).ok());
-        let mut stock_map =
+        let stock_map =
             stock_shape.as_ref().and_then(|sh| cam::simulate::stock_cell(sh, 0.1).ok().and_then(|c| cam::simulate::StockMap::new(sh, c).ok()));
-        let mut ops_out = Vec::new();
         let sigs = signatures(s, st);
+        let mut steps = Vec::new();
         for op in &st.operations {
             let sig = sigs.iter().find(|(id, _)| *id == op.id).map_or(0, |x| x.1);
             let cached = s.cam.operations.get(&op.id).cloned();
+            let tool = s.doc.manufacture.tools.get(op.tool).cloned();
+            let kind = op.kind.type_name();
             if only_op.is_some_and(|id| id != op.id) {
-                // Another operation of the setup: its toolpath still removes stock for the ones
-                // after it (rest machining), so sweep it if it was generated.
                 if op.enabled
-                    && let (Some(sm), Some(g), Some(tool)) = (stock_map.as_mut(), cached.as_ref(), s.doc.manufacture.tools.get(op.tool))
                     && op.orientation.is_none()
+                    && let (Some(g), Some(tool)) = (cached, tool)
                 {
-                    let _ = cam::simulate::simulate(sm, tool, &g.toolpath, None, None, None, None, 0.05);
+                    steps.push(Step::Sweep { tool, toolpath: g.toolpath.clone() });
                 }
                 continue;
             }
             if !op.enabled {
-                ops_out.push(json!({"id": op.id, "name": op.name, "type": op.kind.type_name(), "status": "disabled"}));
+                steps.push(Step::Disabled { id: op.id, name: op.name.clone(), kind });
                 continue;
             }
             // Parametric: an operation whose signature (its definition, tool, setup, the model
             // and every operation before it) is unchanged keeps its toolpath.
             if !all
                 && only_op.is_none()
-                && let Some(g) = cached.as_ref().filter(|g| g.signature == sig)
+                && let (Some(g), Some(tool)) = (cached.as_ref().filter(|g| g.signature == sig), tool.clone())
             {
-                if let Some(sm) = stock_map.as_mut()
-                    && op.orientation.is_none()
-                    && let Some(tool) = s.doc.manufacture.tools.get(op.tool)
-                {
-                    let _ = cam::simulate::simulate(sm, tool, &g.toolpath, None, None, None, None, 0.05);
-                }
-                total_time += g.stats.time_s;
-                if g.notice.status() == "error" || (g.notice.status() == "warning" && worst == "ok") {
-                    worst = g.notice.status();
-                }
-                reused += 1;
-                ops_out.push(json!({
-                    "id": op.id, "name": op.name, "type": op.kind.type_name(), "tool": op.tool,
-                    "status": g.notice.status(), "notice": g.notice.to_json(), "stats": g.stats, "reused": true,
-                }));
+                steps.push(Step::Reuse { id: op.id, name: op.name.clone(), kind, tool, generated: g.clone(), oriented: op.orientation.is_some() });
                 continue;
             }
-            regenerated += 1;
-            let mut g = match generate_one(s, st, op, &meshes, &fixtures, model_bounds, stock_map.as_ref()) {
-                Ok(g) => g,
-                Err(e) => {
-                    let mut n = Notice::new(e.to_string());
-                    n.issue(Issue::error("generation_failed", e.to_string()));
-                    Generated {
-                        toolpath: Arc::new(Toolpath::new()),
-                        notice: n,
-                        stats: ToolpathStats::default(),
-                        frame: op.orientation.unwrap_or(Frame::IDENTITY),
-                        setup: st.id,
-                        signature: 0,
+            operations.push(op.id);
+            match prepare_one(s, st, op, &meshes, &fixtures, model_bounds, sig) {
+                Ok(prepared) => steps.push(Step::Generate {
+                    id: op.id,
+                    name: op.name.clone(),
+                    kind,
+                    tool_id: op.tool,
+                    oriented: op.orientation.is_some(),
+                    prepared: Box::new(prepared),
+                }),
+                Err(e) => steps.push(Step::Failed {
+                    id: op.id,
+                    name: op.name.clone(),
+                    kind,
+                    tool_id: op.tool,
+                    setup: st.id,
+                    frame: op.orientation.unwrap_or(Frame::IDENTITY),
+                    signature: sig,
+                    error: e.to_string(),
+                }),
+            }
+        }
+        jobs.push(SetupJob { id: st.id, name: st.name.clone(), steps, stock_map, notice });
+    }
+    Ok(GenerateJob { setups: jobs, operations, revision: s.geometry_revision })
+}
+
+impl GenerateJob {
+    /// Computes the toolpaths in order, sweeping the stock through each so rest machining sees
+    /// what came before, and reports each step to `report`.
+    pub fn run(self, mut report: impl FnMut(GenerateEvent)) {
+        let mut out_setups = Vec::new();
+        let mut total_time = 0.0;
+        let mut worst = "ok";
+        let (mut regenerated, mut reused) = (0usize, 0usize);
+        let sweep = |sm: &mut Option<cam::simulate::StockMap>, tool: &Tool, tp: &Toolpath| {
+            if let Some(sm) = sm.as_mut() {
+                let _ = cam::simulate::simulate(sm, tool, tp, None, None, None, None, 0.05);
+            }
+        };
+        let worse = |status: &'static str, worst: &mut &'static str| {
+            if status == "error" || (status == "warning" && *worst == "ok") {
+                *worst = status;
+            }
+        };
+        for mut job in self.setups {
+            let mut ops_out = Vec::new();
+            // Sweeping the stock only matters for an operation generated after it.
+            let last_generate = job.steps.iter().rposition(|st| matches!(st, Step::Generate { .. })).unwrap_or(0);
+            for (k, step) in job.steps.into_iter().enumerate() {
+                let needed = k < last_generate;
+                match step {
+                    Step::Disabled { id, name, kind } => ops_out.push(json!({"id": id, "name": name, "type": kind, "status": "disabled"})),
+                    Step::Sweep { tool, toolpath } => {
+                        if needed {
+                            sweep(&mut job.stock_map, &tool, &toolpath);
+                        }
+                    }
+                    Step::Reuse { id, name, kind, tool, generated: g, oriented } => {
+                        if !oriented && needed {
+                            sweep(&mut job.stock_map, &tool, &g.toolpath);
+                        }
+                        total_time += g.stats.time_s;
+                        worse(g.notice.status(), &mut worst);
+                        reused += 1;
+                        ops_out.push(json!({
+                            "id": id, "name": name, "type": kind, "tool": tool.id,
+                            "status": g.notice.status(), "notice": g.notice.to_json(), "stats": g.stats, "reused": true,
+                        }));
+                    }
+                    Step::Generate { id, name, kind, tool_id, oriented, prepared } => {
+                        report(GenerateEvent::Started(id));
+                        let tool = prepared.tool.clone();
+                        let g = Arc::new(compute(*prepared, job.stock_map.as_ref()));
+                        if !oriented && needed {
+                            sweep(&mut job.stock_map, &tool, &g.toolpath);
+                        }
+                        regenerated += 1;
+                        total_time += g.stats.time_s;
+                        worse(g.notice.status(), &mut worst);
+                        ops_out.push(json!({
+                            "id": id, "name": name, "type": kind, "tool": tool_id,
+                            "status": g.notice.status(), "notice": g.notice.to_json(), "stats": g.stats,
+                        }));
+                        report(GenerateEvent::Done(id, g));
+                    }
+                    Step::Failed { id, name, kind, tool_id, setup, frame, signature, error } => {
+                        report(GenerateEvent::Started(id));
+                        let mut n = Notice::new(error.clone());
+                        n.issue(Issue::error("generation_failed", error));
+                        let g = Arc::new(Generated { toolpath: Arc::new(Toolpath::new()), notice: n, stats: ToolpathStats::default(), frame, setup, signature });
+                        regenerated += 1;
+                        worse("error", &mut worst);
+                        ops_out.push(json!({
+                            "id": id, "name": name, "type": kind, "tool": tool_id,
+                            "status": "error", "notice": g.notice.to_json(), "stats": g.stats,
+                        }));
+                        report(GenerateEvent::Done(id, g));
                     }
                 }
-            };
-            // What the machine objects to (speeds, feeds, collets, work area).
-            if let Some(tool) = s.doc.manufacture.tools.get(op.tool) {
-                for issue in st.machine.check(tool, &g.toolpath) {
-                    g.notice.issue(issue);
-                }
             }
-            // Sweep the stock when the operation is in the WCS.
-            if let Some(sm) = stock_map.as_mut()
-                && op.orientation.is_none()
-                && let Some(tool) = s.doc.manufacture.tools.get(op.tool)
+            job.notice.value("time_s", r3(ops_out.iter().filter_map(|o| o["stats"]["time_s"].as_f64()).sum::<f64>()));
+            if let Some(sm) = &job.stock_map
+                && regenerated > 0
             {
-                let _ = cam::simulate::simulate(sm, tool, &g.toolpath, None, None, None, None, 0.05);
+                job.notice.value("remaining_stock_mm3", r3(sm.volume()));
             }
-            total_time += g.stats.time_s;
-            if g.notice.status() == "error" || (g.notice.status() == "warning" && worst == "ok") {
-                worst = g.notice.status();
-            }
-            ops_out.push(json!({
-                "id": op.id, "name": op.name, "type": op.kind.type_name(), "tool": op.tool,
-                "status": g.notice.status(), "notice": g.notice.to_json(), "stats": g.stats,
-            }));
-            g.signature = sig;
-            s.cam.operations.insert(op.id, Arc::new(g));
+            out_setups.push(json!({"id": job.id, "name": job.name, "operations": ops_out, "notice": job.notice.to_json()}));
         }
-        setup_notice.value("time_s", r3(ops_out.iter().filter_map(|o| o["stats"]["time_s"].as_f64()).sum::<f64>()));
-        if let Some(sm) = &stock_map {
-            setup_notice.value("remaining_stock_mm3", r3(sm.volume()));
-        }
-        out_setups.push(json!({"id": st.id, "name": st.name, "operations": ops_out, "notice": setup_notice.to_json()}));
+        report(GenerateEvent::Finished(json!({
+            "setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": self.revision,
+            "regenerated": regenerated, "reused": reused,
+            "hint": "cam.notices lists every operation's report; cam.simulate checks the stock; cam.post writes the G-code",
+        })));
     }
-    Ok(
-        json!({"setups": out_setups, "status": worst, "time_s": r3(total_time), "revision": s.geometry_revision, "regenerated": regenerated, "reused": reused, "hint": "cam.notices lists every operation's report; cam.simulate checks the stock; cam.post writes the G-code"}),
-    )
+}
+
+/// Keeps a finished operation's toolpath, unless the operation was deleted meanwhile.
+pub fn accept_generated(s: &mut Session, op: u64, g: Arc<Generated>) {
+    if s.doc.manufacture.operation(op).is_some() {
+        s.cam.operations.insert(op, g);
+    }
+}
+
+fn generate(s: &mut Session, p: &Value) -> Result<Value> {
+    let job = prepare_generate(s, p)?;
+    let mut done = Vec::new();
+    let mut result = Value::Null;
+    job.run(|e| match e {
+        GenerateEvent::Done(id, g) => done.push((id, g)),
+        GenerateEvent::Finished(v) => result = v,
+        GenerateEvent::Started(_) => {}
+    });
+    for (id, g) in done {
+        accept_generated(s, id, g);
+    }
+    Ok(result)
 }
 
 fn toolpath(s: &mut Session, p: &Value) -> Result<Value> {

@@ -210,14 +210,22 @@ pub fn request_scope(app: &SolveApp, params: &Value) -> Result<Option<vfs::PathS
 /// mode, the section the viewport shows: an open Section Analysis dialog's preview, a sketch's
 /// Slice), with the grid and the origin's axes as `guides` says.
 pub(crate) fn view_scene(app: &SolveApp, guides: solidcraft_engine::view::Guides) -> solidcraft_engine::render::Scene {
-    solidcraft_engine::view::scene_with_palette_and_guides(
+    let palette = crate::viewport::scene_palette(app.ui.dark, app.preferences.color_vision);
+    let mut scene = solidcraft_engine::view::scene_with_palette_and_guides(
         &app.session,
         &app.cam,
         crate::viewport::section_plane(app),
         solidcraft_engine::view::world_curve_parts,
-        &crate::viewport::scene_palette(app.ui.dark, app.preferences.color_vision),
+        &palette,
         guides,
-    )
+    );
+    // The Manufacture workspace's toolpaths, as the window draws them.
+    if app.session.cam.preview.is_none() && crate::manufacture_workspace::active(app) {
+        let tk = crate::theme::Tokens::get();
+        let rgb = |c: egui::Color32| solidcraft_engine::render::Rgb(c.r(), c.g(), c.b());
+        scene.lines.extend(solidcraft_engine::view::toolpath_lines(&app.session, rgb(tk.accent), rgb(tk.text_dim)));
+    }
+    scene
 }
 
 /// The grid and the origin's axes as the window shows them (the Grid and Origin switches).

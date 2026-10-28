@@ -151,10 +151,24 @@ operation, up or down) and `cam.operation.duplicate` copies an operation after i
 
 The Browser has a Manufacture folder (when the design has tools or setups): each setup with its
 operations numbered in order, each row coloured by its state (stale and warnings in amber,
-errors in red, suppressed dimmed) and the Tools. The eye suppresses an operation;
-double-click opens it in the command box as `cam.operation.set` with its current parameters;
-the menu has Edit, Regenerate, Simulate to Here, Move Up and Down, Duplicate, Suppress and
+errors in red, suppressed dimmed) and the Tools. In the Manufacture workspace the viewport
+draws every generated, enabled operation's toolpath on the workpiece (feed moves in the accent
+colour, rapids faint); an operation's eye shows or hides its toolpath and a setup's eye all of
+its operations' (`cam.toolpath.visibility {operation | operations | setup | all, visible}`,
+view state that is neither saved nor undone). Suppressing, which leaves the operation out of
+generation, simulation and posting, is in the menu. Double-click opens an operation in the
+command box as `cam.operation.set` with its current parameters; the menu has Edit,
+Regenerate, Simulate to Here, Move Up and Down, Duplicate, Show/Hide Toolpath, Suppress and
 Delete, and a setup's menu Generate, Regenerate All, Simulate and Post Process.
+
+Generating from the ribbon, the panel or the Browser runs off the window thread: the window
+prepares each operation (its geometry and meshes) and a worker computes the toolpaths in
+order, sweeping the stock between them. The Browser animates the operation being computed
+(a spinning arc on its row, its setup's and the Manufacture folder's, the name in the accent
+colour), shows the ones still waiting as queued, and takes each toolpath in as it finishes; the
+status line reports how many were generated and how many were unchanged. A second Generate
+while one runs is refused. `cam.generate` from a script, the CLI or an agent still runs to the
+end and returns its result.
 
 ## Post processors
 

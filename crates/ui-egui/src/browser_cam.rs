@@ -15,6 +15,9 @@ use crate::theme::Tokens;
 /// An operation's state for its row: `ok`, `warning`, `error`, `stale`, `not generated` or
 /// `suppressed`.
 pub(crate) fn op_state(app: &SolveApp, op: u64) -> &'static str {
+    if let Some(job) = crate::cam_job::state(app, op) {
+        return job;
+    }
     let s = &app.session;
     let Some((st, o)) = s.doc.manufacture.operation(op) else { return "not generated" };
     if !o.enabled {
@@ -32,7 +35,26 @@ fn state_color(t: &Tokens, state: &str) -> Option<Color32> {
     match state {
         "error" => Some(t.error),
         "warning" | "stale" => Some(t.warning),
+        "generating" => Some(t.accent),
         _ => None,
+    }
+}
+
+/// While an operation (or any of a setup's) is being generated: a spinning arc at the row's
+/// right end, and frames kept coming; a queued one gets a still, faint ring.
+fn row_activity(ui: &egui::Ui, rect: Option<egui::Rect>, generating: bool, queued: bool) {
+    let Some(r) = rect else { return };
+    if !generating && !queued {
+        return;
+    }
+    let t = Tokens::get();
+    let c = egui::pos2(r.right() - 12.0, r.center().y);
+    if generating {
+        let time = ui.input(|i| i.time);
+        crate::cam_job::paint_spinner(ui.painter(), c, 5.0, time, t.accent);
+        ui.ctx().request_repaint();
+    } else {
+        ui.painter().circle_stroke(c, 4.0, egui::Stroke::new(1.2, t.text_dim.gamma_multiply(0.6)));
     }
 }
 
@@ -45,6 +67,7 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
     let key = "manufacture";
     let open = is_open(app, key, true);
     let r = draw_row(ui, ui.id().with(key), &Row { depth, fold: Some(open), icon: "cam", label: "Manufacture", ..Default::default() });
+    row_activity(ui, r.rect, app.cam_job.as_ref().is_some_and(|j| j.current.is_some()), false);
     if r.fold || r.clicked {
         toggle(app, key, true);
     }
@@ -67,11 +90,27 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
         let sopen = is_open(app, &skey, true);
         let label = format!("{name} · {machine}");
         let picked = app.tree.picked_cam == Some(CamPick::Setup(sid));
+        let any_shown = ops.iter().any(|(oid, ..)| !app.session.cam.hidden.contains(oid));
         let r = draw_row(
             ui,
             ui.id().with(("cam-setup", sid)),
-            &Row { depth: depth + 1, fold: Some(sopen), icon: "folder", label: &label, name: true, selected: picked, ..Default::default() },
+            &Row {
+                depth: depth + 1,
+                fold: Some(sopen),
+                eye: (!ops.is_empty()).then_some(any_shown),
+                icon: "folder",
+                label: &label,
+                name: true,
+                selected: picked,
+                dim: !any_shown && !ops.is_empty(),
+                ..Default::default()
+            },
         );
+        if r.eye {
+            let _ = app.run("cam.toolpath.visibility", json!({"setup": sid, "visible": !any_shown}));
+        }
+        let busy = ops.iter().any(|(oid, ..)| crate::cam_job::state(app, *oid) == Some("generating"));
+        row_activity(ui, r.rect, busy, false);
         if r.fold {
             toggle(app, &skey, true);
         }
@@ -88,6 +127,7 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
         // The chain: each operation numbered in order.
         for (k, (oid, oname, kind)) in ops.iter().enumerate() {
             let state = op_state(app, *oid);
+            let hidden = app.session.cam.hidden.contains(oid);
             let label = format!("{}. {oname}", k + 1);
             let picked = app.tree.picked_cam == Some(CamPick::Operation(*oid));
             let r = draw_row(
@@ -95,7 +135,8 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
                 ui.id().with(("cam-op", *oid)),
                 &Row {
                     depth: depth + 2,
-                    eye: Some(state != "suppressed"),
+                    // The eye shows or hides the toolpath on the workpiece; Suppress is in the menu.
+                    eye: Some(!hidden),
                     icon: "cam",
                     label: &label,
                     name: true,
@@ -105,11 +146,12 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
                     ..Default::default()
                 },
             );
+            row_activity(ui, r.rect, state == "generating", state == "queued");
             if let Some(resp) = &r.resp {
                 resp.clone().on_hover_text(format!("{kind}: {state}"));
             }
             if r.eye {
-                let _ = app.run("cam.operation.set", json!({"operation": oid, "enabled": state == "suppressed"}));
+                let _ = app.run("cam.toolpath.visibility", json!({"operation": oid, "visible": hidden}));
             }
             if r.clicked {
                 app.tree.picked_cam = Some(CamPick::Operation(*oid));
@@ -201,6 +243,7 @@ pub fn operation_items(app: &SolveApp, id: u64) -> Vec<Item> {
         Item::action("cam.operation.move", "Move Down", "").with(json!({"operation": id, "down": true})).on(index + 1 < count),
         Item::action("cam.operation.duplicate", "Duplicate", "copy").with(json!({"operation": id})),
         Item::sep(),
+        Item::action("cam.toolpath.visibility", "Show/Hide Toolpath", "eye").with(json!({"operation": id, "visible": app.session.cam.hidden.contains(&id)})),
         Item::action("cam.operation.set", if suppressed { "Unsuppress" } else { "Suppress" }, "suppress").with(json!({"operation": id, "enabled": suppressed})),
         Item::action("cam.operation.remove", "Delete", "delete").with(json!({"operation": id})),
     ]

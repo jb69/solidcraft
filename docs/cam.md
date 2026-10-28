@@ -175,8 +175,12 @@ same draft as the text `cam.operation.set` takes, to read, copy or paste. Edits 
 when switching tabs; JSON that does not parse keeps its tab and blocks Apply. Apply and OK run
 `cam.operation.set` with the draft as one undo step; a refusal keeps the draft and says why.
 When the operation changes elsewhere (an assistant, undo), an untouched draft follows it and an
-edited one offers Reload. Assistants never use the editor: they set the JSON directly with
-`cam.operation.set`. The menu has Edit,
+edited one offers Reload. A tool in the Browser's Tools folder opens in the same editor: its Fields tab has the
+name, tool number and length offset, the kind with the kind's own sizes (corner radius, tip
+angle, wavelength…), the size (diameter, flute length, shank, stick-out, holder, flutes) and
+the feeds and speeds, and says how many operations use the tool; Apply runs `cam.tool.set`.
+Assistants never use the editor: they set the JSON directly with `cam.operation.set` and
+`cam.tool.set`. The menu has Edit,
 Regenerate, Regenerate Chain, Simulate to Here, Move Up and Down, Duplicate, Show/Hide Toolpath, Suppress and
 Delete, and a setup's menu Generate, Regenerate All, Simulate and Post Process.
 

@@ -208,18 +208,12 @@ pub enum CamPick {
 /// Opens the command box with `cam.operation.set` and the operation's current parameters.
 /// Opens the operation editor (Fields and JSON tabs) on `op`.
 pub(crate) fn edit(app: &mut SolveApp, op: u64) {
-    crate::cam_editor::open(app, op);
+    crate::cam_editor::open(app, crate::cam_editor::Target::Operation(op));
 }
 
-fn edit_tool(app: &mut SolveApp, tool: u64) {
-    let Some(t) = app.session.doc.manufacture.tools.get(tool) else { return };
-    let mut v = serde_json::to_value(t).unwrap_or(Value::Null);
-    if let Value::Object(m) = &mut v {
-        m.remove("id");
-        m.insert("tool".into(), json!(tool));
-    }
-    crate::shortcut_box::open(app, None);
-    app.sbox.text = format!("cam.tool.set {}", serde_json::to_string(&v).unwrap_or_default());
+/// Opens the same editor on a tool.
+pub(crate) fn edit_tool(app: &mut SolveApp, tool: u64) {
+    crate::cam_editor::open(app, crate::cam_editor::Target::Tool(tool));
 }
 
 /// The menu of an operation.

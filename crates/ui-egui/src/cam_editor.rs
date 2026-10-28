@@ -1,14 +1,15 @@
-//! The operation editor. Double-clicking an operation in the Browser, or its Edit menu, opens it
-//! in a window with two tabs over one draft of the operation:
+//! The operation and tool editor. Double-clicking an operation or a tool in the Browser, or its
+//! Edit menu, opens it in a window with two tabs over one draft of it:
 //! - **Fields** lays the parameters out as inputs: name, type, tool, the kind's own parameters,
 //!   stock to leave, geometry, heights and linking. The form is built from the operation's own
-//!   saved form and its kind's defaults, so every kind, present and future, gets one.
-//! - **JSON** shows the same draft as the text `cam.operation.set` takes, for copying, pasting
-//!   and the parameters the form only summarises (picked points, loops).
+//!   saved form and its kind's defaults, so every kind, present and future, gets one. A tool's
+//!   form has its number, kind (with the kind's own sizes), size, and feeds and speeds.
+//! - **JSON** shows the same draft as the text `cam.operation.set` (`cam.tool.set`) takes, for
+//!   reading, copying and pasting.
 //!
-//! Switching tabs carries the edits across. Apply and OK run `cam.operation.set` with the draft,
-//! the same command an assistant runs, as one undo step. When the operation changes elsewhere
-//! (an assistant, undo) an untouched draft follows it; an edited one offers to reload.
+//! Switching tabs carries the edits across. Apply and OK run the set command with the draft, the
+//! same command an assistant runs, as one undo step. When the operation or tool changes
+//! elsewhere (an assistant, undo) an untouched draft follows it; an edited one offers to reload.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -43,12 +44,39 @@ const COMMON: &[&str] = &[
     "type",
 ];
 
+/// What the editor edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Operation(u64),
+    Tool(u64),
+}
+
+impl Target {
+    /// The command that sets it, and the parameter naming it.
+    fn command(self) -> (&'static str, &'static str, u64) {
+        match self {
+            Target::Operation(id) => ("cam.operation.set", "operation", id),
+            Target::Tool(id) => ("cam.tool.set", "tool", id),
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Target::Operation(_) => "operation",
+            Target::Tool(_) => "tool",
+        }
+    }
+}
+
+/// A tool kind's own sizes, beside the sizes every tool has.
+const TOOL_KIND_KEYS: &[&str] = &["corner_radius", "tip_angle_deg", "wavelength_nm", "tip_radius", "taper_angle_deg"];
+
 /// The five heights, in the order they are met going down.
 const HEIGHTS: [(&str, &str); 5] = [("clearance", "Clearance"), ("retract", "Retract"), ("feed", "Feed"), ("top", "Top"), ("bottom", "Bottom")];
 
 /// The open editor.
 pub struct CamEditor {
-    pub op: u64,
+    pub target: Target,
     pub tab: Tab,
     /// The operation as it was opened or last applied, without its `id`.
     base: Value,
@@ -72,9 +100,9 @@ struct Inputs {
 }
 
 impl CamEditor {
-    fn new(op: u64, saved: Value) -> CamEditor {
+    fn new(target: Target, saved: Value) -> CamEditor {
         CamEditor {
-            op,
+            target,
             tab: Tab::Fields,
             text: pretty(&saved),
             draft: saved.clone(),
@@ -110,10 +138,13 @@ impl CamEditor {
     }
 }
 
-/// The operation as saved, without its `id`.
-fn saved(app: &SolveApp, op: u64) -> Option<Value> {
-    let (_, o) = app.session.doc.manufacture.operation(op)?;
-    let mut v = serde_json::to_value(o).ok()?;
+/// The operation or tool as saved, without its `id`.
+fn saved(app: &SolveApp, target: Target) -> Option<Value> {
+    let m = &app.session.doc.manufacture;
+    let mut v = match target {
+        Target::Operation(op) => serde_json::to_value(m.operation(op)?.1).ok()?,
+        Target::Tool(tool) => serde_json::to_value(m.tools.get(tool)?).ok()?,
+    };
     if let Value::Object(m) = &mut v {
         m.remove("id");
     }
@@ -124,14 +155,14 @@ fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
 }
 
-/// Opens the editor on `op` (a second operation replaces the first).
-pub fn open(app: &mut SolveApp, op: u64) {
-    if let Some(v) = saved(app, op) {
-        app.cam_editor = Some(CamEditor::new(op, v));
+/// Opens the editor on an operation or a tool (opening another replaces it).
+pub fn open(app: &mut SolveApp, target: Target) {
+    if let Some(v) = saved(app, target) {
+        app.cam_editor = Some(CamEditor::new(target, v));
     }
 }
 
-/// Runs `cam.operation.set` with the draft; true when it was taken.
+/// Runs the set command with the draft; true when it was taken.
 pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
     if ed.tab == Tab::Json {
         match serde_json::from_str::<Value>(&ed.text) {
@@ -148,18 +179,19 @@ pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
     }
     let mut params = ed.draft.clone();
     if !params.is_object() {
-        ed.message = Some(("the operation must be a JSON object".into(), true));
+        ed.message = Some((format!("the {} must be a JSON object", ed.target.noun()), true));
         return false;
     }
-    params["operation"] = json!(ed.op);
+    let (command, key, id) = ed.target.command();
+    params[key] = json!(id);
     if let Value::Object(m) = &mut params {
         m.remove("id");
     }
-    match app.run("cam.operation.set", params) {
+    match app.run(command, params) {
         Ok(v) => {
             let warnings: Vec<String> =
                 v["notice"]["issues"].as_array().into_iter().flatten().filter_map(|i| i["message"].as_str().map(str::to_string)).collect();
-            if let Some(now) = saved(app, ed.op) {
+            if let Some(now) = saved(app, ed.target) {
                 ed.base = now.clone();
                 ed.set_draft(now);
             }
@@ -176,8 +208,8 @@ pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
 /// Draws the editor when it is open. Called once per frame.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut ed) = app.cam_editor.take() else { return };
-    // The operation was deleted (or undone away): nothing left to edit.
-    let Some(now) = saved(app, ed.op) else { return };
+    // Deleted (or undone away): nothing left to edit.
+    let Some(now) = saved(app, ed.target) else { return };
     let mut changed_elsewhere = false;
     if now != ed.base {
         if ed.edited() {
@@ -188,8 +220,16 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         }
     }
     let t = Tokens::get();
-    let name = ed.base["name"].as_str().unwrap_or("Operation").to_string();
+    let name = match (ed.base["name"].as_str(), ed.target) {
+        (Some(n), Target::Tool(_)) => format!("T{} {n}", ed.base["number"].as_u64().unwrap_or(0)),
+        (Some(n), Target::Operation(_)) => n.to_string(),
+        (None, _) => kind_label(ed.target.noun()),
+    };
     let title = RichText::new(name).strong().size(t.font_button);
+    let uses = match ed.target {
+        Target::Tool(id) => app.session.doc.manufacture.tool_uses(id),
+        Target::Operation(_) => 0,
+    };
     let tools: Vec<(u64, String)> = app.session.doc.manufacture.tools.tools.iter().map(|tl| (tl.id, format!("T{} {}", tl.number, tl.name))).collect();
     let mut open = true;
     let (mut ok, mut apply_now, mut cancel, mut reload) = (false, false, false, false);
@@ -218,7 +258,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             ui.add_space(t.space_8);
             if changed_elsewhere {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(crate::i18n::tr_label("The operation changed elsewhere since you opened it.")).color(t.warning));
+                    let text = format!("The {} changed elsewhere since you opened it.", ed.target.noun());
+                    ui.label(RichText::new(text).color(t.warning));
                     if crate::ui_kit::button(ui, "Reload", crate::ui_kit::Button::Normal).clicked() {
                         reload = true;
                     }
@@ -227,8 +268,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             match ed.tab {
                 Tab::Fields => {
                     egui::ScrollArea::vertical().max_height(480.0).auto_shrink([false, true]).show(ui, |ui| {
-                        let CamEditor { draft, inputs, .. } = &mut ed;
-                        fields(ui, draft, inputs, &tools);
+                        let CamEditor { draft, inputs, target, .. } = &mut ed;
+                        match target {
+                            Target::Operation(_) => fields(ui, draft, inputs, &tools),
+                            Target::Tool(_) => tool_fields(ui, draft, inputs, uses),
+                        }
                     });
                 }
                 Tab::Json => {
@@ -302,7 +346,7 @@ fn switch(ed: &mut CamEditor, to: Tab) {
                 ed.text = text;
                 ed.tab = Tab::Fields;
             }
-            Ok(_) => ed.text_error = Some("the operation must be a JSON object".into()),
+            Ok(_) => ed.text_error = Some(format!("the {} must be a JSON object", ed.target.noun())),
             Err(e) => ed.text_error = Some(e.to_string()),
         },
     }
@@ -411,6 +455,118 @@ fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u
                 }
             }
         });
+    }
+}
+
+/// The Fields tab of a tool.
+fn tool_fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, uses: usize) {
+    let Value::Object(tl) = draft else { return };
+    let t = Tokens::get();
+    if uses > 0 {
+        let s = if uses == 1 { "" } else { "s" };
+        let text = format!("Used by {uses} operation{s}: a change makes their toolpaths stale.");
+        ui.label(RichText::new(text).color(t.text_dim));
+    }
+    if let Some(Value::String(name)) = tl.get_mut("name") {
+        crate::ui_kit::row(ui, "Name", |ui| crate::ui_kit::text_field(ui, name, ""));
+    }
+    for (key, label) in [("number", "Tool number (T)"), ("length_offset", "Length offset (H)")] {
+        if let Some(v) = tl.get_mut(key) {
+            value(ui, inputs, key, label, v, None);
+        }
+    }
+    // The kind, then its own sizes.
+    let kinds = cam::ops::variants::<cam::tool::ToolKind>(json!({"kind": "\u{1}"}));
+    let current = tl.get("kind").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut k = kinds.iter().position(|c| *c == current).unwrap_or(0);
+    let labels: Vec<String> = kinds.iter().map(|c| kind_label(c)).collect();
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    crate::ui_kit::row(ui, "Kind", |ui| crate::ui_kit::dropdown(ui, "cam_ed_tool_kind", &mut k, &refs));
+    if let Some(new) = kinds.get(k).filter(|c| **c != current) {
+        let diameter = tl.get("diameter").and_then(Value::as_f64).unwrap_or(3.0);
+        tl.retain(|key, _| !TOOL_KIND_KEYS.contains(&key.as_str()));
+        tl.insert("kind".into(), json!(new));
+        if let Value::Object(d) = tool_kind_default(new, diameter) {
+            tl.extend(d);
+        }
+        inputs.text.retain(|key, _| !TOOL_KIND_KEYS.contains(&key.as_str()));
+        inputs.invalid.retain(|key| !TOOL_KIND_KEYS.contains(&key.as_str()));
+    }
+    for key in TOOL_KIND_KEYS {
+        if let Some(v) = tl.get_mut(*key) {
+            let label = label_of(key, v);
+            value(ui, inputs, key, &label, v, None);
+        }
+    }
+    section(ui, "Size", true, |ui| {
+        for (key, label) in [
+            ("diameter", "Diameter (mm)"),
+            ("flute_length", "Flute length (mm)"),
+            ("shank_diameter", "Shank diameter (mm)"),
+            ("overall_length", "Stick-out (mm)"),
+            ("holder_diameter", "Holder diameter (mm)"),
+            ("flutes", "Flutes"),
+        ] {
+            if let Some(v) = tl.get_mut(key) {
+                value(ui, inputs, key, label, v, None);
+            }
+        }
+    });
+    if let Some(Value::Object(f)) = tl.get_mut("feeds") {
+        section(ui, "Feeds and speeds", true, |ui| {
+            let coolants = cam::ops::variants::<cam::tool::Coolant>(Value::Null);
+            let keys: Vec<String> = f.keys().cloned().collect();
+            for key in keys {
+                let path = format!("feeds.{key}");
+                let Some(v) = f.get_mut(&key) else { continue };
+                let label = match key.as_str() {
+                    "spindle_rpm" => "Spindle speed (rev/min)".to_string(),
+                    "clockwise" => "Clockwise (M3)".to_string(),
+                    "coolant" => "Coolant".to_string(),
+                    _ if v.is_number() => format!("{} feed (mm/min)", kind_label(&key)),
+                    _ => kind_label(&key),
+                };
+                let choices = (key == "coolant").then_some(coolants.as_slice());
+                value(ui, inputs, &path, &label, v, choices);
+            }
+        });
+    }
+    // Anything newer than this form.
+    let known = [
+        "name",
+        "number",
+        "length_offset",
+        "kind",
+        "diameter",
+        "flute_length",
+        "shank_diameter",
+        "overall_length",
+        "holder_diameter",
+        "flutes",
+        "feeds",
+    ];
+    let rest: Vec<String> = tl.keys().filter(|k| !known.contains(&k.as_str()) && !TOOL_KIND_KEYS.contains(&k.as_str())).cloned().collect();
+    if !rest.is_empty() {
+        section(ui, "Other", false, |ui| {
+            for key in rest {
+                if let Some(v) = tl.get_mut(&key) {
+                    let label = label_of(&key, v);
+                    value(ui, inputs, &key, &label, v, None);
+                }
+            }
+        });
+    }
+}
+
+/// The sizes a tool kind starts with (a tool of `diameter` mm).
+fn tool_kind_default(kind: &str, diameter: f64) -> Value {
+    match kind {
+        "bull_nose" => json!({"corner_radius": (diameter * 0.1).max(0.1)}),
+        "chamfer" | "spot_drill" => json!({"tip_angle_deg": 90.0}),
+        "drill" => json!({"tip_angle_deg": 118.0}),
+        "laser" => json!({"wavelength_nm": 445.0}),
+        "tapered_ball" => json!({"tip_radius": (diameter * 0.25).max(0.1), "taper_angle_deg": 5.0}),
+        _ => json!({}),
     }
 }
 
@@ -669,7 +825,7 @@ fn change_kind(op: &mut Map<String, Value>, ty: &str) {
 /// A key as a label, with its unit: `stay_down_distance` is "Stay down distance (mm)".
 fn label_of(key: &str, v: &Value) -> String {
     let unit = unit_of(key, v);
-    let bare = key.strip_suffix("_deg").or_else(|| key.strip_suffix("_s")).or_else(|| key.strip_suffix("_mm")).unwrap_or(key);
+    let bare = ["_deg", "_s", "_mm", "_nm"].iter().find_map(|u| key.strip_suffix(u)).unwrap_or(key);
     let words = kind_label(bare);
     if unit.is_empty() { words } else { format!("{words} ({unit})") }
 }
@@ -681,6 +837,8 @@ fn unit_of(key: &str, v: &Value) -> &'static str {
     }
     if key.ends_with("_deg") {
         "°"
+    } else if key.ends_with("_nm") {
+        "nm"
     } else if key.ends_with("_s") {
         "s"
     } else if key == "power" {

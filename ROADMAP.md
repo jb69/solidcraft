@@ -674,7 +674,7 @@ and turning on the rotary axis (face, profile, groove, thread) have their own pa
 are milled (`thread`), tapped (G84) or turned (`turn_thread`). Operations live in the Browser's
 Manufacture folder as parametric steps: chained signatures make an edited, suppressed or moved
 operation and every later one stale, and generation regenerates only those. Opening an
-operation shows the operation editor: a Fields tab with an input for every value and a JSON
+operation or a tool shows the editor: a Fields tab with an input for every value and a JSON
 tab with the same draft as text, both applied through `cam.operation.set`.
 
 Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image

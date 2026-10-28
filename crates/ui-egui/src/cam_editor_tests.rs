@@ -181,3 +181,57 @@ fn picked_points_are_rows_to_edit_add_and_remove() {
     h.step(&json!({"widget": "Apply"})).unwrap();
     assert_eq!(op(&h, id)["geometry"]["points"][2], json!([50.0, 10.0, 15.0]), "Add repeats the last point");
 }
+
+fn tool(h: &Harness, id: u64) -> Value {
+    serde_json::to_value(h.app.session.doc.manufacture.tools.get(id).unwrap()).unwrap()
+}
+
+#[test]
+fn tools_open_in_the_same_editor_and_apply_through_tool_set() {
+    let mut h = Harness::new();
+    let op = pocket(&mut h);
+    let id = h.app.session.doc.manufacture.operation(op).unwrap().1.tool;
+    crate::browser::cam::edit_tool(&mut h.app, id);
+    h.frames(20);
+    let ed = h.app.cam_editor.as_ref().unwrap();
+    assert_eq!(ed.target, Target::Tool(id));
+    for w in ["Fields", "JSON", "Name", "Tool number (T)", "Kind", "Size", "Diameter (mm)", "Feeds and speeds", "Spindle speed (rev/min)", "Coolant"]
+    {
+        assert!(h.widget(w).is_some(), "{w} is drawn");
+    }
+    assert!(h.widget("Used by 1 operation: a change makes their toolpaths stale.").is_some());
+    let undo = h.app.session.undo.len();
+    let ed = h.app.cam_editor.as_mut().unwrap();
+    ed.draft["feeds"]["spindle_rpm"] = json!(12000.0);
+    ed.draft["number"] = json!(4);
+    h.frames(1);
+    h.step(&json!({"widget": "Apply"})).unwrap();
+    let now = tool(&h, id);
+    assert_eq!(now["feeds"]["spindle_rpm"], 12000.0);
+    assert_eq!(now["number"], 4);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    // A new kind with its own size, from the JSON draft.
+    let ed = h.app.cam_editor.as_mut().unwrap();
+    switch(ed, Tab::Json);
+    let mut v: Value = serde_json::from_str(&ed.text).unwrap();
+    v["kind"] = json!("bull_nose");
+    v["corner_radius"] = json!(0.5);
+    ed.text = serde_json::to_string_pretty(&v).unwrap();
+    h.frames(1);
+    h.step(&json!({"widget": "OK"})).unwrap();
+    assert!(h.app.cam_editor.is_none(), "OK closes");
+    let now = tool(&h, id);
+    assert_eq!((now["kind"].as_str(), now["corner_radius"].as_f64()), (Some("bull_nose"), Some(0.5)));
+}
+
+#[test]
+fn a_tool_kind_brings_its_own_sizes() {
+    assert_eq!(tool_kind_default("drill", 3.0), json!({"tip_angle_deg": 118.0}));
+    assert_eq!(tool_kind_default("bull_nose", 6.0)["corner_radius"], json!(0.6000000000000001));
+    assert_eq!(tool_kind_default("flat_end", 6.0), json!({}));
+    let kinds = cam::ops::variants::<cam::tool::ToolKind>(json!({"kind": "\u{1}"}));
+    for k in ["flat_end", "ball_end", "bull_nose", "chamfer", "drill", "laser", "tapered_ball"] {
+        assert!(kinds.iter().any(|x| x == k), "{k} in {kinds:?}");
+    }
+    assert_eq!(label_of("wavelength_nm", &json!(445.0)), "Wavelength (nm)");
+}

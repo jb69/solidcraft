@@ -69,10 +69,15 @@ SolidCraft is built to be driven by an AI assistant, which can walk a user acros
   the machine: the user loads the `.cnc` file into Makera's controller.
 
 A skill is a short set of instructions in the repository that tells the assistant how to do a
-kind of work well. The `solidcraft-cam` skill already teaches it the commands, the checks and
-the Makera presets. Makera-tuned skills are the next step: Makera's recommended feeds for each
-material, workholding and probing routines, a first-job checklist, and the strategy choices that
-work best on these machines, written with Makera's input and refined by the test results.
+kind of work well. The `solidcraft-cam` skill teaches it the commands, the checks and the Makera
+presets. A first Makera-tuned skill, `solidcraft-makera-guide`, guides a new user through a job:
+it asks about the part, the material, the stock and the workholding, explains each strategy it
+picks, starts from numbers tuned for these machines, puts the work origin where the user will
+probe, numbers the tools for the Carvera's rack, turns every warning into a plain sentence,
+reviews the simulation before posting, and finishes with the steps to run the job safely.
+Running it on a test part already caught a real toolpath fault before any metal was cut. With
+Makera's recommended feeds for each material, its workholding and probing routines and the
+test results, it becomes a guide shaped by the people who know the machines best.
 Because skills are plain text in a public repository, Makera can read, review and contribute to
 them directly.
 

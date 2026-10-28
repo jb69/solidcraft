@@ -551,7 +551,6 @@ impl Simulator {
         (0..oi).rev().find_map(|k| self.operations[k].toolpath.last_position())
     }
 
-
     /// The fraction of the program done at the cursor (by time).
     pub fn progress(&self) -> f64 {
         if self.total_time_s > 0.0 { (self.time_s / self.total_time_s).clamp(0.0, 1.0) } else { 1.0 }

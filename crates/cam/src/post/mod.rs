@@ -322,7 +322,8 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
             "the setup's machine has three axes but the toolpath tilts the tool; set a 4- or 5-axis machine on the setup".into(),
         ));
     }
-    let mut w = Writer { post, out: String::new(), lines: 0, n: 0, last_xyz: None, last_abc: None, last_feed: None, last_g: None, last_s: None, no_z: false };
+    let mut w =
+        Writer { post, out: String::new(), lines: 0, n: 0, last_xyz: None, last_abc: None, last_feed: None, last_g: None, last_s: None, no_z: false };
     let name: String = program_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == ' ').collect();
     if post.percent_lines {
         w.line("%");
@@ -366,11 +367,18 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
         if !beyond.is_empty() {
             notice.issue(Issue::info(
                 "manual_tool_change",
-                format!("{} tool(s) beyond the changer's {slots} slots ({}): the control stops and asks for them by hand", beyond.len(), beyond.join(", ")),
+                format!(
+                    "{} tool(s) beyond the changer's {slots} slots ({}): the control stops and asks for them by hand",
+                    beyond.len(),
+                    beyond.join(", ")
+                ),
             ));
         }
     } else if machine.tool_changer == crate::machine::ToolChanger::Manual && seen_tools.len() > 1 {
-        notice.issue(Issue::info("manual_tool_change", format!("{} tool changes by hand: the control stops and asks for each tool", seen_tools.len() - 1)));
+        notice.issue(Issue::info(
+            "manual_tool_change",
+            format!("{} tool changes by hand: the control stops and asks for each tool", seen_tools.len() - 1),
+        ));
     }
     for op in ops {
         let tp = op.toolpath;

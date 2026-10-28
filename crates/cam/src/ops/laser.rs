@@ -96,7 +96,10 @@ fn cut(ctx: &Context, power: f64, speed: f64, passes: u32, side: Side, kerf: f64
     notice.value("speed_mm_min", r3(speed));
     notice.value("kerf_mm", r3(kerf));
     if passes > 1 {
-        notice.issue(Issue::info("multi_pass", format!("{passes} passes over the same curves: for a through cut, match the passes to the material's thickness")));
+        notice.issue(Issue::info(
+            "multi_pass",
+            format!("{passes} passes over the same curves: for a through cut, match the passes to the material's thickness"),
+        ));
     }
     Ok((tp, notice))
 }

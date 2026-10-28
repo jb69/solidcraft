@@ -391,8 +391,15 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             let manufacturing = crate::manufacture_workspace::active(app);
             let free = app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none() && !app.file_load.busy();
             let mut v = vec![
-                act("ui.workspace.design", "Design", "ws_design").with(json!({"workspace":"design"})).key(if rendering || manufacturing { "" } else { "current" }),
-                act("ui.workspace.render", "Render", "ws_render").with(json!({"workspace":"render"})).key(if rendering { "current" } else { "" }).on(free),
+                act("ui.workspace.design", "Design", "ws_design").with(json!({"workspace":"design"})).key(if rendering || manufacturing {
+                    ""
+                } else {
+                    "current"
+                }),
+                act("ui.workspace.render", "Render", "ws_render")
+                    .with(json!({"workspace":"render"}))
+                    .key(if rendering { "current" } else { "" })
+                    .on(free),
                 act("ui.workspace.manufacture", "Manufacture", "ws_manufacture")
                     .with(json!({"workspace":"manufacture"}))
                     .key(if manufacturing { "current" } else { "" })
@@ -2162,7 +2169,15 @@ mod manufacture_tests {
         assert!(rows.iter().any(|r| r.starts_with("1. ")), "{rows:?}");
         let op_id = h.app.session.doc.manufacture.setups[0].operations[0].id;
         let ids: Vec<String> = items(&h.app, &Target::CamOperation { id: op_id }).into_iter().map(|i| i.id).collect();
-        for id in ["ui.camEdit", "cam.generate", "cam.simulate.show", "cam.operation.move", "cam.operation.duplicate", "cam.operation.set", "cam.operation.remove"] {
+        for id in [
+            "ui.camEdit",
+            "cam.generate",
+            "cam.simulate.show",
+            "cam.operation.move",
+            "cam.operation.duplicate",
+            "cam.operation.set",
+            "cam.operation.remove",
+        ] {
             assert!(ids.iter().any(|i| i == id), "{id} in {ids:?}");
         }
         // Shown again from the design tabs, the preview brings the workspace with it.
@@ -2183,8 +2198,14 @@ mod cam_job_tests {
         h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 10, "body_name": "Block"})).unwrap();
         let tool = h.app.run("cam.tool.add", json!({"name": "6 mm flat", "kind": "flat", "diameter": 6})).unwrap()["id"].clone();
         h.app.run("cam.setup.create", json!({})).unwrap();
-        let a = h.app.run("cam.operation.face", json!({"tool": tool, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}})).unwrap()["id"].as_u64().unwrap();
-        let b = h.app.run("cam.operation.contour2d", json!({"tool": tool, "side": "outside", "geometry": {"source": "silhouette"}})).unwrap()["id"].as_u64().unwrap();
+        let a =
+            h.app.run("cam.operation.face", json!({"tool": tool, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}})).unwrap()
+                ["id"]
+                .as_u64()
+                .unwrap();
+        let b = h.app.run("cam.operation.contour2d", json!({"tool": tool, "side": "outside", "geometry": {"source": "silhouette"}})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
         h.app.start("cam.generate");
         // Started: both wait their turn until the frames take the job's progress in.
         assert!(h.app.cam_job.is_some());

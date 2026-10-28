@@ -60,7 +60,8 @@ pub fn start(app: &mut SolveApp, params: Value) {
             let tx2 = tx.clone();
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job.run(|e| drop(tx.send(e)))));
             if ran.is_err() {
-                let _ = tx2.send(GenerateEvent::Finished(serde_json::json!({"status": "error", "error": "toolpath generation stopped unexpectedly"})));
+                let _ =
+                    tx2.send(GenerateEvent::Finished(serde_json::json!({"status": "error", "error": "toolpath generation stopped unexpectedly"})));
             }
         });
         if let Err(e) = spawned {

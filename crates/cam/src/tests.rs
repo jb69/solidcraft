@@ -331,7 +331,14 @@ fn drill_cycles_and_canned_post() {
     let mut ctx = ctx_2d(&tool, Vec::new(), heights(0.0, -10.0));
     ctx.geometry.holes = vec![Vec3::new(10.0, 10.0, 0.0), Vec3::new(30.0, 10.0, 0.0)];
     ctx.geometry.hole_diameter = 5.0;
-    let o = op(OpKind::Drill { cycle: crate::toolpath::DrillCycleKind::Peck, peck: 3.0, dwell_s: 0.0, pitch: 0.0, break_through: 0.0, optimize_order: true });
+    let o = op(OpKind::Drill {
+        cycle: crate::toolpath::DrillCycleKind::Peck,
+        peck: 3.0,
+        dwell_s: 0.0,
+        pitch: 0.0,
+        break_through: 0.0,
+        optimize_order: true,
+    });
     let (tp, notice) = generate(&o, &ctx).unwrap();
     assert_eq!(tp.cycles.len(), 2);
     assert_eq!(notice.values["holes"], 2);
@@ -705,7 +712,14 @@ fn drill_pecks_do_not_rapid_into_stock() {
     ctx.stock = StockShape::Box { min: Vec3::new(-1.0, -1.0, 0.0), max: Vec3::new(41.0, 31.0, 11.0) };
     ctx.geometry.holes = vec![Vec3::new(10.0, 10.0, 10.0)];
     ctx.geometry.hole_diameter = 6.0;
-    let o = op(OpKind::Drill { cycle: crate::toolpath::DrillCycleKind::Peck, peck: 2.0, dwell_s: 0.0, pitch: 0.0, break_through: 1.0, optimize_order: true });
+    let o = op(OpKind::Drill {
+        cycle: crate::toolpath::DrillCycleKind::Peck,
+        peck: 2.0,
+        dwell_s: 0.0,
+        pitch: 0.0,
+        break_through: 1.0,
+        optimize_order: true,
+    });
     let (tp, _) = generate(&o, &ctx).unwrap();
     let mut stock = StockMap::new(&ctx.stock, 0.25).unwrap();
     // Replay move by move to find the first rapid that hits.
@@ -913,4 +927,25 @@ fn helix_entries_stay_inside_their_region() {
     for m in tp.moves.iter().filter(|m| m.kind != MoveKind::Rapid && m.to.z < -1e-6) {
         assert!(m.to.x >= 1.0 - 1e-6 && m.to.x <= 11.0 + 1e-6 && m.to.y >= 1.0 - 1e-6 && m.to.y <= 5.0 + 1e-6, "{m:?} leaves the pocket");
     }
+}
+
+#[test]
+fn kinds_list_their_defaults_and_fixed_choices() {
+    use crate::ops::{OpKind, variants};
+    for ty in OpKind::NAMES {
+        let d = OpKind::defaults(ty).unwrap_or_default();
+        assert_eq!(d["type"], *ty, "{ty} has defaults");
+    }
+    assert!(OpKind::defaults("nope").is_none());
+    let pocket = OpKind::choices("pocket2d");
+    let direction = pocket.iter().find(|(k, _)| k == "direction").map(|x| x.1.clone()).unwrap_or_default();
+    assert_eq!(direction, ["climb", "conventional", "both"]);
+    let drill = OpKind::choices("drill");
+    assert!(drill.iter().any(|(k, v)| k == "cycle" && v.iter().any(|c| c == "peck")), "{drill:?}");
+    let from = variants::<crate::linking::HeightRef>(serde_json::Value::Null);
+    assert!(from.contains(&"stock_top".to_string()) && from.contains(&"model_bottom".to_string()), "{from:?}");
+    let ramps = variants::<crate::linking::Ramp>(serde_json::json!({"type": "\u{1}"}));
+    assert_eq!(ramps, ["plunge", "helix", "zigzag", "profile"]);
+    let sources = variants::<crate::setup::Geometry>(serde_json::json!({"source": "\u{1}"}));
+    assert!(sources.contains(&"silhouette".to_string()) && sources.contains(&"holes".to_string()), "{sources:?}");
 }

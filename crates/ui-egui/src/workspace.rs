@@ -309,7 +309,13 @@ pub const SECTIONS: &[Section] = &[
         tab: "MANUFACTURE",
         panel: "MULTI-AXIS",
         promoted: 3,
-        ids: &["cam.operation.rotary", "cam.operation.swarf", "cam.operation.multi_axis_contour", "cam.operation.flow", "cam.operation.multi_axis_blend"],
+        ids: &[
+            "cam.operation.rotary",
+            "cam.operation.swarf",
+            "cam.operation.multi_axis_contour",
+            "cam.operation.flow",
+            "cam.operation.multi_axis_blend",
+        ],
     },
     Section {
         tab: "MANUFACTURE",

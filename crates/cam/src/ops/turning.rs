@@ -237,7 +237,10 @@ fn thread(ctx: &Context, pitch: f64, depth: f64, passes: u32, start: f64, length
     notice.value("minor_radius_mm", r3(r_min));
     notice.value("major_diameter_mm", r3(stock_r * 2.0));
     if !matches!(tool.kind, crate::tool::ToolKind::Chamfer { .. }) {
-        notice.issue(Issue::info("thread_form", "the thread's form is the tool's: a 60° V bit cuts a V thread, an end mill a square one, a ball a round one"));
+        notice.issue(Issue::info(
+            "thread_form",
+            "the thread's form is the tool's: a 60° V bit cuts a V thread, an end mill a square one, a ball a round one",
+        ));
     }
     Ok((tp, notice))
 }

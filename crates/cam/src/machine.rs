@@ -382,15 +382,25 @@ impl Machine {
         let who = if self.model.is_empty() { self.name.clone() } else { self.model.clone() };
         if toolpath.laser {
             if self.laser.is_none() {
-                out.push(Issue::error("no_laser", format!("the {who} has no laser module; a laser program cannot run on it")).parameter("machine", self.name.clone()));
+                out.push(
+                    Issue::error("no_laser", format!("the {who} has no laser module; a laser program cannot run on it"))
+                        .parameter("machine", self.name.clone()),
+                );
             }
             if self.max_feed > 0.0 {
                 let fastest = toolpath.moves.iter().map(|m| m.feed).fold(0.0, f64::max);
                 if fastest > self.max_feed + 1e-9 {
                     out.push(
-                        Issue::warning("feed_limit", format!("the laser moves at {} mm/min; the {who} moves at {} mm/min at most; the post writes the maximum", fastest.round(), self.max_feed.round()))
-                            .parameter("speed", fastest)
-                            .limit(self.max_feed),
+                        Issue::warning(
+                            "feed_limit",
+                            format!(
+                                "the laser moves at {} mm/min; the {who} moves at {} mm/min at most; the post writes the maximum",
+                                fastest.round(),
+                                self.max_feed.round()
+                            ),
+                        )
+                        .parameter("speed", fastest)
+                        .limit(self.max_feed),
                     );
                 }
             }
@@ -401,7 +411,14 @@ impl Machine {
             out.push(
                 Issue::warning(
                     "spindle_speed",
-                    format!("T{} {}: {} rev/min is past the {}'s {} rev/min; the post writes the maximum", tool.number, tool.name, f.spindle_rpm.round(), who, self.spindle_rpm_max.round()),
+                    format!(
+                        "T{} {}: {} rev/min is past the {}'s {} rev/min; the post writes the maximum",
+                        tool.number,
+                        tool.name,
+                        f.spindle_rpm.round(),
+                        who,
+                        self.spindle_rpm_max.round()
+                    ),
                 )
                 .parameter("feeds.spindle_rpm", f.spindle_rpm)
                 .limit(self.spindle_rpm_max)
@@ -414,7 +431,14 @@ impl Machine {
                     out.push(
                         Issue::warning(
                             "feed_limit",
-                            format!("T{} {}: the {what} feed {} mm/min is past the {}'s {} mm/min; the post writes the maximum", tool.number, tool.name, v.round(), who, self.max_feed.round()),
+                            format!(
+                                "T{} {}: the {what} feed {} mm/min is past the {}'s {} mm/min; the post writes the maximum",
+                                tool.number,
+                                tool.name,
+                                v.round(),
+                                who,
+                                self.max_feed.round()
+                            ),
                         )
                         .parameter(&format!("feeds.{what}"), v)
                         .limit(self.max_feed)
@@ -428,9 +452,12 @@ impl Machine {
             if !self.collets.iter().any(|c| (c - shank).abs() < 0.06) {
                 let list: Vec<String> = self.collets.iter().map(|c| format!("{c}")).collect();
                 out.push(
-                    Issue::warning("collet", format!("T{} {}: no {} collet takes a {shank} mm shank (collets: {} mm)", tool.number, tool.name, who, list.join(", ")))
-                        .parameter("shank_diameter", shank)
-                        .limit(serde_json::json!(self.collets)),
+                    Issue::warning(
+                        "collet",
+                        format!("T{} {}: no {} collet takes a {shank} mm shank (collets: {} mm)", tool.number, tool.name, who, list.join(", ")),
+                    )
+                    .parameter("shank_diameter", shank)
+                    .limit(serde_json::json!(self.collets)),
                 );
             }
         }
@@ -465,14 +492,20 @@ impl Machine {
                 }
                 if r_max * 2.0 > dia + 1e-6 {
                     out.push(
-                        Issue::warning("rotary_capacity", format!("cuts reach {:.1} mm from the rotary axis; the {}'s 4th-axis module takes Ø{dia} mm stock", r_max, who))
-                            .limit(dia),
+                        Issue::warning(
+                            "rotary_capacity",
+                            format!("cuts reach {:.1} mm from the rotary axis; the {}'s 4th-axis module takes Ø{dia} mm stock", r_max, who),
+                        )
+                        .limit(dia),
                     );
                 }
                 if a_max.is_finite() && a_max - a_min > len + 1e-6 {
                     out.push(
-                        Issue::warning("rotary_capacity", format!("cuts span {:.1} mm along the rotary axis; the {}'s 4th-axis module takes {len} mm", a_max - a_min, who))
-                            .limit(len),
+                        Issue::warning(
+                            "rotary_capacity",
+                            format!("cuts span {:.1} mm along the rotary axis; the {}'s 4th-axis module takes {len} mm", a_max - a_min, who),
+                        )
+                        .limit(len),
                     );
                 }
             }

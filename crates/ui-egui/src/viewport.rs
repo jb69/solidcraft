@@ -2146,7 +2146,8 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
     let mut feedback = GpuScene::default();
     // A machining simulation stands in for these bodies: nothing of them is lit.
     let sim_hidden: Vec<String> = app.session.cam.preview.as_ref().filter(|p| p.hide_model).map(|p| p.bodies.clone()).unwrap_or_default();
-    let sel: Vec<Sel> = sel.into_iter().filter(|x| !matches!(x, Sel::Body { name } | Sel::Face { body: name, .. } if sim_hidden.contains(name))).collect();
+    let sel: Vec<Sel> =
+        sel.into_iter().filter(|x| !matches!(x, Sel::Body { name } | Sel::Face { body: name, .. } if sim_hidden.contains(name))).collect();
     // Selected things.
     for x in &sel {
         match x {
@@ -2215,7 +2216,11 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
     // Timeline modifiers light only their resulting faces; browser rows light whole bodies.
     let mut hovered = app.viewport.hover_feature.map(|id| feature_geometry(app, id)).unwrap_or_default();
     hovered.extend(app.viewport.hover_bodies.iter().map(|name| Sel::Body { name: name.clone() }));
-    for b in st.bodies.iter().filter(|b| app.session.body_visible(&b.name) && !app.preview.effective_replaced().contains(&b.name) && !sim_hidden.contains(&b.name)) {
+    for b in st
+        .bodies
+        .iter()
+        .filter(|b| app.session.body_visible(&b.name) && !app.preview.effective_replaced().contains(&b.name) && !sim_hidden.contains(&b.name))
+    {
         let whole = hovered.iter().any(|x| matches!(x, Sel::Body { name } if name == &b.name));
         let faces: Vec<_> = if whole {
             (0..b.body.face_count()).collect()

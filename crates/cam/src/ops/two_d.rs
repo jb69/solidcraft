@@ -620,16 +620,7 @@ fn drill(
         tp.rapid(Vec3::new(h.x, h.y, retract))?;
         tp.rapid(Vec3::new(h.x, h.y, ctx.heights.feed.min(retract).max(top.z)))?;
         let feed = if cycle == DrillCycleKind::Tap { tap_feed } else { f.plunge };
-        tp.cycles.push(DrillCycle {
-            kind: cycle,
-            top,
-            axis: Vec3::new(0.0, 0.0, 1.0),
-            depth,
-            retract_height: retract,
-            peck,
-            dwell_s,
-            feed,
-        });
+        tp.cycles.push(DrillCycle { kind: cycle, top, axis: Vec3::new(0.0, 0.0, 1.0), depth, retract_height: retract, peck, dwell_s, feed });
         match cycle {
             DrillCycleKind::Simple | DrillCycleKind::Dwell | DrillCycleKind::FeedOut | DrillCycleKind::Tap => {
                 tp.push(Move::new(MoveKind::Plunge, Vec3::new(h.x, h.y, bottom_z), feed))?;
@@ -746,7 +737,9 @@ fn slot(op: &Operation, ctx: &Context, width: f64, stepdown: f64, direction: Dir
     let width = if width > 0.0 { width } else { d };
     if width < d - 1e-9 {
         notice.issue(
-            Issue::error("tool_too_large", format!("a {:.2} mm tool cannot cut a {:.2} mm slot", d, width)).parameter("tool", tool.id).limit(r3(width)),
+            Issue::error("tool_too_large", format!("a {:.2} mm tool cannot cut a {:.2} mm slot", d, width))
+                .parameter("tool", tool.id)
+                .limit(r3(width)),
         );
         return Ok((Toolpath::new(), notice));
     }
@@ -824,7 +817,10 @@ fn engrave(op: &Operation, ctx: &Context, width: f64, stepdown: f64) -> Result<(
         }
         Some(_) => {}
         None => {
-            pre.issue(Issue::warning("v_tool", "engraving expects a V (chamfer or engraving) tool; the tool's tip width is cut instead").parameter("tool", tool.id));
+            pre.issue(
+                Issue::warning("v_tool", "engraving expects a V (chamfer or engraving) tool; the tool's tip width is cut instead")
+                    .parameter("tool", tool.id),
+            );
         }
     }
     let (tp, mut notice) = follow_curves(ctx, &lk, bottom, if stepdown > 0.0 { stepdown } else { ctx.heights.top - bottom }, Direction::Climb)?;
@@ -844,7 +840,9 @@ fn circular(op: &Operation, ctx: &Context, stepover: f64, stepdown: f64, directi
     let mut notice = Notice::default();
     if r_wall <= 0.0 {
         notice.issue(
-            Issue::error("tool_too_large", format!("a {:.2} mm tool cannot mill a {:.2} mm hole", tool.diameter, d)).parameter("tool", tool.id).limit(r3(d)),
+            Issue::error("tool_too_large", format!("a {:.2} mm tool cannot mill a {:.2} mm hole", tool.diameter, d))
+                .parameter("tool", tool.id)
+                .limit(r3(d)),
         );
         return Ok((Toolpath::new(), notice));
     }
@@ -903,7 +901,11 @@ fn thread(op: &Operation, ctx: &Context, pitch: f64, passes: u32, external: bool
     let depth_of_thread = 0.6134 * pitch;
     let r_full = if external { d * 0.5 + tool.radius() } else { d * 0.5 - tool.radius() };
     if !external && r_full <= 0.0 {
-        notice.issue(Issue::error("tool_too_large", format!("a {:.2} mm thread mill cannot enter a {:.2} mm thread", tool.diameter, d)).parameter("tool", tool.id).limit(r3(d)));
+        notice.issue(
+            Issue::error("tool_too_large", format!("a {:.2} mm thread mill cannot enter a {:.2} mm thread", tool.diameter, d))
+                .parameter("tool", tool.id)
+                .limit(r3(d)),
+        );
         return Ok((Toolpath::new(), notice));
     }
     let n_pass = passes.clamp(1, 20);
@@ -953,7 +955,10 @@ fn thread(op: &Operation, ctx: &Context, pitch: f64, passes: u32, external: bool
     notice.value("turns", r3(turns));
     notice.value("thread_depth_mm", r3(depth_of_thread));
     notice.value("passes", n_pass);
-    notice.issue(Issue::info("single_point", "a single-point thread mill helix: a multi-tooth thread mill cuts the whole depth in one turn; set the bottom height to the thread's depth"));
+    notice.issue(Issue::info(
+        "single_point",
+        "a single-point thread mill helix: a multi-tooth thread mill cuts the whole depth in one turn; set the bottom height to the thread's depth",
+    ));
     Ok((tp, notice))
 }
 

@@ -90,7 +90,10 @@ impl StockShape {
             StockShape::Cylinder { axis: Axis::X, radius, .. } => radius,
             _ => {
                 let b = self.bounds();
-                [b.min.y.abs(), b.max.y.abs()].iter().fold(0.0_f64, |m, y| m.max(*y)).hypot([b.min.z.abs(), b.max.z.abs()].iter().fold(0.0_f64, |m, z| m.max(*z)))
+                [b.min.y.abs(), b.max.y.abs()]
+                    .iter()
+                    .fold(0.0_f64, |m, y| m.max(*y))
+                    .hypot([b.min.z.abs(), b.max.z.abs()].iter().fold(0.0_f64, |m, z| m.max(*z)))
             }
         }
     }

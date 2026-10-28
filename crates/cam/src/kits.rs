@@ -112,12 +112,27 @@ pub fn makera_essential(machine: &Machine, material: Material) -> Vec<Tool> {
         push(&format!("{d} mm drill"), ToolKind::Drill { tip_angle_deg: 118.0 }, d, flute, 2, feeds(plunge, plunge, drill_rpm));
     }
     if let Some(laser) = machine.laser {
-        let mut t = Tool::new(0, &format!("{} W {} nm laser", laser.power_w, laser.wavelength_nm), ToolKind::Laser { wavelength_nm: laser.wavelength_nm }, laser.spot_mm.max(0.01));
+        let mut t = Tool::new(
+            0,
+            &format!("{} W {} nm laser", laser.power_w, laser.wavelength_nm),
+            ToolKind::Laser { wavelength_nm: laser.wavelength_nm },
+            laser.spot_mm.max(0.01),
+        );
         t.flute_length = 1.0;
         t.overall_length = 1.0;
         t.shank_diameter = 0.0;
         t.flutes = 0;
-        t.feeds = Feeds { spindle_rpm: 1.0, cutting: 300.0, plunge: 300.0, ramp: 300.0, lead_in: 300.0, lead_out: 300.0, retract: 0.0, coolant: Coolant::Air, clockwise: true };
+        t.feeds = Feeds {
+            spindle_rpm: 1.0,
+            cutting: 300.0,
+            plunge: 300.0,
+            ramp: 300.0,
+            lead_in: 300.0,
+            lead_out: 300.0,
+            retract: 0.0,
+            coolant: Coolant::Air,
+            clockwise: true,
+        };
         out.push(t);
     }
     out

@@ -83,7 +83,9 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
         .manufacture
         .setups
         .iter()
-        .map(|st| (st.id, st.name.clone(), st.machine.name.clone(), st.operations.iter().map(|o| (o.id, o.name.clone(), o.kind.type_name())).collect()))
+        .map(|st| {
+            (st.id, st.name.clone(), st.machine.name.clone(), st.operations.iter().map(|o| (o.id, o.name.clone(), o.kind.type_name())).collect())
+        })
         .collect();
     for (sid, name, machine, ops) in setups {
         let skey = format!("cam-setup-{sid}");
@@ -176,7 +178,11 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
     if topen {
         for (id, label) in tools {
             let picked = app.tree.picked_cam == Some(CamPick::Tool(id));
-            let r = draw_row(ui, ui.id().with(("cam-tool", id)), &Row { depth: depth + 2, icon: "cam", label: &label, name: true, selected: picked, ..Default::default() });
+            let r = draw_row(
+                ui,
+                ui.id().with(("cam-tool", id)),
+                &Row { depth: depth + 2, icon: "cam", label: &label, name: true, selected: picked, ..Default::default() },
+            );
             if r.clicked {
                 app.tree.picked_cam = Some(CamPick::Tool(id));
             }
@@ -200,15 +206,9 @@ pub enum CamPick {
 }
 
 /// Opens the command box with `cam.operation.set` and the operation's current parameters.
+/// Opens the operation editor (Fields and JSON tabs) on `op`.
 pub(crate) fn edit(app: &mut SolveApp, op: u64) {
-    let Some((_, o)) = app.session.doc.manufacture.operation(op) else { return };
-    let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
-    if let Value::Object(m) = &mut v {
-        m.remove("id");
-        m.insert("operation".into(), json!(op));
-    }
-    crate::shortcut_box::open(app, None);
-    app.sbox.text = format!("cam.operation.set {}", serde_json::to_string(&v).unwrap_or_default());
+    crate::cam_editor::open(app, op);
 }
 
 fn edit_tool(app: &mut SolveApp, tool: u64) {
@@ -244,8 +244,10 @@ pub fn operation_items(app: &SolveApp, id: u64) -> Vec<Item> {
         Item::action("cam.operation.move", "Move Down", "").with(json!({"operation": id, "down": true})).on(index + 1 < count),
         Item::action("cam.operation.duplicate", "Duplicate", "copy").with(json!({"operation": id})),
         Item::sep(),
-        Item::action("cam.toolpath.visibility", "Show/Hide Toolpath", "eye").with(json!({"operation": id, "visible": app.session.cam.hidden.contains(&id)})),
-        Item::action("cam.operation.set", if suppressed { "Unsuppress" } else { "Suppress" }, "suppress").with(json!({"operation": id, "enabled": suppressed})),
+        Item::action("cam.toolpath.visibility", "Show/Hide Toolpath", "eye")
+            .with(json!({"operation": id, "visible": app.session.cam.hidden.contains(&id)})),
+        Item::action("cam.operation.set", if suppressed { "Unsuppress" } else { "Suppress" }, "suppress")
+            .with(json!({"operation": id, "enabled": suppressed})),
         Item::action("cam.operation.remove", "Delete", "delete").with(json!({"operation": id})),
     ]
 }

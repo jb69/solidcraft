@@ -673,10 +673,12 @@ Laser (cut and raster engrave, with each Makera module's power and the controls'
 and turning on the rotary axis (face, profile, groove, thread) have their own panels; threads
 are milled (`thread`), tapped (G84) or turned (`turn_thread`). Operations live in the Browser's
 Manufacture folder as parametric steps: chained signatures make an edited, suppressed or moved
-operation and every later one stale, and generation regenerates only those.
+operation and every later one stale, and generation regenerates only those. Opening an
+operation shows the operation editor: a Fields tab with an input for every value and a JSON
+tab with the same draft as text, both applied through `cam.operation.set`.
 
 Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image
 (grey-level) laser engraving, drag-to-reorder in the Browser, CAM
-dialogs (the ribbon's buttons open the command box filled in), arc output (G2/G3) in posts,
+dialogs for new operations (the ribbon's buttons open the command box filled in), arc output (G2/G3) in posts,
 multi-axis stock removal in the simulator (tilted moves are collision-checked only), a run on a
 real Makera machine.

@@ -8,10 +8,10 @@
 //! scallop, pencil, spiral, radial, morphed spiral, project, horizontal, steep and shallow) and
 //! [`multi_axis`] (rotary, swarf, multi-axis contour, flow).
 
-pub mod multi_axis;
 pub mod laser;
-pub mod turning;
+pub mod multi_axis;
 pub mod three_d;
+pub mod turning;
 pub mod two_d;
 
 use serde::{Deserialize, Serialize};
@@ -598,6 +598,32 @@ impl OpKind {
         "turn_thread",
     ];
 
+    /// A kind's parameters at their defaults, as saved (`type` and every parameter), or `None`
+    /// for an unknown kind.
+    pub fn defaults(ty: &str) -> Option<serde_json::Value> {
+        let kind: OpKind = serde_json::from_value(serde_json::json!({ "type": ty })).ok()?;
+        serde_json::to_value(kind).ok()
+    }
+
+    /// The fixed-choice parameters of a kind (direction, side, drill cycle…) and the values each
+    /// takes, in declaration order.
+    pub fn choices(ty: &str) -> Vec<(String, Vec<String>)> {
+        let Some(serde_json::Value::Object(d)) = OpKind::defaults(ty) else { return Vec::new() };
+        let mut out = Vec::new();
+        for (k, v) in &d {
+            if k == "type" || !v.is_string() {
+                continue;
+            }
+            let mut probe = d.clone();
+            probe.insert(k.clone(), serde_json::Value::String(PROBE.into()));
+            let names = variants_in(serde_json::from_value::<OpKind>(serde_json::Value::Object(probe)).err());
+            if !names.is_empty() {
+                out.push((k.clone(), names));
+            }
+        }
+        out
+    }
+
     /// Axes the kind needs: 3 for 2.5D and 3D work (3+2 through the orientation), 4 for rotary,
     /// 5 for swarf and surface-normal work.
     pub fn axes(&self) -> usize {
@@ -927,4 +953,27 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
         notice.info = Some(format!("{}: {} moves, {:.0} mm of cutting, {:.0} s", op.kind.type_name(), st.moves, st.cutting_length, st.time_s));
     }
     Ok((tp, notice))
+}
+
+/// A value no fixed-choice type accepts, to make it list the ones it does.
+const PROBE: &str = "\u{1}";
+
+/// The values a fixed-choice type `T` takes, read from what it says when given one it does
+/// not: `probe` is the type's JSON with [`PROBE`] where the choice goes (`"\u{1}"` for a plain
+/// choice, `{"type": "\u{1}"}` for a tagged one). Empty when `T` is not a fixed choice.
+pub fn variants<T: serde::de::DeserializeOwned>(probe: serde_json::Value) -> Vec<String> {
+    let probe = match probe {
+        serde_json::Value::Null => serde_json::Value::String(PROBE.into()),
+        other => other,
+    };
+    variants_in(serde_json::from_value::<T>(probe).err())
+}
+
+/// The names in serde's "unknown variant `x`, expected one of `a`, `b`" message.
+fn variants_in(err: Option<serde_json::Error>) -> Vec<String> {
+    let Some(e) = err else { return Vec::new() };
+    let msg = e.to_string();
+    let Some(rest) = msg.split_once("unknown variant").map(|x| x.1) else { return Vec::new() };
+    let Some(rest) = rest.split_once("expected").map(|x| x.1) else { return Vec::new() };
+    rest.split('`').skip(1).step_by(2).map(str::to_string).collect()
 }

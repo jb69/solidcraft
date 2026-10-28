@@ -14,10 +14,10 @@ mod occurrence_ui_tests;
 #[path = "occurrence_gizmo_tests.rs"]
 mod occurrence_gizmo_tests;
 
-#[path = "browser_model.rs"]
-mod model;
 #[path = "browser_cam.rs"]
 pub(crate) mod cam;
+#[path = "browser_model.rs"]
+mod model;
 
 mod features;
 

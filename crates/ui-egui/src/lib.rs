@@ -15,9 +15,9 @@ pub mod bom_panel;
 pub mod browser;
 pub mod browser_canvas;
 pub mod browser_prompts;
+pub mod cam_editor;
 pub mod cam_job;
 pub mod cam_panel;
-pub mod manufacture_workspace;
 pub mod canvas;
 #[cfg(test)]
 mod colour_tokens_tests;
@@ -87,6 +87,7 @@ mod loft_rails_dialog_tests;
 mod look_at_tests;
 #[cfg(test)]
 mod manage_dialogs_tests;
+pub mod manufacture_workspace;
 mod material_card_review;
 
 #[cfg(test)]
@@ -371,6 +372,8 @@ pub struct SolveApp {
     pub viewport: viewport::ViewportState,
     pub render_workspace: render_workspace::State,
     /// Toolpaths being generated off the window thread.
+    /// The operation editor, when open.
+    pub cam_editor: Option<cam_editor::CamEditor>,
     pub cam_job: Option<cam_job::CamJob>,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
@@ -530,6 +533,7 @@ impl SolveApp {
             saving: None,
             viewport: viewport::ViewportState::default(),
             render_workspace,
+            cam_editor: None,
             cam_job: None,
             tool: None,
             dialog: None,
@@ -1653,6 +1657,7 @@ impl SolveApp {
         design_properties::show(self, ui.ctx());
         cam_job::poll(self, ui.ctx());
         cam_panel::show(self, ui.ctx());
+        cam_editor::show(self, ui.ctx());
         bom_panel::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());

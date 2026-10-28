@@ -61,14 +61,20 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
     let tool = m.tools.tools.first().map(|t| t.id);
     let template = match id {
         "cam.tool.add" => Some(json!({"name": "6 mm flat", "kind": "flat", "diameter": 6, "flute_length": 20, "overall_length": 50})),
-        "cam.setup.create" => Some(json!({"name": format!("Setup {}", m.setups.len() + 1), "machine": "carvera", "stock": {"mode": "relative_box", "x_neg": 1, "x_pos": 1, "y_neg": 1, "y_pos": 1, "z_neg": 0, "z_pos": 1}})),
+        "cam.setup.create" => Some(
+            json!({"name": format!("Setup {}", m.setups.len() + 1), "machine": "carvera", "stock": {"mode": "relative_box", "x_neg": 1, "x_pos": 1, "y_neg": 1, "y_pos": 1, "z_neg": 0, "z_pos": 1}}),
+        ),
         "cam.tool.kit" => Some(json!({"kit": "makera_essential", "material": "aluminium"})),
         "cam.machine.set" => Some(json!({"setup": setup, "machine": "carvera"})),
-        "cam.operation.add" => Some(json!({"setup": setup, "tool": tool, "type": "pocket3d", "name": "Rough", "stepover": 3, "stepdown": 2, "stock_to_leave_radial": 0.2, "stock_to_leave_axial": 0.1})),
+        "cam.operation.add" => Some(
+            json!({"setup": setup, "tool": tool, "type": "pocket3d", "name": "Rough", "stepover": 3, "stepdown": 2, "stock_to_leave_radial": 0.2, "stock_to_leave_axial": 0.1}),
+        ),
         "cam.operation.set" => Some(json!({"operation": null})),
         _ => {
             let tools: Vec<(u64, bool)> = m.tools.tools.iter().map(|t| (t.id, t.is_laser())).collect();
-            id.strip_prefix("cam.operation.").filter(|k| !matches!(*k, "add" | "remove" | "list" | "kinds")).map(|k| kind_template(k, setup, tool, &tools))
+            id.strip_prefix("cam.operation.")
+                .filter(|k| !matches!(*k, "add" | "remove" | "list" | "kinds"))
+                .map(|k| kind_template(k, setup, tool, &tools))
         }
     };
     if let Some(template) = template {
@@ -77,7 +83,8 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
         return true;
     }
     if id == "cam.post" {
-        let name = app.session.doc.manufacture.setups.first().map(|s| s.program.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "program".into());
+        let name =
+            app.session.doc.manufacture.setups.first().map(|s| s.program.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "program".into());
         app.pick_save_command(&format!("{name}.nc"), &["nc", "gcode", "ngc", "tap"], "cam.post", json!({}));
         return true;
     }
@@ -108,7 +115,8 @@ fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u6
         "tap" => ("drill", json!({"cycle": "tap", "pitch": 1.0})),
         other => (other, json!({})),
     };
-    let mut params = serde_json::from_value::<OpKind>(json!({"type": kind_name})).ok().and_then(|k| serde_json::to_value(k).ok()).unwrap_or(json!({}));
+    let mut params =
+        serde_json::from_value::<OpKind>(json!({"type": kind_name})).ok().and_then(|k| serde_json::to_value(k).ok()).unwrap_or(json!({}));
     if let Value::Object(o) = &mut params {
         o.remove("type");
         if let Value::Object(e) = extra {

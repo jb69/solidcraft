@@ -164,8 +164,19 @@ draws every generated, enabled operation's toolpath on the workpiece (feed moves
 colour, rapids faint); an operation's eye shows or hides its toolpath and a setup's eye all of
 its operations' (`cam.toolpath.visibility {operation | operations | setup | all, visible}`,
 view state that is neither saved nor undone). Suppressing, which leaves the operation out of
-generation, simulation and posting, is in the menu. Double-click opens an operation in the
-command box as `cam.operation.set` with its current parameters; the menu has Edit,
+generation, simulation and posting, is in the menu. Double-click (or Edit in the menu) opens the operation editor, with two tabs over one draft
+of the operation. **Fields** is the friendly view: name, type, tool and enabled, then sections
+for the kind's own parameters (fixed choices as dropdowns, lengths in mm, angles in degrees),
+stock to leave, orientation, geometry (its source, and the picked points and loops as rows to
+edit, add or remove), the five heights (what each is measured from and its offset) and
+linking (ramp, leads, stay-down). The form is built from the operation's saved form and its
+kind's defaults, so it covers every value of every kind. **JSON** is the advanced view: the
+same draft as the text `cam.operation.set` takes, to read, copy or paste. Edits carry across
+when switching tabs; JSON that does not parse keeps its tab and blocks Apply. Apply and OK run
+`cam.operation.set` with the draft as one undo step; a refusal keeps the draft and says why.
+When the operation changes elsewhere (an assistant, undo), an untouched draft follows it and an
+edited one offers Reload. Assistants never use the editor: they set the JSON directly with
+`cam.operation.set`. The menu has Edit,
 Regenerate, Regenerate Chain, Simulate to Here, Move Up and Down, Duplicate, Show/Hide Toolpath, Suppress and
 Delete, and a setup's menu Generate, Regenerate All, Simulate and Post Process.
 

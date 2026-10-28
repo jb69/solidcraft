@@ -52,6 +52,9 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   - 4-axis: `rotary` (the operation frame's x is the rotary axis; set `orientation` so it is);
   - 5-axis: `swarf` on `chains`, `multi_axis_contour`, `flow` on `rails`; use a ball tool.
 - Leave a parameter at 0 for its default. `direction: both` zigzags without retracts.
+- **Change** an operation by setting its JSON directly: `cam.operation.set {operation, …}` with
+  only the keys to change (a new `type` starts that kind's parameters at their defaults). Never
+  open or drive the operation editor; it is the person's view of the same JSON.
 - One `batch` can hold the whole chain; a failed step rolls the batch back.
 
 ## Verify

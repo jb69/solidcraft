@@ -1264,6 +1264,8 @@ fn skills_name_only_real_tools_and_commands() {
         include_str!("../../../skills/solidcraft-checking/reference/porting.md"),
         include_str!("../../../skills/solidcraft-mechanisms/SKILL.md"),
         include_str!("../../../skills/solidcraft-mechanisms/reference.md"),
+        include_str!("../../../skills/solidcraft-cam/SKILL.md"),
+        include_str!("../../../skills/solidcraft-makera-guide/SKILL.md"),
     ];
     let mut s = server();
     let tools: Vec<String> = tool_definitions().iter().filter_map(|t| t["name"].as_str()).map(str::to_owned).collect();

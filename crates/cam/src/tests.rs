@@ -892,3 +892,25 @@ fn simulator_clock_agrees_with_seeking_so_playback_moves_forward() {
     sim.seek(sim.cursor_at_fraction(0.4)).unwrap();
     assert!(sim.tip.dist(tip) < 1e-9 && (sim.time_s - t).abs() < 1e-9);
 }
+
+#[test]
+fn helix_entries_stay_inside_their_region() {
+    use crate::ops::Direction;
+    // Circular milling of a 4 mm hole with a 2 mm end mill: the tool centre may go no farther
+    // than 1 mm from the hole's centre, the helix entry included.
+    let tool = flat(2.0);
+    let mut ctx = ctx_2d(&tool, Vec::new(), heights(0.0, -6.0));
+    ctx.geometry.holes = vec![Vec3::new(10.0, 10.0, 0.0)];
+    ctx.geometry.hole_diameter = 4.0;
+    let o = op(OpKind::Circular { stepover: 0.0, stepdown: 1.0, direction: Direction::Climb });
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    let reach = tp.moves.iter().filter(|m| m.kind != MoveKind::Rapid).map(|m| Vec2::new(m.to.x - 10.0, m.to.y - 10.0).len()).fold(0.0, f64::max);
+    assert!(reach <= 1.0 + 1e-6, "the tool centre reaches {reach} mm from the hole's centre");
+    // A 2D pocket: no move below the top leaves the region the tool centre may visit.
+    let ctx = ctx_2d(&tool, vec![rect(Vec2::new(0.0, 0.0), Vec2::new(12.0, 6.0))], heights(0.0, -3.0));
+    let o = op(OpKind::Pocket2d { stepover: 0.0, stepdown: 1.0, direction: Direction::Climb, inside_out: true, finishing_stepover: 0.0 });
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    for m in tp.moves.iter().filter(|m| m.kind != MoveKind::Rapid && m.to.z < -1e-6) {
+        assert!(m.to.x >= 1.0 - 1e-6 && m.to.x <= 11.0 + 1e-6 && m.to.y >= 1.0 - 1e-6 && m.to.y <= 5.0 + 1e-6, "{m:?} leaves the pocket");
+    }
+}

@@ -203,3 +203,6 @@ than the operation needs), `not_generated`, `sketch_not_level`, `face_not_level`
   button behaviour); `crates/ui-egui/src/cam_panel.rs` and the viewport: the simulation display
   and playback.
 - `skills/solidcraft-cam`: how an agent machines a part.
+- `skills/solidcraft-makera-guide`: how an agent guides someone new to CAM through a job on a
+  Makera machine (the interview, strategy choices explained, Makera-tuned starting numbers,
+  notices in plain words, the simulation review and the run steps).

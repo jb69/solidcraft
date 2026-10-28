@@ -284,13 +284,16 @@ impl Linker<'_> {
                     // and takes thousands of moves to descend: plunge instead.
                     let least = (r_tool * 0.5).max(self.tolerance * 4.0);
                     if let Some(r) = region {
-                        // Shrink until the helix circle stays inside the region.
+                        // Shrink until the helix circle stays inside the region. The helix turns
+                        // about a centre beside the start point (the start lies on the circle),
+                        // so that circle is the one to test.
+                        let helix_circle = |d: f64| start_xy - Vec2::new(d * 0.5, 0.0);
                         let mut tries = 0;
-                        while tries < 8 && d >= least && !circle_inside(r, start_xy, d * 0.5, self.tolerance) {
+                        while tries < 8 && d >= least && !circle_inside(r, helix_circle(d), d * 0.5, self.tolerance) {
                             d *= 0.5;
                             tries += 1;
                         }
-                        if !circle_inside(r, start_xy, d * 0.5, self.tolerance) {
+                        if !circle_inside(r, helix_circle(d), d * 0.5, self.tolerance) {
                             d = 0.0;
                         }
                     }

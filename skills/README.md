@@ -10,6 +10,8 @@ description that tell the agent when to load it, and an optional supporting refe
 | [`solidcraft-editing`](solidcraft-editing/SKILL.md) | changes, fixes or extends an existing design |
 | [`solidcraft-checking`](solidcraft-checking/SKILL.md) | builds, changes or ports a design, next to the two above: parameter ranges, every allowed value, exact STEP comparison, regression tests, designs kept in git |
 | [`solidcraft-mechanisms`](solidcraft-mechanisms/SKILL.md) | builds, drives or animates an assembly: components, joints, motion links, closed loops such as actuators, contact sets, motion studies |
+| [`solidcraft-cam`](solidcraft-cam/SKILL.md) | machines a part: tools, setups, 2.5D to 5-axis operations, turning and laser, toolpath generation, stock simulation, G-code posting |
+| [`solidcraft-makera-guide`](solidcraft-makera-guide/SKILL.md) | guides someone new to CAM through a job on a Makera Carvera, Carvera Air or Z1: asks about the part, material and workholding, picks and explains the strategies, checks the simulation, and prepares the program and the steps to run it |
 
 They teach the agent to:
 - plan the part as numbers

@@ -59,6 +59,13 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   part's outline, finishing on the part, a selection bounds it). Read the notice's `boundary`
   issue; set `boundary: "stock"` to clear the whole stock, `"selection"` with `geometry` for one
   region, `{containment: inside | center | outside, offset}` to adjust (docs/cam-boundaries.md).
+  `"selection"` without picked geometry is refused. Pick faces by a point on each:
+  `geometry: {source: "faces", points: [[x, y, z]]}` (a pocket floor keeps its islands).
+- **Editing clears the toolpath**: after `cam.operation.set` (other than a rename) the
+  operation is not generated until `cam.generate`. `cam.operation.move {operation, setup}`
+  moves it to another setup.
+- **Check for gouges**: `cam.simulate` reports `gouge_cells` per operation; the visual
+  simulation draws them red on the stock. Any gouge is a wrong cut: fix it before posting.
 - Leave a parameter at 0 for its default. `direction: both` zigzags without retracts.
 - **Change** an operation or a tool by setting its JSON directly: `cam.operation.set
   {operation, …}` or `cam.tool.set {tool, …}` with only the keys to change (a new `type` starts

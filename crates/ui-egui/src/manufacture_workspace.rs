@@ -56,8 +56,8 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
     if !id.starts_with("cam.") {
         return false;
     }
+    let setup = selected_setup(app);
     let m = &app.session.doc.manufacture;
-    let setup = m.setups.first().map(|s| s.id);
     let tool = m.tools.tools.first().map(|t| t.id);
     let template = match id {
         "cam.tool.add" => Some(json!({"name": "6 mm flat", "kind": "flat", "diameter": 6, "flute_length": 20, "overall_length": 50})),
@@ -66,17 +66,34 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
         ),
         "cam.tool.kit" => Some(json!({"kit": "makera_essential", "material": "aluminium"})),
         "cam.machine.set" => Some(json!({"setup": setup, "machine": "carvera"})),
-        "cam.operation.add" => Some(
-            json!({"setup": setup, "tool": tool, "type": "pocket3d", "name": "Rough", "stepover": 3, "stepdown": 2, "stock_to_leave_radial": 0.2, "stock_to_leave_axial": 0.1}),
-        ),
+        "cam.operation.add" => {
+            let tools: Vec<(u64, bool)> = m.tools.tools.iter().map(|t| (t.id, t.is_laser())).collect();
+            let picked = crate::cam_editor::selection_geometry(app, "pocket3d").map(|x| x.0);
+            Some(kind_template("pocket3d", setup, tool, &tools, picked))
+        }
         "cam.operation.set" => Some(json!({"operation": null})),
         _ => {
             let tools: Vec<(u64, bool)> = m.tools.tools.iter().map(|t| (t.id, t.is_laser())).collect();
             id.strip_prefix("cam.operation.")
                 .filter(|k| !matches!(*k, "add" | "remove" | "list" | "kinds"))
-                .map(|k| kind_template(k, setup, tool, &tools))
+                .map(|k| {
+                    let picked = crate::cam_editor::selection_geometry(app, if k == "tap" { "drill" } else { k }).map(|x| x.0);
+                    kind_template(k, setup, tool, &tools, picked)
+                })
         }
     };
+    // A new operation opens in the operation editor (Fields and JSON), for the setup picked.
+    let new_kind = match id.strip_prefix("cam.operation.") {
+        Some("add") => Some("pocket3d"),
+        Some("tap") => Some("drill"),
+        Some("set" | "remove" | "list" | "kinds" | "move" | "duplicate") | None => None,
+        Some(k) => Some(k),
+    };
+    if let (Some(call), Some(setup), Some(kind)) = (&template, setup, new_kind)
+        && crate::cam_editor::open_new(app, setup, kind, call)
+    {
+        return true;
+    }
     if let Some(template) = template {
         crate::shortcut_box::open(app, None);
         app.sbox.text = format!("{id} {}", serde_json::to_string(&template).unwrap_or_default());
@@ -107,9 +124,23 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
     true
 }
 
+/// The setup new operations go into: the one picked in the Browser (or the picked operation's),
+/// else the first one.
+pub fn selected_setup(app: &SolveApp) -> Option<u64> {
+    use crate::browser::cam::CamPick;
+    let m = &app.session.doc.manufacture;
+    let picked = match app.tree.picked_cam {
+        Some(CamPick::Setup(s)) => Some(s),
+        Some(CamPick::Operation(o)) => m.operation(o).map(|(st, _)| st.id),
+        _ => None,
+    };
+    picked.filter(|s| m.setup(*s).is_some()).or_else(|| m.setups.first().map(|s| s.id))
+}
+
 /// A filled-in `cam.operation.<kind>` call: the kind's parameters at their defaults and the
-/// geometry the kind reads, for the command box.
-fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u64, bool)]) -> Value {
+/// geometry the kind reads (`picked`: from the viewport's selection, when something is selected),
+/// for the command box.
+fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u64, bool)], picked: Option<Value>) -> Value {
     use solidcraft_engine::cam::ops::OpKind;
     let (kind_name, extra): (&str, Value) = match kind {
         "tap" => ("drill", json!({"cycle": "tap", "pitch": 1.0})),
@@ -136,6 +167,12 @@ fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u6
         "laser_cut" => json!({"source": "sketch", "feature": 0}),
         "laser_engrave" => json!({"source": "faces", "points": [[0, 0, 0]]}),
         _ => Value::Null,
+    };
+    // Something selected: the operation works on it (and an area operation machines within it).
+    let bounded = serde_json::from_value::<OpKind>(json!({"type": kind_name})).is_ok_and(|k| k.uses_boundary());
+    let geometry = match picked {
+        Some(g) if !geometry.is_null() || bounded => g,
+        _ => geometry,
     };
     // Laser work wants the laser tool, turning a vertical cutter: pick the library's first of
     // the kind when there is one.

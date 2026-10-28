@@ -534,6 +534,10 @@ fn build_scene(
     // stands, the path made and the path to come.
     if let Some(pv) = &s.cam.preview {
         sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.stock), color: Rgb(176, 176, 182), face_colors: Vec::new(), opacity: 1.0 });
+        // Where the tool has cut into the model, red over the stock.
+        if !pv.gouges.triangles.is_empty() {
+            sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.gouges), color: Rgb(222, 52, 52), face_colors: Vec::new(), opacity: 1.0 });
+        }
         sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.tool), color: p.body_selected, face_colors: Vec::new(), opacity: 1.0 });
         // An operation whose eye is off in the browser draws no path here either.
         for (_, pl) in pv.path_done.iter().filter(|(op, _)| !s.cam.hidden.contains(op)) {

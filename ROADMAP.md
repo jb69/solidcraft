@@ -680,10 +680,13 @@ stock the earlier ones left (turned over exactly along the tool axis, two-sided 
 `flip` turns its origin to the new top corner, rest machining sees the earlier cuts, and its
 chain depends on the earlier setup's. Area operations machine within a boundary (part silhouette,
 stock, bounding box, selection or rest material, with inside / center / outside containment,
-an offset, stock clipping and fixture keep-outs) chosen automatically for each kind.
+an offset, stock clipping and fixture keep-outs) chosen automatically for each kind; Use
+Selected takes the viewport's faces or sketch profiles. The Browser groups setups under their
+machine with its tools; operations drag to reorder or into another setup; a new operation
+opens in the editor for the picked setup; editing clears an operation's toolpath; the
+simulation draws gouges red.
 
 Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image
-(grey-level) laser engraving, drag-to-reorder in the Browser, CAM
-dialogs for new operations (the ribbon's buttons open the command box filled in), arc output (G2/G3) in posts,
+(grey-level) laser engraving, arc output (G2/G3) in posts,
 multi-axis stock removal in the simulator (tilted moves are collision-checked only), a run on a
 real Makera machine.

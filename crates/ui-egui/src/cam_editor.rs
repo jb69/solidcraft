@@ -49,6 +49,8 @@ const COMMON: &[&str] = &[
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Operation(u64),
+    /// An operation not added yet, for this setup: OK and Apply add it (`cam.operation.add`).
+    NewOperation(u64),
     Tool(u64),
     Setup(u64),
 }
@@ -58,6 +60,7 @@ impl Target {
     fn command(self) -> (&'static str, &'static str, u64) {
         match self {
             Target::Operation(id) => ("cam.operation.set", "operation", id),
+            Target::NewOperation(setup) => ("cam.operation.add", "setup", setup),
             Target::Tool(id) => ("cam.tool.set", "tool", id),
             Target::Setup(id) => ("cam.setup.set", "setup", id),
         }
@@ -65,7 +68,7 @@ impl Target {
 
     fn noun(self) -> &'static str {
         match self {
-            Target::Operation(_) => "operation",
+            Target::Operation(_) | Target::NewOperation(_) => "operation",
             Target::Tool(_) => "tool",
             Target::Setup(_) => "setup",
         }
@@ -145,6 +148,28 @@ impl CamEditor {
     }
 }
 
+/// The operation geometry the viewport's selection makes for an operation of kind `ty`, and a few
+/// words saying what it is: picked faces (holes for drilling kinds) or a sketch's profiles.
+pub fn selection_geometry(app: &SolveApp, ty: &str) -> Option<(Value, String)> {
+    use solidcraft_engine::Sel;
+    let sel = &app.session.selection;
+    let points: Vec<Value> = sel.iter().filter_map(|s| if let Sel::Face { point, .. } = s { Some(json!([point.x, point.y, point.z])) } else { None }).collect();
+    if !points.is_empty() {
+        let n = points.len();
+        let holes = matches!(ty, "drill" | "bore" | "circular" | "thread");
+        let (g, what) = if holes {
+            (json!({"source": "holes", "points": points, "diameter": 0.0}), if n == 1 { "1 hole".to_string() } else { format!("{n} holes") })
+        } else {
+            (json!({"source": "faces", "points": points}), if n == 1 { "1 face".to_string() } else { format!("{n} faces") })
+        };
+        return Some((g, what));
+    }
+    sel.iter().find_map(|s| if let Sel::Profile { sketch, .. } = s { Some(*sketch) } else { None }).map(|feature| {
+        let name = app.session.model.state().sketch(feature).map(|k| k.name.clone()).unwrap_or_else(|| format!("sketch {feature}"));
+        (json!({"source": "sketch", "feature": feature}), format!("the profiles of {name}"))
+    })
+}
+
 /// The operation or tool as saved, without its `id`.
 fn saved(app: &SolveApp, target: Target) -> Option<Value> {
     let m = &app.session.doc.manufacture;
@@ -152,6 +177,7 @@ fn saved(app: &SolveApp, target: Target) -> Option<Value> {
         Target::Operation(op) => serde_json::to_value(m.operation(op)?.1).ok()?,
         Target::Tool(tool) => serde_json::to_value(m.tools.get(tool)?).ok()?,
         Target::Setup(setup) => serde_json::to_value(m.setup(setup)?).ok()?,
+        Target::NewOperation(_) => return None,
     };
     if let Value::Object(m) = &mut v {
         m.remove("id");
@@ -172,6 +198,26 @@ pub fn open(app: &mut SolveApp, target: Target) {
     if let Some(v) = saved(app, target) {
         app.cam_editor = Some(CamEditor::new(target, v));
     }
+}
+
+/// Opens the editor on a new operation for `setup`, from a `cam.operation.<kind>` call (its
+/// kind's parameters, tool, name and geometry): the whole operation is in the form before it is
+/// added. False when the call does not make an operation.
+pub fn open_new(app: &mut SolveApp, setup: u64, kind: &str, call: &Value) -> bool {
+    let mut v = call.clone();
+    let Value::Object(o) = &mut v else { return false };
+    o.remove("setup");
+    o.entry("type").or_insert_with(|| json!(kind));
+    o.insert("id".into(), json!(0));
+    // Through the saved form, so every field the operation has is in the draft.
+    let Some(mut full) = serde_json::from_value::<cam::setup::Operation>(v).ok().and_then(|op| serde_json::to_value(op).ok()) else {
+        return false;
+    };
+    if let Value::Object(m) = &mut full {
+        m.remove("id");
+    }
+    app.cam_editor = Some(CamEditor::new(Target::NewOperation(setup), full));
+    true
 }
 
 /// Runs the set command with the draft; true when it was taken.
@@ -204,6 +250,10 @@ pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
     }
     match app.run(command, params) {
         Ok(v) => {
+            // Added: from now on the editor edits the operation it made.
+            if let (Target::NewOperation(_), Some(id)) = (ed.target, v["id"].as_u64()) {
+                ed.target = Target::Operation(id);
+            }
             let warnings: Vec<String> =
                 v["notice"]["issues"].as_array().into_iter().flatten().filter_map(|i| i["message"].as_str().map(str::to_string)).collect();
             if let Some(now) = saved(app, ed.target) {
@@ -224,7 +274,13 @@ pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut ed) = app.cam_editor.take() else { return };
     // Deleted (or undone away): nothing left to edit.
-    let Some(now) = saved(app, ed.target) else { return };
+    let now = match ed.target {
+        Target::NewOperation(_) => ed.base.clone(),
+        target => match saved(app, target) {
+            Some(v) => v,
+            None => return,
+        },
+    };
     let mut changed_elsewhere = false;
     if now != ed.base {
         if ed.edited() {
@@ -238,6 +294,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let name = match (ed.base["name"].as_str(), ed.target) {
         (Some(n), Target::Tool(_)) => format!("T{} {n}", ed.base["number"].as_u64().unwrap_or(0)),
         (Some(n), Target::Operation(_)) => n.to_string(),
+        (Some(n), Target::NewOperation(_)) => format!("New operation: {n}"),
         (Some(n), Target::Setup(_)) => format!("Setup: {n}"),
         (None, _) => kind_label(ed.target.noun()),
     };
@@ -255,6 +312,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         _ => None,
     };
     let tools: Vec<(u64, String)> = app.session.doc.manufacture.tools.tools.iter().map(|tl| (tl.id, format!("T{} {}", tl.number, tl.name))).collect();
+    let picked = match ed.target {
+        Target::Operation(_) | Target::NewOperation(_) => selection_geometry(app, ed.draft["type"].as_str().unwrap_or("")),
+        _ => None,
+    };
     let mut open = true;
     let (mut ok, mut apply_now, mut cancel, mut reload) = (false, false, false, false);
     // Held by its top edge: opening and folding sections grows and shrinks it downwards
@@ -294,7 +355,17 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     egui::ScrollArea::vertical().max_height(480.0).auto_shrink([false, true]).show(ui, |ui| {
                         let CamEditor { draft, inputs, target, flip, .. } = &mut ed;
                         match target {
-                            Target::Operation(_) => fields(ui, draft, inputs, &tools, used.as_deref()),
+                            Target::Operation(_) => fields(ui, draft, inputs, &tools, used.as_deref(), picked.as_ref()),
+                            Target::NewOperation(setup) => {
+                                // Which setup it goes into (the one picked in the Browser to start with).
+                                let mut k = setups.iter().position(|x| x.0 == *setup).unwrap_or(0);
+                                let names: Vec<&str> = setups.iter().map(|x| x.1.as_str()).collect();
+                                crate::ui_kit::row(ui, "Setup", |ui| crate::ui_kit::dropdown(ui, "cam_ed_setup", &mut k, &names));
+                                if let Some(x) = setups.get(k) {
+                                    *setup = x.0;
+                                }
+                                fields(ui, draft, inputs, &tools, None, picked.as_ref());
+                            }
                             Target::Tool(_) => tool_fields(ui, draft, inputs, uses),
                             Target::Setup(id) => {
                                 if let Some(axis) = setup_fields(ui, draft, inputs, *id, &setups) {
@@ -383,7 +454,8 @@ fn switch(ed: &mut CamEditor, to: Tab) {
 }
 
 /// The Fields tab.
-fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u64, String)], used: Option<&str>) {
+/// `picked`: the geometry the viewport's selection would give, for Use Selected.
+fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u64, String)], used: Option<&str>, picked: Option<&(Value, String)>) {
     let Value::Object(op) = draft else { return };
     // Name, type, tool, enabled.
     if let Some(Value::String(name)) = op.get_mut("name") {
@@ -410,8 +482,39 @@ fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u
     if let Some(Value::Bool(on)) = op.get_mut("enabled") {
         crate::ui_kit::checkbox(ui, "Enabled", on);
     }
-    // The kind's own parameters.
     let ty = op.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    // What the operation works on, and a way to take it from the viewport's selection, at the
+    // top where it is seen first.
+    let bounded = serde_json::from_value::<cam::ops::OpKind>(json!({"type": ty})).is_ok_and(|k| k.uses_boundary());
+    let picks = op.get("geometry").and_then(geometry_picks);
+    let wants_selection = op.get("boundary").and_then(|b| b.get("source")).and_then(Value::as_str) == Some("selection");
+    let t = Tokens::get();
+    match &picks {
+        Some(w) => {
+            ui.label(RichText::new(format!("Selection: {w}")).color(t.text_dim));
+        }
+        None if wants_selection => {
+            ui.label(RichText::new("Nothing is picked: select faces or a sketch in the viewport, then Use Selected").color(t.warning));
+        }
+        None => {}
+    }
+    if let Some((g, what)) = picked
+        && crate::ui_kit::button(ui, &format!("Use Selected ({what})"), crate::ui_kit::Button::Normal)
+            .on_hover_text("Work on what is selected in the viewport: sets the geometry (and an area operation's boundary) to the selection")
+            .clicked()
+    {
+        op.insert("geometry".into(), g.clone());
+        inputs.text.retain(|k, _| !k.starts_with("geometry."));
+        inputs.invalid.retain(|k| !k.starts_with("geometry."));
+        if bounded {
+            let b = op.entry("boundary").or_insert_with(|| serde_json::to_value(cam::boundary::Boundary::default()).unwrap_or(Value::Null));
+            if let Value::Object(b) = b {
+                b.insert("source".into(), json!("selection"));
+            }
+            inputs.text.remove("boundary.source");
+        }
+    }
+    // The kind's own parameters.
     let choices = cam::ops::OpKind::choices(&ty);
     let mut keys: Vec<String> = cam::ops::OpKind::defaults(&ty).and_then(|d| d.as_object().map(|o| o.keys().cloned().collect())).unwrap_or_default();
     keys.extend(op.keys().filter(|k| !COMMON.contains(&k.as_str()) && !keys.contains(k)).cloned().collect::<Vec<_>>());
@@ -455,7 +558,6 @@ fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u
         }
     });
     // Where the operation may machine (area operations).
-    let bounded = serde_json::from_value::<cam::ops::OpKind>(json!({"type": ty})).is_ok_and(|k| k.uses_boundary());
     if bounded {
         if !op.contains_key("boundary") {
             op.insert("boundary".into(), serde_json::to_value(cam::boundary::Boundary::default()).unwrap_or(Value::Null));
@@ -993,6 +1095,24 @@ fn tagged_with(ui: &mut egui::Ui, inputs: &mut Inputs, path: &str, v: &mut Value
             let list = fields.iter().find(|(k, _)| *k == key).map(|x| x.1.as_slice());
             value(ui, inputs, &p, &l, x, list);
         }
+    }
+}
+
+/// What an operation's geometry picks, in a few words (`None`: nothing, it is the stock or the
+/// model's silhouette).
+fn geometry_picks(g: &Value) -> Option<String> {
+    let count = |k: &str| g.get(k).and_then(Value::as_array).map_or(0, Vec::len);
+    let n = match g.get("source").and_then(Value::as_str)? {
+        "faces" => (count("points"), "face"),
+        "holes" => (count("points"), "hole"),
+        "loops" => (count("loops"), "loop"),
+        "sketch" => return Some(format!("sketch {}", g["feature"].as_u64().unwrap_or(0))),
+        _ => return None,
+    };
+    match n.0 {
+        0 => None,
+        1 => Some(format!("1 {}", n.1)),
+        c => Some(format!("{c} {}s", n.1)),
     }
 }
 

@@ -309,6 +309,71 @@ pub fn model_map(model: &DropMesh, grid: &HeightMap, floor: f64) -> HeightMap {
     out
 }
 
+/// The stock map's columns cut below the model's surface (gouges): each column and how deep
+/// (mm). On a near-vertical wall the model's height is ambiguous within a cell, so a cell is a
+/// gouge only when its neighbours agree it lies on the surface.
+pub fn gouges(stock: &StockMap, model: &HeightMap, tol: f64) -> Vec<(usize, usize, f64)> {
+    let nx = stock.map.nx;
+    let mut out = Vec::new();
+    for (k, (s, mz)) in stock.map.z.iter().zip(&model.z).enumerate() {
+        if !s.is_finite() {
+            continue;
+        }
+        let d = s - mz;
+        let (i, j) = (k % nx, k / nx);
+        if d < -tol && *mz > stock.floor_at(i, j) + tol {
+            let wall = [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)]
+                .iter()
+                .filter_map(|(a, b)| model.get(*a, *b))
+                .any(|n| (mz - n) > stock.map.cell * 2.0);
+            if !wall {
+                out.push((i, j, -d));
+            }
+        }
+    }
+    out
+}
+
+/// The gouges as a mesh to draw over the stock: for each gouged column, its cell on the cut
+/// surface (lifted a little to show above it) and a wall up to where the model's surface is.
+pub fn gouge_mesh(stock: &StockMap, model: &HeightMap, tol: f64) -> Mesh {
+    let mut mesh = Mesh::default();
+    let h = stock.map.cell * 0.5;
+    // Far enough above the cut surface that the stock drawn under it never hides it.
+    let lift = (stock.map.cell * 0.5).max(0.05);
+    // Input is hostile: a wildly wrong program draws at most this many columns.
+    for (i, j, depth) in gouges(stock, model, tol).into_iter().take(400_000) {
+        let p = stock.map.point(i, j);
+        let Some(top) = stock.map.get(i, j) else { continue };
+        let z = top + lift;
+        let base = mesh.positions.len() as u32;
+        for (dx, dy) in [(-h, -h), (h, -h), (h, h), (-h, h)] {
+            mesh.positions.push(Vec3::new(p.x + dx, p.y + dy, z));
+            mesh.normals.push(Vec3::new(0.0, 0.0, 1.0));
+        }
+        mesh.triangles.push([base, base + 1, base + 2]);
+        mesh.triangles.push([base, base + 2, base + 3]);
+        mesh.tri_face.extend([0, 0]);
+        // A post up to the model's surface, so a deep gouge shows from the side as well.
+        if depth > stock.map.cell {
+            let b = mesh.positions.len() as u32;
+            let w = h * 0.4;
+            for (q, n) in [(Vec3::new(p.x - w, p.y, z), Vec3::new(0.0, -1.0, 0.0)), (Vec3::new(p.x + w, p.y, z), Vec3::new(0.0, -1.0, 0.0))] {
+                mesh.positions.push(q);
+                mesh.normals.push(n);
+            }
+            mesh.positions.push(Vec3::new(p.x + w, p.y, top + depth));
+            mesh.normals.push(Vec3::new(0.0, -1.0, 0.0));
+            mesh.positions.push(Vec3::new(p.x - w, p.y, top + depth));
+            mesh.normals.push(Vec3::new(0.0, -1.0, 0.0));
+            mesh.triangles.push([b, b + 1, b + 2]);
+            mesh.triangles.push([b, b + 2, b + 3]);
+            mesh.tri_face.extend([1, 1]);
+        }
+    }
+    mesh
+}
+
 /// Simulates a toolpath against the stock map. Moves with the tool axis along z are swept;
 /// tilted moves are checked for collisions of the shank and holder against the model and
 /// fixtures. `model` is the model's Z-map on the stock grid (for gouges), when available.
@@ -377,31 +442,19 @@ pub fn simulate(
         let mut rest = 0.0;
         let mut rest_max = 0.0f64;
         let mut gouge_max = 0.0f64;
-        let nx = stock.map.nx;
-        for (k, (s, mz)) in stock.map.z.iter().zip(&model.z).enumerate() {
-            if !s.is_finite() {
-                continue;
-            }
+        for (s, mz) in stock.map.z.iter().zip(&model.z) {
             let d = s - mz;
-            let (i, j) = (k % nx, k / nx);
-            if d > tol {
+            if s.is_finite() && d > tol {
                 rest += d;
                 rest_max = rest_max.max(d);
-            } else if d < -tol && *mz > stock.floor_at(i, j) + tol {
-                // On a near-vertical wall the model's height is ambiguous within a cell: the
-                // cell is a gouge only when its neighbours agree it lies on the surface.
-                let wall = [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)]
-                    .iter()
-                    .filter_map(|(a, b)| model.get(*a, *b))
-                    .any(|n| (mz - n) > stock.map.cell * 2.0);
-                if !wall {
-                    rep.gouge_cells += 1;
-                    if -d > gouge_max {
-                        gouge_max = -d;
-                        let p = stock.map.point(i, j);
-                        rep.gouge_at = Some(Vec3::new(p.x, p.y, *mz));
-                    }
-                }
+            }
+        }
+        for (i, j, depth) in gouges(stock, model, tol) {
+            rep.gouge_cells += 1;
+            if depth > gouge_max {
+                gouge_max = depth;
+                let p = stock.map.point(i, j);
+                rep.gouge_at = Some(Vec3::new(p.x, p.y, model.get(i, j).unwrap_or(0.0)));
             }
         }
         rep.rest_volume_mm3 = rest * stock.map.cell * stock.map.cell;

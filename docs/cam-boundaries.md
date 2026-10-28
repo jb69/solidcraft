@@ -73,8 +73,10 @@ Every area operation has a `boundary`:
 | surface finishing (`parallel`, `scallop`, `spiral`, `radial`, `pencil`, `horizontal`, `morphed_spiral`, `project`, `morph`, `multi_axis_contour`) | part | center | no passes run over the stock around the part |
 | a setup with no bodies | stock | outside | there is no part to follow |
 
-A source that cannot be used falls back and says so: `selection` with nothing selected, `part`
-without bodies, `rest` without rest machining.
+A source that cannot be used falls back and says so: `part` without bodies, `rest` without
+rest machining. `selection` with nothing picked is refused: machining somewhere else instead
+would surprise. The operation editor's **Use Selected** fills the geometry from the viewport's
+selection.
 
 The area is then clipped to the stock (grown by the tool radius) and, when the setup has
 fixtures, the fixtures' outlines (grown by the tool radius and the clearance) are taken out.

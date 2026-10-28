@@ -788,6 +788,8 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
     if let Some(p) = &s.cam.preview {
         let stock = c4(tk.body.gamma_multiply(0.85));
         mesh_tris(&mut sc, &p.stock, stock, true, |_| true);
+        // Where the tool has cut into the model.
+        mesh_tris(&mut sc, &p.gouges, c4(tk.error), true, |_| true);
         let tool = c4(tk.accent);
         mesh_tris(&mut sc, &p.tool, tool, true, |_| true);
         // An operation whose eye is off in the browser draws no path here either.

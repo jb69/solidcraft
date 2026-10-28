@@ -140,10 +140,6 @@ impl Plan {
             Source::Auto if has_selection => Source::Selection,
             Source::Auto if has_model => Source::Part,
             Source::Auto => Source::Stock,
-            Source::Selection if !has_selection => {
-                notes.push("nothing is selected, so the part's outline stands in");
-                if has_model { Source::Part } else { Source::Stock }
-            }
             Source::Part | Source::BoundingBox if !has_model => {
                 notes.push("the setup has no bodies, so the stock's outline stands in");
                 Source::Stock
@@ -294,6 +290,12 @@ pub fn region(ctx: &Context) -> Result<(Vec<Poly>, Report)> {
             _ => ctx.stock_outline(),
         },
     };
+    if base.is_empty() && plan.source == Source::Selection {
+        // Machining somewhere else instead would surprise: nothing is cut until something is picked.
+        return Err(CamError::Geometry(
+            "the boundary is the selection, but the operation's geometry picks nothing: pick faces or a sketch for its geometry (Use Selected in the editor)".into(),
+        ));
+    }
     if base.is_empty() {
         return Err(CamError::Geometry(format!("the {} boundary is empty", name(plan.source))));
     }

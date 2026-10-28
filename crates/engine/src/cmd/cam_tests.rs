@@ -687,10 +687,18 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     let g = run(&mut s, "cam.generate", json!({"all": true}));
     assert_eq!(g["regenerated"], 3, "{g}");
     assert_eq!(stale(&mut s), vec![false, false, false]);
-    // Editing the second operation leaves the first as it was and makes it and the third stale;
-    // posting now says so.
+    // Editing the second operation leaves the first as it was, clears its own toolpath (it is
+    // not generated any more, and nothing of it is drawn) and makes the third stale; posting now
+    // says so. A new name alone keeps the toolpath.
+    run(&mut s, "cam.operation.set", json!({"operation": rough, "name": "Rough"}));
+    assert_eq!(stale(&mut s), vec![false, false, false]);
     run(&mut s, "cam.operation.set", json!({"operation": rough, "stepdown": 2}));
     assert_eq!(stale(&mut s), vec![false, true, true]);
+    let n = run(&mut s, "cam.notices", json!({}));
+    assert_eq!(n["notices"][1]["status"], "not generated", "{n}");
+    let list = run(&mut s, "cam.operation.list", json!({}));
+    assert_eq!(list["operations"][1]["generated"], false, "{list}");
+    assert!(!super::cam::shown_toolpaths(&s).iter().any(|x| x.0 == rough), "its toolpath is no longer drawn");
     let post = run(&mut s, "cam.post", json!({}));
     assert!(post["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "stale"), "{}", post["notice"]);
     let g = run(&mut s, "cam.generate", json!({}));
@@ -704,7 +712,7 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     run(&mut s, "cam.operation.set", json!({"operation": face, "enabled": false}));
     let n = run(&mut s, "cam.notices", json!({}));
     let rows = n["notices"].as_array().unwrap();
-    assert!(rows[1]["stale"] == true && rows[2]["stale"] == true, "{n}");
+    assert!(rows[0]["status"] == "disabled" && rows[1]["stale"] == true && rows[2]["stale"] == true, "{n}");
     run(&mut s, "cam.operation.set", json!({"operation": face, "enabled": true}));
     run(&mut s, "cam.generate", json!({}));
     // Reordering: the moved operation and those after its old and new places go stale.
@@ -713,6 +721,18 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     assert_eq!(stale(&mut s), vec![false, true, true]);
     let m = run(&mut s, "cam.operation.move", json!({"operation": rest, "down": true}));
     assert_eq!(m["order"], json!([face, rough, rest]));
+    // Into another setup (as a drop in the Browser): at its end, or before one of its operations.
+    let other = run(&mut s, "cam.setup.create", json!({"name": "Other"}))["id"].as_u64().unwrap();
+    let m = run(&mut s, "cam.operation.move", json!({"operation": rest, "setup": other}));
+    assert_eq!((m["setup"].as_u64(), m["order"].clone()), (Some(other), json!([rest])), "{m}");
+    let m = run(&mut s, "cam.operation.move", json!({"operation": rough, "before": rest}));
+    assert_eq!(m["order"], json!([rough, rest]), "{m}");
+    let m = run(&mut s, "cam.operation.move", json!({"operation": rough, "setup": setup, "to": 1}));
+    assert_eq!(m["order"], json!([face, rough]), "{m}");
+    let m = run(&mut s, "cam.operation.move", json!({"operation": rest, "after": rough}));
+    assert_eq!(m["order"], json!([face, rough, rest]), "{m}");
+    assert!(fails(&mut s, "cam.operation.move", json!({"operation": rest, "setup": 99_999})).contains("no setup"));
+    run(&mut s, "cam.setup.remove", json!({"setup": other}));
     // The model changing makes every operation stale.
     run(&mut s, "cam.generate", json!({}));
     run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": [0, 0, 10], "operation": "join", "targets": ["Block"]}));

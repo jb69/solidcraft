@@ -67,8 +67,11 @@ material), a tool containment (inside, center, outside), an offset, clipping to 
 keep-out areas around fixtures. `auto` chooses for the operation: roughing clears a ring a tool
 wide around the part rather than the whole stock, wall finishing reaches the walls from
 outside, surface finishing keeps to the part, and a selection bounds the operation to what was
-picked. Each notice says which boundary was used and why. See
-[cam-boundaries.md](cam-boundaries.md).
+picked. Each notice says which boundary was used and why. A boundary set to the selection
+with nothing picked is refused rather than machining somewhere else. In the operation editor,
+**Use Selected** takes the faces (holes for drilling kinds) or sketch profiles selected in the
+viewport as the operation's geometry and sets the boundary to them; an operation started from
+the ribbon with something selected starts with it. See [cam-boundaries.md](cam-boundaries.md).
 
 ## Setups in sequence: the top and the bottom
 
@@ -123,7 +126,9 @@ Simulation** panel plays it back with a timeline, speed (1× real time to 1024×
 steps. `cam.simulate.hide` ends it. The simulator keeps one clock (the time each move ends,
 the hop from one operation to the next included), so a moment asked for and the moment shown
 agree; Play keeps its own time and takes the simulator's position only after a single step. An
-operation whose eye is off in the browser draws no path in the simulation either.
+operation whose eye is off in the browser draws no path in the simulation either. Wherever the
+stock has been cut below the model's surface (a gouge) the simulation draws it in red on the
+stock, with a post up to where the surface should be, and its notice gives `gouge_cells`.
 
 ## The Manufacture workspace
 
@@ -194,9 +199,10 @@ bosses on a 3-axis machine is `thread`.
 A setup's operations are a chain of parametric steps. Each has a signature that hashes its own
 definition, its tool, the setup (bodies, fixtures, WCS, stock, machine), the model's geometry,
 the signature of the operation before it and the generation id of that operation's toolpath
-(a fresh id each time a toolpath is generated). So editing, suppressing or moving an
-operation, changing its tool or the setup, or changing the model makes it and every operation
-after it stale; regenerating an operation on its own (`cam.generate {operation}`, the row's
+(a fresh id each time a toolpath is generated). Editing an operation (anything but its name)
+or suppressing it clears its toolpath: nothing of it is drawn and it shows as not generated
+until it is generated again. Moving an operation, changing its tool or the setup, or changing
+the model makes it and every operation after it stale; regenerating an operation on its own (`cam.generate {operation}`, the row's
 Regenerate) makes every operation below it stale, since their rest machining read its old
 toolpath; and the ones before it stay as they are. Regenerate Chain (`cam.generate {operation,
 chain: true}`) brings the whole chain current through it: the stale operations above it (its
@@ -204,11 +210,19 @@ dependencies) regenerate first, then it, then every operation below it. `cam.gen
 operations, in order, sweeping the stock through the ones it keeps so rest machining sees
 everything removed before it (`all: true` regenerates all; the result says how many were
 regenerated and reused). `cam.operation.move` reorders (to an index, before or after another
-operation, up or down) and `cam.operation.duplicate` copies an operation after itself.
+operation, up or down) or moves an operation to another setup (`setup`, at its end unless
+`to`, `before` or `after` say where), and `cam.operation.duplicate` copies an operation after
+itself.
 
-The Browser has a Manufacture folder (when the design has tools or setups): each setup with its
-operations numbered in order, each row coloured by its state (stale and warnings in amber,
-errors in red, suppressed dimmed) and the Tools. In the Manufacture workspace the viewport
+The Browser has a Manufacture folder (when the design has tools or setups), grouped by machine:
+each machine holds its setups, each setup its operations numbered in order, and the machine's
+Tools (the whole library when there is one machine; with several, the tools each one's
+operations use, unused ones under the first). Each operation row is coloured by its state
+(stale and warnings in amber, errors in red, suppressed dimmed). Dragging an operation onto
+another one puts it before that one, in the same setup or another; dropping it on a setup puts
+it at the setup's end. A new operation from the ribbon goes into the setup picked in the
+Browser (or the picked operation's setup), and opens in the operation editor before it is
+added: the same two tabs, with a Setup choice; OK adds it (`cam.operation.add`). In the Manufacture workspace the viewport
 draws every generated, enabled operation's toolpath on the workpiece (feed moves in the accent
 colour, rapids faint); an operation's eye shows or hides its toolpath and a setup's eye all of
 its operations' (`cam.toolpath.visibility {operation | operations | setup | all, visible}`,

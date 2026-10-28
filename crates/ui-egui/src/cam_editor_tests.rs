@@ -286,3 +286,74 @@ fn area_operations_show_their_boundary() {
     let b = h.app.session.doc.manufacture.operation(id).unwrap().1.boundary;
     assert_eq!((b.source, b.containment), (cam::boundary::Source::BoundingBox, cam::boundary::Containment::Center));
 }
+
+#[test]
+fn a_selection_boundary_takes_what_is_selected_in_the_viewport() {
+    let mut h = Harness::new();
+    pocket(&mut h);
+    let tool = h.app.session.doc.manufacture.tools.tools[0].id;
+    let id = h.app.run("cam.operation.pocket3d", json!({"tool": tool, "boundary": "selection"})).unwrap()["id"].as_u64().unwrap();
+    crate::browser::cam::edit(&mut h.app, id);
+    h.frames(20);
+    // Nothing picked yet: the editor says so.
+    assert!(h.widget("Nothing is picked: select faces or a sketch in the viewport, then Use Selected").is_some());
+    // The top face picked in the viewport: Use Selected makes it the geometry and the boundary.
+    h.app.run("select.set", json!({"items": [{"type": "face", "body": "Block", "index": 0, "point": [20.0, 15.0, 10.0]}]})).unwrap();
+    h.frames(2);
+    h.step(&json!({"widget": "Use Selected (1 face)"})).unwrap();
+    h.frames(2);
+    let ed = h.app.cam_editor.as_mut().unwrap();
+    assert_eq!(ed.draft["geometry"], json!({"source": "faces", "points": [[20.0, 15.0, 10.0]]}));
+    assert_eq!(ed.draft["boundary"]["source"], "selection");
+    h.step(&json!({"widget": "Apply"})).unwrap();
+    let saved = op(&h, id);
+    assert_eq!(saved["geometry"]["source"], "faces");
+    assert!(h.widget("Selection: 1 face").is_some());
+    // A new operation opens in the same editor, its geometry from the selection, for the setup
+    // picked in the Browser; OK adds it there.
+    let second = h.app.run("cam.setup.create", json!({"name": "Second"})).unwrap()["id"].as_u64().unwrap();
+    h.app.tree.picked_cam = Some(crate::browser::cam::CamPick::Setup(second));
+    h.app.start("cam.operation.scallop");
+    h.frames(20);
+    let ed = h.app.cam_editor.as_ref().expect("the editor opens on the new operation");
+    assert_eq!(ed.target, Target::NewOperation(second));
+    assert_eq!(ed.draft["type"], "scallop");
+    assert_eq!(ed.draft["geometry"], json!({"source": "faces", "points": [[20.0, 15.0, 10.0]]}));
+    for w in ["Fields", "JSON", "Setup", "Boundary", "Selection: 1 face"] {
+        assert!(h.widget(w).is_some(), "{w} is drawn");
+    }
+    h.step(&json!({"widget": "OK"})).unwrap();
+    assert!(h.app.cam_editor.is_none(), "OK adds it and closes");
+    let st = h.app.session.doc.manufacture.setup(second).unwrap();
+    assert_eq!(st.operations.len(), 1, "added to the picked setup");
+    assert_eq!(st.operations[0].kind.type_name(), "scallop");
+    // Drilling kinds take picked faces as holes.
+    h.app.start("cam.operation.drill");
+    assert_eq!(h.app.cam_editor.as_ref().unwrap().draft["geometry"]["source"], "holes");
+}
+
+#[test]
+fn operations_drag_to_reorder_and_into_another_setup() {
+    let mut h = Harness::new();
+    let first = pocket(&mut h);
+    let tool = h.app.session.doc.manufacture.tools.tools[0].id;
+    let second = h.app.run("cam.operation.face", json!({"name": "Face", "tool": tool, "stepover": 4})).unwrap()["id"].as_u64().unwrap();
+    let other = h.app.run("cam.setup.create", json!({"name": "Bottom"})).unwrap()["id"].as_u64().unwrap();
+    h.app.ui.tab = crate::manufacture_workspace::TAB.into();
+    h.settle();
+    let ids = |h: &Harness, k: usize| -> Vec<u64> { h.app.session.doc.manufacture.setups[k].operations.iter().map(|o| o.id).collect() };
+    assert_eq!(ids(&h, 0), vec![first, second]);
+    // Onto the first: before it.
+    h.step(&json!({"drag": [{"handle": "row:2. Face"}, {"handle": "row:1. Pocket"}]})).unwrap();
+    h.settle();
+    assert_eq!(ids(&h, 0), vec![second, first], "reordered by dragging");
+    // Onto the other setup: at its end.
+    h.step(&json!({"drag": [{"handle": "row:2. Pocket"}, {"handle": "row:Bottom"}]})).unwrap();
+    h.settle();
+    assert_eq!((ids(&h, 0), ids(&h, 1)), (vec![second], vec![first]), "moved into the other setup");
+    assert_eq!(h.app.session.doc.manufacture.setups[1].id, other);
+    // The tree: the machine holds its setups and the tools.
+    for w in ["row:Bottom", "row:Tools"] {
+        assert!(crate::scenario::handle_at(w).is_some() || h.widget(&w[4..]).is_some(), "{w}");
+    }
+}

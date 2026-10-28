@@ -114,6 +114,8 @@ pub struct SimulatorState {
     /// Operation ids and their toolpath pointers, to notice regenerated toolpaths.
     pub stamp: Vec<(u64, usize)>,
     pub sim: Box<cam::simulate::Simulator>,
+    /// The model's Z-map on the simulator's grid, for showing gouges (`None`: no bodies).
+    pub model_map: Option<cam::heightmap::HeightMap>,
 }
 
 /// The simulation at one moment, in design coordinates.
@@ -121,6 +123,9 @@ pub struct CamPreview {
     pub setup: u64,
     pub bodies: Vec<String>,
     pub stock: Arc<Mesh>,
+    /// Where the stock is cut below the model (gouges), drawn red over the stock.
+    pub gouges: Arc<Mesh>,
+    pub gouge_cells: usize,
     pub tool: Arc<Mesh>,
     /// Cutting moves already made and still to come, as polylines, each with its operation (the
     /// browser's eye hides an operation's lines here too).
@@ -279,7 +284,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .noundo(),
     CommandSpec::new("cam.operation.move", "Move Operation", operation_move)
         .icon("cam")
-        .params("operation: id; to?: index in its setup | before?: operation id | after?: operation id | up?: true | down?: true: reorders the setup's operations. Operations are parametric steps: each depends on the ones before it (rest machining sees their stock), so the moved one and those after it go stale"),
+        .params("operation: id; setup?: id (moves it to another setup, at its end unless to/before/after say where); to?: index | before?: operation id | after?: operation id | up?: true | down?: true: reorders the operations or moves one between setups. Operations are parametric steps: each depends on the ones before it (rest machining sees their stock), so the moved one and those after it go stale"),
     CommandSpec::new("cam.operation.duplicate", "Duplicate Operation", operation_duplicate).icon("cam").params("operation: id: a copy right after it, named \"<name> (copy)\""),
     CommandSpec::new("cam.operation.list", "Operations", operation_list).icon("cam").params("setup?: id: the operations with their status").noundo(),
     CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "INSPECT").icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
@@ -1063,8 +1068,12 @@ fn operation_set(s: &mut Session, p: &Value) -> Result<Value> {
     let base = serde_json::to_value(&current).map_err(|e| EngineError::Other(e.to_string()))?;
     let (mut op, issues) = operation_from(p, cmd, base, &st, &s.doc.manufacture.tools)?;
     op.id = id;
-    // The old toolpath stays until the next generate: its signature no longer matches, so it
-    // (and every operation after it) shows as stale rather than missing.
+    // A changed operation's toolpath no longer says what it would cut: it goes (the operation
+    // shows as not generated), and the ones after it show as stale. A new name keeps it.
+    let renamed_only = Operation { name: current.name.clone(), ..op.clone() } == current;
+    if !renamed_only {
+        s.cam.operations.remove(&id);
+    }
     let out = operation_json(s, &st, &op, &issues);
     if let Some(slot) = s.doc_mut().manufacture.operation_mut(id) {
         *slot = op;
@@ -1256,7 +1265,9 @@ fn chain_signature(s: &Session, prev: u64, op: &Operation, prev_generation: u64)
     let mut h = std::collections::hash_map::DefaultHasher::new();
     prev.hash(&mut h);
     prev_generation.hash(&mut h);
-    serde_json::to_string(op).unwrap_or_default().hash(&mut h);
+    // Its name is not what it cuts: a rename keeps it (and the ones after it) current.
+    let unnamed = Operation { name: String::new(), ..op.clone() };
+    serde_json::to_string(&unnamed).unwrap_or_default().hash(&mut h);
     serde_json::to_string(&s.doc.manufacture.tools.get(op.tool)).unwrap_or_default().hash(&mut h);
     h.finish()
 }
@@ -1270,41 +1281,55 @@ fn is_stale(s: &Session, st: &Setup, op: u64, g: &Generated) -> bool {
 fn operation_move(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.operation.move";
     let id = id_param(p, "operation", cmd)?;
-    let (setup_id, from, n) = s
-        .doc
-        .manufacture
+    let m = &s.doc.manufacture;
+    let (from_setup, from) = m
         .setups
         .iter()
-        .find_map(|st| st.operations.iter().position(|o| o.id == id).map(|i| (st.id, i, st.operations.len())))
+        .find_map(|st| st.operations.iter().position(|o| o.id == id).map(|i| (st.id, i)))
         .ok_or_else(|| bad(cmd, format!("no operation {id}")))?;
-    let st_ops: Vec<u64> = s.doc.manufacture.setup(setup_id).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
-    let pos_of = |other: u64| st_ops.iter().position(|o| *o == other).ok_or_else(|| bad(cmd, format!("operation {other} is not in the same setup")));
-    let to = if let Some(i) = p.get("to").and_then(Value::as_u64) {
-        (i as usize).min(n - 1)
-    } else if let Some(b) = p.get("before").and_then(Value::as_u64) {
-        let t = pos_of(b)?;
-        if t > from { t - 1 } else { t }
-    } else if let Some(a) = p.get("after").and_then(Value::as_u64) {
-        let t = pos_of(a)?;
-        if t >= from { t } else { t + 1 }
-    } else if bool_(p, "up").unwrap_or(false) {
-        from.saturating_sub(1)
-    } else if bool_(p, "down").unwrap_or(false) {
-        (from + 1).min(n - 1)
-    } else {
-        return Err(bad(cmd, "say where: to (index), before or after (an operation id), up or down"));
+    let setup_of = |other: u64| m.operation(other).map(|(st, _)| st.id).ok_or_else(|| bad(cmd, format!("no operation {other}")));
+    // Where it goes: the setup named, or the one of the operation it goes before or after.
+    let to_setup = match (p.get("setup"), p.get("before").and_then(Value::as_u64), p.get("after").and_then(Value::as_u64)) {
+        (Some(v), ..) => {
+            let sid = v.as_u64().ok_or_else(|| bad(cmd, "setup must be a setup id"))?;
+            m.setup(sid).map(|st| st.id).ok_or_else(|| bad(cmd, format!("no setup {sid}")))?
+        }
+        (None, Some(b), _) => setup_of(b)?,
+        (None, None, Some(a)) => setup_of(a)?,
+        _ => from_setup,
     };
-    if to != from
-        && let Some(st) = s.doc_mut().manufacture.setup_mut(setup_id)
-    {
-        let op = st.operations.remove(from);
-        st.operations.insert(to, op);
+    // The destination's operations without the moved one: the index is into these.
+    let others: Vec<u64> = m.setup(to_setup).map(|st| st.operations.iter().map(|o| o.id).filter(|o| *o != id).collect()).unwrap_or_default();
+    let n = others.len();
+    let pos_of = |other: u64| others.iter().position(|o| *o == other).ok_or_else(|| bad(cmd, format!("operation {other} cannot be a place to move {id} to")));
+    let to = if let Some(i) = p.get("to").and_then(Value::as_u64) {
+        (i as usize).min(n)
+    } else if let Some(b) = p.get("before").and_then(Value::as_u64) {
+        pos_of(b)?
+    } else if let Some(a) = p.get("after").and_then(Value::as_u64) {
+        pos_of(a)? + 1
+    } else if bool_(p, "up").unwrap_or(false) && to_setup == from_setup {
+        from.saturating_sub(1)
+    } else if bool_(p, "down").unwrap_or(false) && to_setup == from_setup {
+        (from + 1).min(n)
+    } else if to_setup != from_setup || p.get("setup").is_some() {
+        n
+    } else {
+        return Err(bad(cmd, "say where: to (index), before or after (an operation id), up or down, or setup (another setup's end)"));
+    };
+    if to_setup != from_setup || to != from {
+        let op = s.doc_mut().manufacture.setup_mut(from_setup).map(|st| st.operations.remove(from));
+        if let (Some(op), Some(st)) = (op, s.doc_mut().manufacture.setup_mut(to_setup)) {
+            let at = to.min(st.operations.len());
+            st.operations.insert(at, op);
+        }
     }
-    let order: Vec<u64> = s.doc.manufacture.setup(setup_id).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
-    let stale_from = from.min(to);
-    Ok(
-        json!({"operation": id, "setup": setup_id, "index": to, "order": order, "stale_from_index": stale_from, "hint": "the moved operation and every one after its old and new places regenerate on the next cam.generate"}),
-    )
+    let order: Vec<u64> = s.doc.manufacture.setup(to_setup).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
+    let stale_from = if to_setup == from_setup { from.min(to) } else { to };
+    Ok(json!({
+        "operation": id, "setup": to_setup, "from_setup": from_setup, "index": to, "order": order, "stale_from_index": stale_from,
+        "hint": "the moved operation and every one after its old and new places regenerate on the next cam.generate"
+    }))
 }
 
 fn operation_duplicate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -2475,8 +2500,15 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "the simulation grid would exceed 4 million cells; use a larger `cell`"));
         }
         let (shape, stock, _) = start_stock(s, &st, Some(cell), 0.05).map_err(|e| bad(cmd, e.to_string()))?;
+        let floor = shape.bounds().min.z - 1.0;
+        let to_wcs = |q: Vec3| st.wcs.to_local(q);
+        let meshes = setup_meshes(s, &st, 0.05, false)?;
+        let model_map = (!meshes.is_empty()).then(|| {
+            let model = cam::dropcutter::DropMesh::from_meshes(meshes.iter().map(|(_, m)| transform_mesh(m, to_wcs)).collect::<Vec<_>>().iter());
+            cam::simulate::model_map(&model, &stock.map, floor)
+        });
         let sim = cam::simulate::Simulator::with_stock(shape, stock, ops, st.machine.rapid_feed).map_err(|e| engine_err(cmd, e))?;
-        s.cam.simulator = Some(SimulatorState { setup: id, stamp, sim: Box::new(sim) });
+        s.cam.simulator = Some(SimulatorState { setup: id, stamp, sim: Box::new(sim), model_map });
     }
     let Some(state) = s.cam.simulator.as_mut() else { return Err(EngineError::Other("simulator missing".into())) };
     let sim = &mut state.sim;
@@ -2534,6 +2566,13 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
     let wcs = st.wcs;
     let to_design = |p: Vec3| wcs.to_world(p);
     let stock_mesh = transform_mesh_full(&sim.stock_mesh(1), &to_design, &|d| wcs.dir_to_world(d));
+    // Gouges so far: the stock against the model's own Z-map on the same grid.
+    let gouge_map = match &state.model_map {
+        Some(mm) => cam::simulate::gouge_mesh(&sim.stock, mm, 0.05),
+        None => Mesh::default(),
+    };
+    let gouge_cells = gouge_map.triangles.iter().zip(&gouge_map.tri_face).filter(|(_, f)| **f == 0).count() / 2;
+    let gouge_mesh = transform_mesh_full(&gouge_map, &to_design, &|d| wcs.dir_to_world(d));
     let tool_mesh = transform_mesh_full(&sim.tool_mesh(), &to_design, &|d| wcs.dir_to_world(d));
     let cursor = sim.cursor;
     let mut done: Vec<(u64, Vec<Vec3>)> = Vec::new();
@@ -2580,6 +2619,8 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
             st.bodies.clone()
         },
         stock: Arc::new(stock_mesh),
+        gouges: Arc::new(gouge_mesh),
+        gouge_cells,
         tool: Arc::new(tool_mesh),
         path_done: done,
         path_todo: todo,
@@ -2609,6 +2650,10 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
     notice.value("stock_volume_mm3", r3(stock_volume));
     notice.value("cell_mm", r3(sim.stock.map.cell));
     notice.value("stock_triangles", triangles);
+    notice.value("gouge_cells", gouge_cells);
+    if gouge_cells > 0 {
+        notice.issue(Issue::error("gouge", format!("{gouge_cells} cells are cut below the model so far: shown in red on the stock")));
+    }
     if !missing.is_empty() {
         notice.issue(
             Issue::warning("not_generated", format!("{} operation(s) are not in the simulation: no toolpath yet", missing.len()))

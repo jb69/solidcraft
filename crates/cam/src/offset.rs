@@ -24,6 +24,40 @@ pub fn offset_set(set: &[Poly], d: f64, tol: f64) -> Result<Vec<Poly>> {
     if !(d.is_finite() && tol.is_finite() && tol > 0.0) {
         return Err(CamError::Param("offset distance and tolerance must be finite, tolerance positive".into()));
     }
+    // Shrinking a region never fills a hole, and growing it never loses an area: a loop the
+    // stitching could not close (a jagged contour at a fine tolerance) would break that, and a
+    // pocket would then cut straight through its island. Check, and try a coarser tolerance.
+    let set = polyline::normalize_set(set);
+    // (Only loops with nothing nested inside them: a probe there is in that loop's area alone.)
+    let probes: Vec<(Vec2, bool)> = set
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| !set.iter().enumerate().any(|(k, o)| k != *i && o.first().is_some_and(|q| polyline::contains(p, *q))))
+        .map(|(_, p)| p)
+        .map(|p| (polyline::interior_probe(p), polyline::is_ccw(p)))
+        .collect();
+    let mut t = tol;
+    for _ in 0..4 {
+        let out = offset_set_once(&set, d, t)?;
+        let holds = probes.iter().all(|(q, outer)| {
+            if d < 0.0 && !outer {
+                // A hole's inside (away from its edge by more than d) stays outside the region.
+                !polyline::set_contains(&out, *q)
+            } else if d > 0.0 && *outer {
+                polyline::set_contains(&out, *q)
+            } else {
+                true
+            }
+        });
+        if holds {
+            return Ok(out);
+        }
+        t *= 4.0;
+    }
+    Err(CamError::Geometry("an offset lost a hole or an area of the region (the outline is too jagged to offset)".into()))
+}
+
+fn offset_set_once(set: &[Poly], d: f64, tol: f64) -> Result<Vec<Poly>> {
     // Points within the tolerance of their neighbours' chord add nothing the result can show,
     // and a jagged input (sampled contours) would leave arc fragments at every micro-corner.
     let set: Vec<Poly> = set.iter().map(|p| polyline::simplify_closed(&polyline::clean(p, tol * 0.01), tol * 0.5)).filter(|p| p.len() >= 3).collect();

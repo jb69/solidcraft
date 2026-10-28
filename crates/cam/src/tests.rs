@@ -1081,3 +1081,91 @@ fn boundaries_follow_the_part_and_choose_by_what_the_operation_does() {
     r.add_to(&mut n);
     assert_eq!(n.values["boundary_source"], "part");
 }
+
+#[test]
+fn a_selected_pocket_floor_leaves_its_island_standing() {
+    use crate::boundary::{Containment, Plan, Source};
+    // A 40 × 30 pocket floor at z = 12 with a 10 × 10 island standing to z = 20.
+    let floor = box_mesh(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 30.0, 12.0));
+    let island = box_mesh(Vec3::new(15.0, 10.0, 0.0), Vec3::new(25.0, 20.0, 20.0));
+    let mesh = DropMesh::from_meshes([&floor, &island].into_iter());
+    let tool = flat(2.0);
+    let mut ctx = ctx_3d(&tool, &mesh, heights(20.0, 12.0));
+    // The floor face picked: its outline and the island's as a hole.
+    let mut hole = polyline::rect(Vec2::new(15.0, 10.0), Vec2::new(25.0, 20.0));
+    hole.reverse();
+    ctx.geometry.loops = polyline::normalize_set(&[polyline::rect(Vec2::new(0.0, 0.0), Vec2::new(40.0, 30.0)), hole]);
+    ctx.boundary = Plan::fixed(Source::Selection, Containment::Inside);
+    let o = op(OpKind::Pocket3d { stepover: 0.8, stepdown: 1.0, direction: Default::default(), flat_area_detection: true, order_by_depth: false });
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    assert!(!tp.is_empty());
+    let mut prev: Option<Vec3> = None;
+    for m in &tp.moves {
+        if let Some(a) = prev
+            && (m.is_cutting() || m.kind == MoveKind::Link)
+        {
+            for k in 0..=10 {
+                let p = a + (m.to - a) * (k as f64 / 10.0);
+                // Within the tool's radius (less a cell) of the island.
+                let (dx, dy) = ((15.0 - p.x).max(p.x - 25.0).max(0.0), (10.0 - p.y).max(p.y - 20.0).max(0.0));
+                let inside = (dx * dx + dy * dy).sqrt() < 0.9;
+                assert!(!(inside && p.z < 20.0 - 1e-6), "{:?} move into the island at {p:?}", m.kind);
+            }
+        }
+        prev = Some(m.to);
+    }
+    // And the simulation agrees, and draws no gouge.
+    let cell = crate::simulate::stock_cell(&ctx.stock, 0.05).unwrap();
+    let mut stock = StockMap::new(&ctx.stock, cell).unwrap();
+    let model = model_map(&mesh, &stock.map, -1.0);
+    let rep = simulate(&mut stock, &tool, &tp, None, Some(&model), Some(&mesh), None, 0.05).unwrap();
+    assert_eq!(rep.gouge_cells, 0, "{rep:?}");
+    assert!(crate::simulate::gouge_mesh(&stock, &model, 0.05).triangles.is_empty());
+    // A cut through the island is a gouge, drawn where it is.
+    stock.cut(&tool, Vec3::new(14.0, 15.0, 13.0), Vec3::new(26.0, 15.0, 13.0));
+    let g = crate::simulate::gouge_mesh(&stock, &model, 0.05);
+    assert!(!g.triangles.is_empty());
+    assert!(g.positions.iter().all(|p| p.x > 14.0 && p.x < 26.0 && p.y > 13.5 && p.y < 16.5), "only along the cut");
+}
+
+#[test]
+fn a_round_island_in_a_selected_pocket_is_left_standing() {
+    use crate::boundary::{Containment, Plan, Source};
+    // A 34 × 28 floor at z = 12 with a round island 12 across standing to z = 20, as a joined
+    // cylinder comes out of the kernel: a fan of long thin triangles on its top.
+    let n = 64;
+    let ring: Vec<Vec2> = (0..n).map(|k| {
+        let a = k as f64 / n as f64 * std::f64::consts::TAU;
+        Vec2::new(25.0 + 6.0 * a.cos(), 22.0 + 6.0 * a.sin())
+    }).collect();
+    let mut cyl = Mesh::default();
+    cyl.positions.push(Vec3::new(25.0, 22.0, 20.0));
+    for p in &ring {
+        cyl.positions.push(Vec3::new(p.x, p.y, 20.0));
+        cyl.positions.push(Vec3::new(p.x, p.y, 12.0));
+    }
+    for k in 0..n as u32 {
+        let (a, b) = (1 + 2 * k, 1 + 2 * ((k + 1) % n as u32));
+        cyl.triangles.push([0, a, b]);
+        cyl.triangles.push([a, a + 1, b + 1]);
+        cyl.triangles.push([a, b + 1, b]);
+    }
+    let floor = box_mesh(Vec3::new(8.0, 8.0, 0.0), Vec3::new(42.0, 36.0, 12.0));
+    let mesh = DropMesh::from_meshes([&floor, &cyl].into_iter());
+    let tool = flat(2.0);
+    // Heights as a setup gives them: from the stock's top (well above) to the model's bottom.
+    let mut ctx = ctx_3d(&tool, &mesh, heights(37.0, 0.0));
+    ctx.stock = StockShape::Box { min: Vec3::new(-1.0, -1.0, 0.0), max: Vec3::new(101.0, 71.0, 37.0) };
+    let mut hole = ring.clone();
+    hole.reverse();
+    ctx.geometry.loops = polyline::normalize_set(&[polyline::rect(Vec2::new(8.0, 8.0), Vec2::new(42.0, 36.0)), hole]);
+    ctx.boundary = Plan::fixed(Source::Selection, Containment::Inside);
+    // The operation's own tolerance (the default), which sets a fine grid.
+    ctx.tolerance = 0.01;
+    let o = op(OpKind::Pocket3d { stepover: 0.8, stepdown: 1.0, direction: Default::default(), flat_area_detection: true, order_by_depth: false });
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    for m in tp.moves.iter().filter(|m| m.is_cutting()) {
+        let d = ((m.to.x - 25.0).powi(2) + (m.to.y - 22.0).powi(2)).sqrt();
+        assert!(!(d < 6.9 && m.to.z < 20.0 - 1e-6), "cut into the island at {:?} (d = {d})", m.to);
+    }
+}

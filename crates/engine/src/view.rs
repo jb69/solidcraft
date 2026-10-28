@@ -535,10 +535,11 @@ fn build_scene(
     if let Some(pv) = &s.cam.preview {
         sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.stock), color: Rgb(176, 176, 182), face_colors: Vec::new(), opacity: 1.0 });
         sc.meshes.push(SceneMesh { mesh: Arc::clone(&pv.tool), color: p.body_selected, face_colors: Vec::new(), opacity: 1.0 });
-        for pl in &pv.path_done {
+        // An operation whose eye is off in the browser draws no path here either.
+        for (_, pl) in pv.path_done.iter().filter(|(op, _)| !s.cam.hidden.contains(op)) {
             sc.lines.push(SceneLine { points: pl.clone(), color: p.body_selected, width: 1.4, on_top: false });
         }
-        for pl in &pv.path_todo {
+        for (_, pl) in pv.path_todo.iter().filter(|(op, _)| !s.cam.hidden.contains(op)) {
             sc.lines.push(SceneLine { points: pl.clone(), color: Rgb(120, 120, 128), width: 1.0, on_top: false });
         }
     }

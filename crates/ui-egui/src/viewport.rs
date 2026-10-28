@@ -335,6 +335,7 @@ fn scene_key(app: &SolveApp) -> u64 {
     // The machining simulation's preview is a fresh `Arc` per `cam.simulate.show`; the drawn
     // toolpaths change with the workspace, their eyes and each regenerated toolpath.
     app.session.cam.preview.as_ref().map(|p| std::sync::Arc::as_ptr(p) as usize).hash(&mut h);
+    app.session.cam.hidden.hash(&mut h);
     if crate::manufacture_workspace::active(app) {
         for (id, g, _) in solidcraft_engine::cmd::cam::shown_toolpaths(&app.session) {
             (id, std::sync::Arc::as_ptr(&g) as usize).hash(&mut h);
@@ -789,14 +790,16 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         mesh_tris(&mut sc, &p.stock, stock, true, |_| true);
         let tool = c4(tk.accent);
         mesh_tris(&mut sc, &p.tool, tool, true, |_| true);
+        // An operation whose eye is off in the browser draws no path here either.
+        let hidden = &s.cam.hidden;
         let done = c4(tk.accent.gamma_multiply(0.9));
-        for pl in &p.path_done {
+        for (_, pl) in p.path_done.iter().filter(|(op, _)| !hidden.contains(op)) {
             for w in pl.windows(2) {
                 sc.line(w[0].to_f32(), w[1].to_f32(), done, 1.4, false);
             }
         }
         let todo = c4(tk.text.gamma_multiply(0.25));
-        for pl in &p.path_todo {
+        for (_, pl) in p.path_todo.iter().filter(|(op, _)| !hidden.contains(op)) {
             for w in pl.windows(2) {
                 sc.line(w[0].to_f32(), w[1].to_f32(), todo, 1.0, false);
             }

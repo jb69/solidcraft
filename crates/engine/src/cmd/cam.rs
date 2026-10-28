@@ -39,6 +39,16 @@ pub struct Generated {
     /// setup, the model's geometry revision and the signatures of every operation before it in
     /// the setup. A different signature now means the toolpath is stale (see `signatures`).
     pub signature: u64,
+    /// A fresh id each time the toolpath is generated. The operation after it chains this id
+    /// into its signature, so regenerating an operation makes every one below it stale.
+    pub generation: u64,
+}
+
+/// Generation ids, unique for the process (toolpaths are not saved).
+static GENERATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    GENERATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// What `cam.generate` left in the session, and the simulation preview the viewport draws.
@@ -112,9 +122,10 @@ pub struct CamPreview {
     pub bodies: Vec<String>,
     pub stock: Arc<Mesh>,
     pub tool: Arc<Mesh>,
-    /// Cutting moves already made and still to come, as polylines.
-    pub path_done: Vec<Vec<Vec3>>,
-    pub path_todo: Vec<Vec<Vec3>>,
+    /// Cutting moves already made and still to come, as polylines, each with its operation (the
+    /// browser's eye hides an operation's lines here too).
+    pub path_done: Vec<(u64, Vec<Vec3>)>,
+    pub path_todo: Vec<(u64, Vec<Vec3>)>,
     pub tip: Vec3,
     pub axis: Vec3,
     pub progress: f64,
@@ -274,7 +285,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "INSPECT").icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
     CommandSpec::new("cam.generate", "Generate Toolpaths", generate).at("MANUFACTURE", "TOOLPATHS")
         .icon("cam")
-        .params("setup?: id (default every setup); operation?: id (just that one); all?: bool (regenerate every operation, not only the stale ones): computes the toolpaths of the enabled operations in order, simulating the stock as it goes for rest machining. Returns each operation's notice (status, values such as time_s and cutting_length_mm, issues with codes such as no_toolpath, tool_too_large, tool_too_short, below_bottom, tilt_limit) and the setup totals")
+        .params("setup?: id (default every setup); operation?: id (just that one: the operations below it go stale); chain?: bool with operation (its whole chain: the stale operations above it, it, and every one below it); all?: bool (regenerate every operation, not only the stale ones): computes the toolpaths of the enabled operations in order, simulating the stock as it goes for rest machining. Returns each operation's notice (status, values such as time_s and cutting_length_mm, issues with codes such as no_toolpath, tool_too_large, tool_too_short, below_bottom, tilt_limit) and the setup totals")
         .noundo(),
     CommandSpec::new("cam.toolpath", "Toolpath", toolpath)
         .icon("cam")
@@ -986,6 +997,20 @@ fn operation_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// geometry revision and the signature of the operation before it. Changing an operation,
 /// its tool, the setup or the model, or reordering, changes its signature and every one after.
 pub fn signatures(s: &Session, st: &Setup) -> Vec<(u64, u64)> {
+    let mut prev = setup_signature(s, st);
+    let mut prev_generation = 0;
+    let mut out = Vec::with_capacity(st.operations.len());
+    for op in &st.operations {
+        prev = chain_signature(s, prev, op, prev_generation);
+        prev_generation = s.cam.operations.get(&op.id).map_or(0, |g| g.generation);
+        out.push((op.id, prev));
+    }
+    out
+}
+
+/// The setup's part of the chain: the model's geometry, the bodies, fixtures, WCS, stock and
+/// machine.
+fn setup_signature(s: &Session, st: &Setup) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.geometry_revision.hash(&mut h);
@@ -998,17 +1023,19 @@ pub fn signatures(s: &Session, st: &Setup) -> Vec<(u64, u64)> {
     ] {
         part.unwrap_or_default().hash(&mut h);
     }
-    let mut prev = h.finish();
-    let mut out = Vec::with_capacity(st.operations.len());
-    for op in &st.operations {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        prev.hash(&mut h);
-        serde_json::to_string(op).unwrap_or_default().hash(&mut h);
-        serde_json::to_string(&s.doc.manufacture.tools.get(op.tool)).unwrap_or_default().hash(&mut h);
-        prev = h.finish();
-        out.push((op.id, prev));
-    }
-    out
+    h.finish()
+}
+
+/// One link of the chain: the signature before it, the operation, its tool, and the generation
+/// id of the toolpath before it.
+fn chain_signature(s: &Session, prev: u64, op: &Operation, prev_generation: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    prev.hash(&mut h);
+    prev_generation.hash(&mut h);
+    serde_json::to_string(op).unwrap_or_default().hash(&mut h);
+    serde_json::to_string(&s.doc.manufacture.tools.get(op.tool)).unwrap_or_default().hash(&mut h);
+    h.finish()
 }
 
 /// Whether an operation's toolpath is stale: its signature now differs from the one it was
@@ -1496,8 +1523,10 @@ struct Prepared {
     geometry: ResolvedGeometry,
     notice: Notice,
     signature: u64,
+    generation: u64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_one(
     s: &Session,
     st: &Setup,
@@ -1506,6 +1535,7 @@ fn prepare_one(
     fixtures: &[(String, Arc<Mesh>)],
     model_bounds_wcs: Option<Aabb3>,
     signature: u64,
+    generation: u64,
 ) -> Result<Prepared> {
     let cmd = "cam.generate";
     let tool = s
@@ -1557,13 +1587,14 @@ fn prepare_one(
         geometry,
         notice,
         signature,
+        generation,
     })
 }
 
 /// The toolpath of a prepared operation, with the stock left by the operations before it for
 /// rest machining.
 fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
-    let Prepared { op, setup, tool, machine, orient, model_mesh, fixture_mesh, model_bounds_op, stock, heights, geometry, mut notice, signature } = pr;
+    let Prepared { op, setup, tool, machine, orient, model_mesh, fixture_mesh, model_bounds_op, stock, heights, geometry, mut notice, signature, generation } = pr;
     let rest_map = match rest {
         Some(r) if op.rest_machining => {
             if op.orientation.is_some() {
@@ -1614,7 +1645,7 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
     for issue in machine.check(&tool, &tp_wcs) {
         notice.issue(issue);
     }
-    Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup, signature }
+    Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup, signature, generation }
 }
 
 /// One step of a setup's generation, in order.
@@ -1629,7 +1660,7 @@ enum Step {
     /// To generate.
     Generate { id: u64, name: String, kind: &'static str, tool_id: u64, oriented: bool, prepared: Box<Prepared> },
     /// Its inputs could not be prepared (a missing tool, geometry that does not resolve).
-    Failed { id: u64, name: String, kind: &'static str, tool_id: u64, setup: u64, frame: Frame, signature: u64, error: String },
+    Failed { id: u64, name: String, kind: &'static str, tool_id: u64, setup: u64, frame: Frame, signature: u64, generation: u64, error: String },
 }
 
 struct SetupJob {
@@ -1685,6 +1716,11 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
         return Err(bad(cmd, "no setup to generate (cam.setup.create first)"));
     }
     let all = bool_(p, "all").unwrap_or(false);
+    // `chain` with `operation`: the operation's whole chain through it and below. The stale
+    // operations above it (its dependencies) regenerate, it regenerates, and so does every one
+    // below (they depend on it).
+    let chain = bool_(p, "chain").unwrap_or(false) && only_op.is_some();
+    let (only_op, force) = if chain { (None, only_op) } else { (only_op, None) };
     let mut jobs = Vec::new();
     let mut operations = Vec::new();
     for st in setups {
@@ -1700,11 +1736,17 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
         let stock_shape = model_bounds.as_ref().and_then(|b| st.stock.resolve(b).ok());
         let stock_map =
             stock_shape.as_ref().and_then(|sh| cam::simulate::stock_cell(sh, 0.1).ok().and_then(|c| cam::simulate::StockMap::new(sh, c).ok()));
-        let sigs = signatures(s, st);
+        // The chain in order, with the generation ids this job gives the toolpaths it makes: once
+        // an operation regenerates, every one below it has a new signature and regenerates too
+        // (or, when only one operation was asked for, is left stale).
+        let mut prev_sig = setup_signature(s, st);
+        let mut prev_generation = 0u64;
         let mut steps = Vec::new();
         for op in &st.operations {
-            let sig = sigs.iter().find(|(id, _)| *id == op.id).map_or(0, |x| x.1);
+            let sig = chain_signature(s, prev_sig, op, prev_generation);
+            prev_sig = sig;
             let cached = s.cam.operations.get(&op.id).cloned();
+            prev_generation = cached.as_ref().map_or(0, |g| g.generation);
             let tool = s.doc.manufacture.tools.get(op.tool).cloned();
             let kind = op.kind.type_name();
             if only_op.is_some_and(|id| id != op.id) {
@@ -1724,13 +1766,16 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
             // and every operation before it) is unchanged keeps its toolpath.
             if !all
                 && only_op.is_none()
+                && force != Some(op.id)
                 && let (Some(g), Some(tool)) = (cached.as_ref().filter(|g| g.signature == sig), tool.clone())
             {
                 steps.push(Step::Reuse { id: op.id, name: op.name.clone(), kind, tool, generated: g.clone(), oriented: op.orientation.is_some() });
                 continue;
             }
             operations.push(op.id);
-            match prepare_one(s, st, op, &meshes, &fixtures, model_bounds, sig) {
+            let generation = next_generation();
+            prev_generation = generation;
+            match prepare_one(s, st, op, &meshes, &fixtures, model_bounds, sig, generation) {
                 Ok(prepared) => steps.push(Step::Generate {
                     id: op.id,
                     name: op.name.clone(),
@@ -1747,6 +1792,7 @@ pub fn prepare_generate(s: &Session, p: &Value) -> Result<GenerateJob> {
                     setup: st.id,
                     frame: op.orientation.unwrap_or(Frame::IDENTITY),
                     signature: sig,
+                    generation,
                     error: e.to_string(),
                 }),
             }
@@ -1815,11 +1861,11 @@ impl GenerateJob {
                         }));
                         report(GenerateEvent::Done(id, g));
                     }
-                    Step::Failed { id, name, kind, tool_id, setup, frame, signature, error } => {
+                    Step::Failed { id, name, kind, tool_id, setup, frame, signature, generation, error } => {
                         report(GenerateEvent::Started(id));
                         let mut n = Notice::new(error.clone());
                         n.issue(Issue::error("generation_failed", error));
-                        let g = Arc::new(Generated { toolpath: Arc::new(Toolpath::new()), notice: n, stats: ToolpathStats::default(), frame, setup, signature });
+                        let g = Arc::new(Generated { toolpath: Arc::new(Toolpath::new()), notice: n, stats: ToolpathStats::default(), frame, setup, signature, generation });
                         regenerated += 1;
                         worse("error", &mut worst);
                         ops_out.push(json!({
@@ -2161,15 +2207,15 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
     let stock_mesh = transform_mesh_full(&sim.stock_mesh(1), &to_design, &|d| wcs.dir_to_world(d));
     let tool_mesh = transform_mesh_full(&sim.tool_mesh(), &to_design, &|d| wcs.dir_to_world(d));
     let cursor = sim.cursor;
-    let mut done: Vec<Vec<Vec3>> = Vec::new();
-    let mut todo: Vec<Vec<Vec3>> = Vec::new();
+    let mut done: Vec<(u64, Vec<Vec3>)> = Vec::new();
+    let mut todo: Vec<(u64, Vec<Vec3>)> = Vec::new();
     let mut budget = 400_000usize;
     for (oi, op) in sim.operations.iter().enumerate() {
         let mut cur: Vec<Vec3> = Vec::new();
         let mut prev: Option<Vec3> = None;
         for (mi, m) in op.toolpath.moves.iter().enumerate() {
             let before = oi < cursor.operation || (oi == cursor.operation && mi <= cursor.move_index);
-            let target_list: &mut Vec<Vec<Vec3>> = if before { &mut done } else { &mut todo };
+            let target_list: &mut Vec<(u64, Vec<Vec3>)> = if before { &mut done } else { &mut todo };
             if m.is_cutting() || m.kind == MoveKind::Link {
                 if cur.is_empty()
                     && let Some(pp) = prev
@@ -2179,10 +2225,10 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
                 cur.push(to_design(m.to));
                 budget = budget.saturating_sub(1);
             } else if !cur.is_empty() {
-                target_list.push(std::mem::take(&mut cur));
+                target_list.push((op.id, std::mem::take(&mut cur)));
             }
             if oi == cursor.operation && mi == cursor.move_index && !cur.is_empty() {
-                done.push(std::mem::take(&mut cur));
+                done.push((op.id, std::mem::take(&mut cur)));
             }
             prev = Some(m.to);
             if budget == 0 {
@@ -2191,7 +2237,7 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if !cur.is_empty() {
             let before = oi < cursor.operation;
-            if before { done.push(cur) } else { todo.push(cur) }
+            if before { done.push((op.id, cur)) } else { todo.push((op.id, cur)) }
         }
     }
     let op_now = sim.operations.get(cursor.operation).map(|o| (o.id, o.name.clone()));
@@ -2228,7 +2274,7 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
         sim.total_time_s,
         op_now.as_ref().map_or(String::from("no operation"), |(_, n)| n.clone())
     ));
-    notice.value("progress", r3(sim.progress()));
+    notice.value("progress", (sim.progress() * 1e6).round() / 1e6);
     notice.value("time_s", r3(sim.time_s));
     notice.value("total_time_s", r3(sim.total_time_s));
     notice.value("stock_volume_mm3", r3(stock_volume));
@@ -2241,7 +2287,7 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
         );
     }
     Ok(json!({
-        "setup": id, "progress": r3(sim.progress()), "time_s": r3(sim.time_s), "total_time_s": r3(sim.total_time_s),
+        "setup": id, "progress": (sim.progress() * 1e6).round() / 1e6, "time_s": r3(sim.time_s), "total_time_s": r3(sim.total_time_s),
         "operation": op_now.as_ref().map(|(i, _)| *i), "operation_name": op_now.as_ref().map(|(_, n)| n.clone()),
         "move": cursor.move_index, "moves_in_operation": sim.operations.get(cursor.operation).map_or(0, |o| o.toolpath.len()), "total_moves": sim.total_moves,
         "tip": tip, "axis": axis, "stock_volume_mm3": r3(stock_volume), "stock_triangles": triangles,

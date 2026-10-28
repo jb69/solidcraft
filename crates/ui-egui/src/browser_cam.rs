@@ -237,6 +237,7 @@ pub fn operation_items(app: &SolveApp, id: u64) -> Vec<Item> {
     vec![
         Item::action("ui.camEdit", "Edit", "edit").with(json!({"operation": id})),
         Item::action("cam.generate", "Regenerate", "cam").with(json!({"operation": id})),
+        Item::action("cam.generate", "Regenerate Chain", "cam").with(json!({"operation": id, "chain": true})),
         Item::action("cam.simulate.show", "Simulate to Here", "play").with(json!({"setup": setup, "operation": id, "move": 1_000_000_000u64})),
         Item::sep(),
         Item::action("cam.operation.move", "Move Up", "").with(json!({"operation": id, "up": true})).on(index > 0),

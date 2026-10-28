@@ -19,7 +19,7 @@ struct Playback {
     progress: f64,
 }
 
-const SPEEDS: [f64; 4] = [1.0, 4.0, 16.0, 64.0];
+const SPEEDS: [f64; 6] = [1.0, 4.0, 16.0, 64.0, 256.0, 1024.0];
 
 fn state_id() -> egui::Id {
     egui::Id::new("sc_cam_sim_playback")
@@ -76,8 +76,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 want = Some(json!({"setup": setup, "step": 1}));
             }
             ui.separator();
-            let labels = ["1×", "4×", "16×", "64×"];
-            let width = crate::ui_kit::ContentWidth::button(ui, "64×") * 4.0;
+            let labels = ["1×", "4×", "16×", "64×", "256×", "1024×"];
+            let width = crate::ui_kit::ContentWidth::button(ui, "1024×") * 6.0;
             ui.allocate_ui(egui::vec2(width, crate::ui_kit::row_height()), |ui| {
                 crate::ui_kit::segmented(ui, &mut pb.speed, &labels, Default::default());
             });
@@ -101,9 +101,12 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         return;
     }
     if let Some(params) = want {
+        // Play and the slider keep their own clock; a single-move step takes where the step
+        // landed, so the slider follows it.
+        let stepped = params.get("step").is_some();
         match app.run("cam.simulate.show", params) {
             Ok(v) => {
-                if let Some(p) = v.get("progress").and_then(serde_json::Value::as_f64) {
+                if stepped && let Some(p) = v.get("progress").and_then(serde_json::Value::as_f64) {
                     pb.progress = p;
                 }
             }

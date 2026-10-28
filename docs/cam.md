@@ -70,8 +70,11 @@ removed volume, material left above the model, gouges, and rapids through stock.
 `cam.simulate.show` is the visual simulator: it steps the program to a moment (`progress` 0..1,
 `time_s`, an `operation` and `move`, or `step: n` moves on) and the viewport shows the stock as
 cut so far, the tool where it stands, the path made and the path to come. The **Machining
-Simulation** panel plays it back with a timeline, speed and single steps. `cam.simulate.hide`
-ends it.
+Simulation** panel plays it back with a timeline, speed (1× real time to 1024×) and single
+steps. `cam.simulate.hide` ends it. The simulator keeps one clock (the time each move ends,
+the hop from one operation to the next included), so a moment asked for and the moment shown
+agree; Play keeps its own time and takes the simulator's position only after a single step. An
+operation whose eye is off in the browser draws no path in the simulation either.
 
 ## The Manufacture workspace
 
@@ -140,10 +143,15 @@ bosses on a 3-axis machine is `thread`.
 ## Parametric operations in the Browser
 
 A setup's operations are a chain of parametric steps. Each has a signature that hashes its own
-definition, its tool, the setup (bodies, fixtures, WCS, stock, machine), the model's geometry
-and the signature of the operation before it, so editing, suppressing or moving an operation,
-changing its tool or the setup, or changing the model makes it and every operation after it
-stale, and leaves the ones before it as they are. `cam.generate` regenerates only the stale
+definition, its tool, the setup (bodies, fixtures, WCS, stock, machine), the model's geometry,
+the signature of the operation before it and the generation id of that operation's toolpath
+(a fresh id each time a toolpath is generated). So editing, suppressing or moving an
+operation, changing its tool or the setup, or changing the model makes it and every operation
+after it stale; regenerating an operation on its own (`cam.generate {operation}`, the row's
+Regenerate) makes every operation below it stale, since their rest machining read its old
+toolpath; and the ones before it stay as they are. Regenerate Chain (`cam.generate {operation,
+chain: true}`) brings the whole chain current through it: the stale operations above it (its
+dependencies) regenerate first, then it, then every operation below it. `cam.generate` regenerates only the stale
 operations, in order, sweeping the stock through the ones it keeps so rest machining sees
 everything removed before it (`all: true` regenerates all; the result says how many were
 regenerated and reused). `cam.operation.move` reorders (to an index, before or after another
@@ -158,7 +166,7 @@ its operations' (`cam.toolpath.visibility {operation | operations | setup | all,
 view state that is neither saved nor undone). Suppressing, which leaves the operation out of
 generation, simulation and posting, is in the menu. Double-click opens an operation in the
 command box as `cam.operation.set` with its current parameters; the menu has Edit,
-Regenerate, Simulate to Here, Move Up and Down, Duplicate, Show/Hide Toolpath, Suppress and
+Regenerate, Regenerate Chain, Simulate to Here, Move Up and Down, Duplicate, Show/Hide Toolpath, Suppress and
 Delete, and a setup's menu Generate, Regenerate All, Simulate and Post Process.
 
 Generating from the ribbon, the panel or the Browser runs off the window thread: the window

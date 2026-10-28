@@ -612,6 +612,24 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     // Nothing changed: generating again reuses every toolpath.
     let g = run(&mut s, "cam.generate", json!({}));
     assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(0), Some(3)), "{g}");
+    // Regenerating one operation by itself makes every operation below it stale (their rest
+    // machining read its old toolpath) and leaves those above it as they were.
+    let g = run(&mut s, "cam.generate", json!({"operation": rough}));
+    assert_eq!(g["regenerated"], 1, "{g}");
+    assert_eq!(stale(&mut s), vec![false, false, true]);
+    // The next Generate redoes only the stale one.
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(1), Some(2)), "{g}");
+    assert_eq!(stale(&mut s), vec![false, false, false]);
+    // From the first operation, everything below goes stale.
+    run(&mut s, "cam.generate", json!({"operation": face}));
+    assert_eq!(stale(&mut s), vec![false, true, true]);
+    let g = run(&mut s, "cam.generate", json!({}));
+    assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(2), Some(1)), "{g}");
+    // all: true regenerates every operation, and each one below a regenerated one stays current.
+    let g = run(&mut s, "cam.generate", json!({"all": true}));
+    assert_eq!(g["regenerated"], 3, "{g}");
+    assert_eq!(stale(&mut s), vec![false, false, false]);
     // Editing the second operation leaves the first as it was and makes it and the third stale;
     // posting now says so.
     run(&mut s, "cam.operation.set", json!({"operation": rough, "stepdown": 2}));
@@ -675,6 +693,21 @@ fn toolpaths_show_and_hide_on_the_workpiece() {
     assert!(shown(&s).is_empty());
     run(&mut s, "cam.toolpath.visibility", json!({"all": true, "visible": true}));
     assert_eq!(shown(&s), vec![a, b]);
+    // The simulation draws each operation's path only while its eye is on.
+    run(&mut s, "cam.simulate.show", json!({"progress": 0.5}));
+    let preview = s.cam.preview.clone().unwrap();
+    let ops_in = |lines: &[(u64, Vec<solidcraft_geom::Vec3>)]| lines.iter().map(|(op, _)| *op).collect::<std::collections::BTreeSet<_>>();
+    let mut all_ops = ops_in(&preview.path_done);
+    all_ops.extend(ops_in(&preview.path_todo));
+    assert_eq!(all_ops, [a, b].into_iter().collect(), "both operations have simulation paths");
+    let cam = solidcraft_render::Camera::default();
+    let lines_with_all = crate::view::scene(&s, &cam).lines.len();
+    run(&mut s, "cam.toolpath.visibility", json!({"operation": a, "visible": false}));
+    let lines_without_a = crate::view::scene(&s, &cam).lines.len();
+    let a_lines = preview.path_done.iter().chain(&preview.path_todo).filter(|(op, _)| *op == a).count();
+    assert_eq!(lines_with_all - lines_without_a, a_lines, "hiding the face drops exactly its simulation lines");
+    run(&mut s, "cam.toolpath.visibility", json!({"operation": a, "visible": true}));
+    run(&mut s, "cam.simulate.hide", json!({}));
     // A suppressed operation draws nothing, whatever its eye.
     run(&mut s, "cam.operation.set", json!({"operation": a, "enabled": false}));
     assert_eq!(shown(&s), vec![b]);
@@ -684,4 +717,37 @@ fn toolpaths_show_and_hide_on_the_workpiece() {
     run(&mut s, "cam.toolpath.visibility", json!({"operation": b, "visible": false}));
     run(&mut s, "cam.operation.remove", json!({"operation": b}));
     assert!(s.cam.hidden.is_empty());
+}
+
+#[test]
+fn regenerate_chain_brings_dependencies_and_dependents_current() {
+    let mut s = block();
+    let flat = add_flat(&mut s, 6.0);
+    let small = add_flat(&mut s, 3.0);
+    run(&mut s, "cam.setup.create", json!({}));
+    let face = run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}))["id"].as_u64().unwrap();
+    let rough = run(&mut s, "cam.operation.pocket3d", json!({"tool": flat, "stepover": 3, "stepdown": 3}))["id"].as_u64().unwrap();
+    let rest = run(&mut s, "cam.operation.pocket3d", json!({"tool": small, "stepover": 1.5, "stepdown": 3, "rest_machining": true}))["id"].as_u64().unwrap();
+    let contour = run(&mut s, "cam.operation.contour2d", json!({"tool": flat, "side": "outside", "geometry": {"source": "silhouette"}}))["id"].as_u64().unwrap();
+    let stale = |s: &mut Session| -> Vec<bool> {
+        run(s, "cam.notices", json!({}))["notices"].as_array().unwrap().iter().map(|n| n["stale"].as_bool().unwrap_or_else(|| panic!("{n}"))).collect()
+    };
+    // Nothing generated yet: the chain through the third regenerates everything (its
+    // dependencies above it, it, and the one below).
+    let g = run(&mut s, "cam.generate", json!({"operation": rest, "chain": true}));
+    assert_eq!(g["regenerated"], 4, "{g}");
+    assert_eq!(stale(&mut s), vec![false, false, false, false]);
+    // The first edited: the chain through the third redoes the first (a stale dependency), the
+    // second and third (below a regenerated one) and the fourth.
+    run(&mut s, "cam.operation.set", json!({"operation": face, "stepover": 3}));
+    let g = run(&mut s, "cam.generate", json!({"operation": rest, "chain": true}));
+    assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(4), Some(0)), "{g}");
+    // Everything current: the chain through the third keeps the two above it and regenerates
+    // it and the one below.
+    let g = run(&mut s, "cam.generate", json!({"operation": rest, "chain": true}));
+    assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(2), Some(2)), "{g}");
+    let ids: Vec<u64> = g["setups"][0]["operations"].as_array().unwrap().iter().filter(|o| o["reused"] != true).map(|o| o["id"].as_u64().unwrap()).collect();
+    assert_eq!(ids, vec![rest, contour]);
+    assert_eq!(stale(&mut s), vec![false, false, false, false]);
+    let _ = rough;
 }

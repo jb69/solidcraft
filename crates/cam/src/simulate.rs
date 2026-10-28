@@ -387,7 +387,12 @@ pub struct Simulator {
     /// Running time in seconds at the cursor.
     pub time_s: f64,
     pub total_time_s: f64,
-    rapid_feed: f64,
+    /// The program's one clock: for each operation, the time at which each of its moves ends
+    /// (the first move from where the previous operation ended), cumulative over the program.
+    /// Seeking by time, the time at the cursor and the total all read it, so they agree.
+    ends: Vec<Vec<f64>>,
+    /// The time each operation starts.
+    starts: Vec<f64>,
 }
 
 impl Simulator {
@@ -395,7 +400,23 @@ impl Simulator {
         let stock = StockMap::new(&shape, cell)?;
         let n = operations.len();
         let total_moves = operations.iter().map(|o| o.toolpath.len()).sum();
-        let total_time_s = operations.iter().map(|o| o.toolpath.stats(rapid_feed, None).time_s).sum();
+        let feed_of = |m: &crate::toolpath::Move| if m.feed > 0.0 { m.feed } else { rapid_feed.max(1e-9) };
+        let mut ends = Vec::with_capacity(n);
+        let mut starts = Vec::with_capacity(n);
+        let mut clock = 0.0;
+        let mut last: Option<Vec3> = None;
+        for op in &operations {
+            starts.push(clock);
+            let mut e = Vec::with_capacity(op.toolpath.len());
+            for m in &op.toolpath.moves {
+                let from = last.unwrap_or(m.to);
+                clock += from.dist(m.to) / feed_of(m) * 60.0;
+                e.push(clock);
+                last = Some(m.to);
+            }
+            ends.push(e);
+        }
+        let total_time_s = clock;
         let first = operations.first().and_then(|o| o.toolpath.moves.first()).map(|m| (m.to, m.axis));
         let (tip, axis) = first.unwrap_or((Vec3::new(0.0, 0.0, shape.bounds().max.z + 10.0), Vec3::new(0.0, 0.0, 1.0)));
         let mut checkpoints = vec![None; n];
@@ -413,27 +434,33 @@ impl Simulator {
             total_moves,
             time_s: 0.0,
             total_time_s,
-            rapid_feed,
+            ends,
+            starts,
         })
+    }
+
+    /// The time at a cursor, by the program's clock.
+    pub fn time_at(&self, c: Cursor) -> f64 {
+        let Some(e) = self.ends.get(c.operation) else { return self.total_time_s };
+        let Some(&end) = e.get(c.move_index) else { return self.starts.get(c.operation).copied().unwrap_or(0.0) };
+        let start = if c.move_index == 0 { self.starts.get(c.operation).copied().unwrap_or(0.0) } else { e[c.move_index - 1] };
+        start + (end - start) * c.fraction.clamp(0.0, 1.0)
     }
 
     /// The cursor for a fraction `t` in 0..1 of the whole program's time.
     pub fn cursor_at_fraction(&self, t: f64) -> Cursor {
-        let want = self.total_time_s * t.clamp(0.0, 1.0);
-        let mut acc = 0.0;
-        for (oi, op) in self.operations.iter().enumerate() {
-            let mut prev: Option<Vec3> = None;
-            for (mi, m) in op.toolpath.moves.iter().enumerate() {
-                let d = prev.map_or(0.0, |p| p.dist(m.to));
-                let feed = if m.feed > 0.0 { m.feed } else { self.rapid_feed };
-                let dt = d / feed * 60.0;
-                if acc + dt >= want {
-                    let f = if dt > 0.0 { ((want - acc) / dt).clamp(0.0, 1.0) } else { 1.0 };
-                    return Cursor { operation: oi, move_index: mi, fraction: f };
-                }
-                acc += dt;
-                prev = Some(m.to);
+        let want = self.total_time_s * if t.is_finite() { t.clamp(0.0, 1.0) } else { 1.0 };
+        for (oi, e) in self.ends.iter().enumerate() {
+            // The first move that ends at or after the wanted time.
+            let Some(&last) = e.last() else { continue };
+            if last < want {
+                continue;
             }
+            let mi = e.partition_point(|end| *end < want);
+            let start = if mi == 0 { self.starts.get(oi).copied().unwrap_or(0.0) } else { e[mi - 1] };
+            let end = e[mi];
+            let f = if end > start { ((want - start) / (end - start)).clamp(0.0, 1.0) } else { 1.0 };
+            return Cursor { operation: oi, move_index: mi, fraction: f };
         }
         let last = self.operations.len().saturating_sub(1);
         Cursor { operation: last, move_index: self.operations.get(last).map_or(0, |o| o.toolpath.len().saturating_sub(1)), fraction: 1.0 }
@@ -463,7 +490,6 @@ impl Simulator {
                 None => self.stock = StockMap::new(&self.shape, self.stock.map.cell)?,
             }
             self.cursor = Cursor { operation: from, move_index: 0, fraction: 0.0 };
-            self.time_s = self.time_before(from);
         }
         // Sweep forward.
         let mut guard = 0usize;
@@ -500,8 +526,6 @@ impl Simulator {
                 if vertical && !op.toolpath.laser && m.kind != MoveKind::Rapid && !(m.kind == MoveKind::Retract && m.feed <= 0.0) {
                     self.stock.cut(&op.tool, a, b);
                 }
-                let feed = if m.feed > 0.0 { m.feed } else { self.rapid_feed };
-                self.time_s += a.dist(b) / feed * 60.0;
                 self.tip = b;
                 self.axis = m.axis;
             }
@@ -519,6 +543,7 @@ impl Simulator {
                 }
             }
         }
+        self.time_s = self.time_at(self.cursor);
         Ok(())
     }
 
@@ -526,9 +551,6 @@ impl Simulator {
         (0..oi).rev().find_map(|k| self.operations[k].toolpath.last_position())
     }
 
-    fn time_before(&self, oi: usize) -> f64 {
-        self.operations.iter().take(oi).map(|o| o.toolpath.stats(self.rapid_feed, None).time_s).sum()
-    }
 
     /// The fraction of the program done at the cursor (by time).
     pub fn progress(&self) -> f64 {

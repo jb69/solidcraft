@@ -12,7 +12,7 @@ use crate::ops::{Context, OpKind, ResolvedGeometry, generate};
 use crate::polyline::{self, rect};
 use crate::post::{Post, PostOperation, post_program};
 use crate::setup::{Geometry, Operation, StockShape};
-use crate::simulate::{StockMap, model_map, simulate};
+use crate::simulate::{SimOperation, Simulator, StockMap, model_map, simulate};
 use crate::tool::{Tool, ToolKind};
 use crate::toolpath::{MoveKind, Toolpath};
 
@@ -848,4 +848,47 @@ fn laser_post_modes_per_dialect() {
     let issues = Machine::three_axis().check(&laser, &tp);
     assert!(issues.iter().any(|i| i.code == "no_laser"), "{issues:?}");
     assert!(Machine::makera_z1().check(&laser, &tp).iter().all(|i| i.code != "no_laser"));
+}
+
+#[test]
+fn simulator_clock_agrees_with_seeking_so_playback_moves_forward() {
+    // Two operations whose second starts away from where the first ended: the hop between them
+    // takes time on the clock the player seeks by, as it does in the sweep.
+    let tool = flat(6.0);
+    let mut a = Toolpath::new();
+    a.rapid(Vec3::new(0.0, 0.0, 10.0)).unwrap();
+    a.push(crate::toolpath::Move::new(MoveKind::Plunge, Vec3::new(0.0, 0.0, -1.0), 300.0)).unwrap();
+    a.cut(Vec3::new(30.0, 0.0, -1.0), 600.0).unwrap();
+    a.rapid(Vec3::new(30.0, 0.0, 10.0)).unwrap();
+    let mut b = Toolpath::new();
+    b.rapid(Vec3::new(0.0, 20.0, 10.0)).unwrap();
+    b.push(crate::toolpath::Move::new(MoveKind::Plunge, Vec3::new(0.0, 20.0, -1.0), 300.0)).unwrap();
+    b.cut(Vec3::new(30.0, 20.0, -1.0), 600.0).unwrap();
+    b.rapid(Vec3::new(30.0, 20.0, 10.0)).unwrap();
+    let shape = crate::setup::StockShape::Box { min: Vec3::new(-5.0, -5.0, -3.0), max: Vec3::new(35.0, 25.0, 0.0) };
+    let ops = vec![
+        SimOperation { id: 1, name: "a".into(), tool: tool.clone(), toolpath: std::sync::Arc::new(a) },
+        SimOperation { id: 2, name: "b".into(), tool, toolpath: std::sync::Arc::new(b) },
+    ];
+    let mut sim = Simulator::new(shape, ops, 0.5, 5000.0).unwrap();
+    // Play: many small steps forward. The reported progress is what was asked for, and the
+    // tool never goes back along the program.
+    let mut last_time = -1.0_f64;
+    let mut p = 0.0_f64;
+    while p < 1.0 {
+        p = (p + 0.003).min(1.0);
+        let c = sim.cursor_at_fraction(p);
+        sim.seek(c).unwrap();
+        assert!((sim.progress() - p).abs() < 1e-9, "asked {p}, at {}", sim.progress());
+        assert!(sim.time_s >= last_time - 1e-12, "the clock went back at {p}");
+        last_time = sim.time_s;
+    }
+    assert_eq!((sim.cursor.operation, sim.cursor.move_index), (1, 3));
+    // Seeking back and forth lands at the same place each time.
+    let c = sim.cursor_at_fraction(0.4);
+    sim.seek(c).unwrap();
+    let (tip, t) = (sim.tip, sim.time_s);
+    sim.seek(sim.cursor_at_fraction(0.9)).unwrap();
+    sim.seek(sim.cursor_at_fraction(0.4)).unwrap();
+    assert!(sim.tip.dist(tip) < 1e-9 && (sim.time_s - t).abs() < 1e-9);
 }

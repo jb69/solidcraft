@@ -1,20 +1,37 @@
 # SolidCraft CAM for Makera machines: a proposal (draft)
 
-*A request to Makera for test machines, from the SolidCraft project. Draft of 28 October 2026.*
+*A request to Makera for test machines, from an independent contributor to the open-source
+SolidCraft project. Draft of 28 October 2026.*
 
 ## In one paragraph
 
 SolidCraft is a public, open-source (MIT or Apache-2.0), pure-Rust parametric CAD application
 that an AI assistant can drive end to end, developed in the open at
-`github.com/tangency-labs/solidcraft`. A CAM module for it is being built to be contributed to
-that main repository as part of the public tool: it plans 2D, 3D, rotary and multi-axis
-toolpaths, turning on the rotary axis and laser work, simulates the stock as it is cut, and
-writes G-code. Makera's Carvera, Carvera Air and Z1 are the first machines it knows by name:
-their work areas, spindles, feeds, tool changers, collets, rotary modules and laser modules, a
-post for Makera's dialect, and a tool kit for the machines. It is at an early stage and none of
-it has run on a Makera machine yet. We ask Makera to lend (or sell at cost) the machines to
-test it on. In return every Makera owner gets a free, open CAD-to-G-code path, tested on real
-hardware and maintained in public, that people and their AI assistants can use.
+`github.com/tangency-labs/solidcraft`. I am building a CAM module for it, on my own time, to
+contribute to that repository: it plans 2D, 3D, rotary and multi-axis toolpaths, turning on the
+rotary axis and laser work, simulates the stock as it is cut, and writes G-code. Makera's
+Carvera, Carvera Air and Z1 are the first machines it knows by name: their work areas,
+spindles, feeds, tool changers, collets, rotary modules and laser modules, a post for Makera's
+dialect, and a tool kit for the machines. It is at an early stage and none of it has run on a
+Makera machine yet. I am asking Makera to lend (or sell at cost) the machines to test it on. In
+return every Makera owner gets a free, open CAD-to-G-code path for intricate work, tested on
+real hardware and maintained in public, that people and their AI assistants can use.
+
+## Who I am and why
+
+I am an independent contributor, not a company and not speaking for the SolidCraft
+maintainers: I write the code and offer it to the project, and it joins the main repository
+when its maintainers have reviewed and accepted it. There is no commercial interest behind this.
+
+I like Makera's machines: an enclosed, desktop mill with an automatic tool changer, probing, a
+rotary module and a laser is a remarkable thing to have on a bench. Makera Studio's guided modes
+are a good way in, and they get a first part cut quickly. Where I want more is intricate work:
+rest machining that knows what earlier operations removed, a choice of 3D finishing strategies
+for steep and shallow areas, pencil passes in corners, turning and threads on the rotary axis,
+true multi-axis toolpaths, and a simulation that shows the stock, the tool and every move before
+the machine runs. Professional CAM packages offer that depth but cost a subscription and are not
+built around these machines. This module aims to give Makera owners that depth in free, open
+software that knows their machine, so the hardware can do everything it is capable of.
 
 ## What exists today
 
@@ -53,7 +70,7 @@ hardware and maintained in public, that people and their AI assistants can use.
 
 These are Makera's published figures, as SolidCraft's presets carry them (`carvera`,
 `carvera_air`, `z1`, each with a `_4axis` variant). They are machine specifications, not claims
-about finished parts. We will correct any that Makera tells us are wrong.
+about finished parts. I will correct any that Makera tells me are wrong.
 
 With a Makera preset on a setup:
 
@@ -86,19 +103,19 @@ and cut. Every test also compares the cut part with the simulator's stock.
 | Laser | Carvera (2.5 W built in); Air or Z1 (5 W module) | cut-out and raster test card in plywood, card, acrylic | cut dimensions within ±0.1 mm of the kerf-compensated path; a power and speed grid that sets the kit's defaults |
 | Machine limits | Carvera Air and Z1, with 4th-axis modules | the same parts scaled to fit | checks catch every over-limit case; manual tool changes prompt as expected; feeds clamped to 4 000 and 1 200 mm/min |
 
-We will measure with calipers, a micrometer, thread gauges and a surface roughness gauge, and
-publish every program, measurement and photo. Tolerances above are our targets; we will agree
+I will measure with calipers, a micrometer, thread gauges and a surface roughness gauge, and
+publish every program, measurement and photo. Tolerances above are my targets; I will agree
 them with Makera before cutting.
 
-## What we ask for
+## What I ask for
 
 | Tier | Machines | What it covers |
 |---|---|---|
 | **Ideal** | a Carvera with the 4th-axis module, plus a Carvera Air or Z1 with its laser and 4th-axis modules | every row of the test plan, on two machines |
 | **Minimum** | one Carvera with the 4th-axis module | milling, drilling, rotary, turning, threads, and the 2.5 W built-in laser |
 
-Either tier on **loan** for the test period (we return it at our cost) or **at cost**. We will
-cover materials, tooling wear and measuring equipment. We also ask for:
+Either tier on **loan** for the test period (I return it at my cost) or **at cost**. I will
+cover materials, tooling wear and measuring equipment. I also ask for:
 
 - **One short call with an engineer** to answer the open questions below.
 - **Permission to say "tested on a Makera Carvera"** (and Air or Z1) once the tests pass.
@@ -106,17 +123,19 @@ cover materials, tooling wear and measuring equipment. We also ask for:
 ## What Makera gets
 
 - **Open-source CAD and CAM that targets Makera first**, in a public project under MIT or
-  Apache-2.0, with no licence fees or subscriptions for its customers. The Makera presets, post
-  and kit live in the main repository, so anyone can read, fix and extend them, and they are
-  maintained with the rest of SolidCraft rather than in a private fork.
+  Apache-2.0, with no licence fees or subscriptions for its customers. Once accepted, the
+  Makera presets, post and kit live in the main repository, so anyone can read, fix and extend
+  them, and they are maintained in public with the rest of SolidCraft rather than in a private
+  fork.
 - **An AI-assistant-first workflow.** Every step is a JSON command with a self-describing
   result and a notice: what went well, what was clamped, what to change, with a stable code
   and a suggested fix. A whole Carvera job is six commands: add the kit, create a setup with
   `machine: "carvera"`, add operations, generate, simulate, post.
 - **Posts tested on Makera's dialect**, with automated regression tests built from what the
-  machines teach us, run by the project's CI on every change to the main repository.
+  machines teach me, run by the project's CI on every change to the main repository.
 - **Published results**: a public report with programs, measurements and photos, and credit
-  in the documentation, the release notes and the app.
+  in the module's documentation (and in SolidCraft's release notes and app, if its maintainers
+  agree).
 
 ## Timeline
 
@@ -154,3 +173,7 @@ Laser:
   Z words in laser mode?
 - Does air assist use `M7` / `M9` in laser mode, as in milling?
 - Which feed and power ranges does Makera recommend for each module and material?
+
+---
+
+[Your name] · [email or other contact] · independent contributor to SolidCraft

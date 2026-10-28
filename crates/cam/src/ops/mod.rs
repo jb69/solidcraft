@@ -22,7 +22,6 @@ use crate::frame::Frame;
 use crate::heightmap::HeightMap;
 use crate::linking::ResolvedHeights;
 use crate::notice::{Issue, Notice, r3};
-use crate::offset;
 use crate::polyline::{self, Poly};
 use crate::setup::{Operation, StockShape};
 use crate::tool::Tool;
@@ -559,6 +558,27 @@ impl OpKind {
         }
     }
 
+    /// Whether the kind machines an area bounded by [`crate::boundary`].
+    pub fn uses_boundary(&self) -> bool {
+        matches!(
+            self,
+            OpKind::Pocket3d { .. }
+                | OpKind::Adaptive3d { .. }
+                | OpKind::Parallel { .. }
+                | OpKind::Contour3d { .. }
+                | OpKind::Scallop { .. }
+                | OpKind::Pencil { .. }
+                | OpKind::Spiral { .. }
+                | OpKind::Radial { .. }
+                | OpKind::MorphedSpiral { .. }
+                | OpKind::Project { .. }
+                | OpKind::Horizontal { .. }
+                | OpKind::SteepShallow { .. }
+                | OpKind::Morph { .. }
+                | OpKind::MultiAxisContour { .. }
+        )
+    }
+
     /// Every kind, for listings.
     pub const NAMES: &'static [&'static str] = &[
         "face",
@@ -697,6 +717,9 @@ pub struct Context<'a> {
     /// The stock left by the previous operations, as a height map in the operation frame, for
     /// rest machining (`None`: machine the full stock).
     pub rest: Option<&'a HeightMap>,
+    /// The machining boundary to use ([`crate::boundary`]), and the region once worked out.
+    pub boundary: crate::boundary::Plan,
+    pub boundary_cache: crate::boundary::Cache,
 }
 
 impl Context<'_> {
@@ -765,15 +788,18 @@ impl Context<'_> {
         self.model?.drop(tool, &Frame::IDENTITY, xy, floor).map(|c| crate::dropcutter::Contact { z: c.z + self.stock_to_leave_axial, ..c })
     }
 
-    /// The machining boundary for 3D operations: where the tool centre may go in XY. The
-    /// selected loops, else the stock outline, grown by the tool radius so edges are machined.
+    /// The machining boundary for area operations: where the tool centre may go in XY
+    /// ([`crate::boundary::region`]), worked out once.
     pub fn boundary(&self) -> Result<Vec<Poly>> {
-        let r = self.tool.radius();
-        let base = if self.geometry.loops.is_empty() { self.stock_outline() } else { self.geometry.loops.clone() };
-        if base.is_empty() {
-            return Err(CamError::Geometry("no machining boundary".into()));
+        match self.boundary_cache.get_or_init(|| crate::boundary::region(self).map_err(|e| e.to_string())) {
+            Ok((loops, _)) => Ok(loops.clone()),
+            Err(e) => Err(CamError::Geometry(e.clone())),
         }
-        offset::offset_set(&base, r, self.tolerance)
+    }
+
+    /// What the boundary was, once an operation has used it.
+    pub fn boundary_report(&self) -> Option<&crate::boundary::Report> {
+        self.boundary_cache.get().and_then(|r| r.as_ref().ok()).map(|x| &x.1)
     }
 }
 

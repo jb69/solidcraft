@@ -55,6 +55,10 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   - 3+2: any operation with `orientation: {origin, z, x}` relative to the WCS;
   - 4-axis: `rotary` (the operation frame's x is the rotary axis; set `orientation` so it is);
   - 5-axis: `swarf` on `chains`, `multi_axis_contour`, `flow` on `rails`; use a ball tool.
+- **Boundaries**: area operations machine within `boundary` (default `auto`: roughing around the
+  part's outline, finishing on the part, a selection bounds it). Read the notice's `boundary`
+  issue; set `boundary: "stock"` to clear the whole stock, `"selection"` with `geometry` for one
+  region, `{containment: inside | center | outside, offset}` to adjust (docs/cam-boundaries.md).
 - Leave a parameter at 0 for its default. `direction: both` zigzags without retracts.
 - **Change** an operation or a tool by setting its JSON directly: `cam.operation.set
   {operation, …}` or `cam.tool.set {tool, …}` with only the keys to change (a new `type` starts

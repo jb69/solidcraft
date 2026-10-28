@@ -310,6 +310,9 @@ pub struct Operation {
     /// Rest machining: cut only where the previous operations of the setup left material.
     #[serde(default)]
     pub rest_machining: bool,
+    /// Where the operation may machine (area operations: 3D roughing and finishing).
+    #[serde(default)]
+    pub boundary: crate::boundary::Boundary,
     #[serde(flatten)]
     pub kind: OpKind,
 }

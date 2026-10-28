@@ -224,6 +224,8 @@ fn ctx_2d<'a>(tool: &'a Tool, loops: Vec<Vec<Vec2>>, h: ResolvedHeights) -> Cont
         stock_to_leave_radial: 0.0,
         stock_to_leave_axial: 0.0,
         rest: None,
+        boundary: crate::boundary::Plan::fixed(crate::boundary::Source::Selection, crate::boundary::Containment::Outside),
+        boundary_cache: Default::default(),
     }
 }
 
@@ -241,6 +243,7 @@ fn op(kind: OpKind) -> Operation {
         stock_to_leave_radial: 0.0,
         stock_to_leave_axial: 0.0,
         rest_machining: false,
+        boundary: Default::default(),
         kind,
     }
 }
@@ -368,6 +371,8 @@ fn ctx_3d<'a>(tool: &'a Tool, mesh: &'a DropMesh, h: ResolvedHeights) -> Context
         stock_to_leave_radial: 0.0,
         stock_to_leave_axial: 0.0,
         rest: None,
+        boundary: crate::boundary::Plan::fixed(crate::boundary::Source::Stock, crate::boundary::Containment::Outside),
+        boundary_cache: Default::default(),
     }
 }
 
@@ -997,4 +1002,82 @@ fn stock_turned_over_keeps_the_first_sides_cuts() {
     assert!(mesh.positions.iter().any(|p| close(p.z, -5.0, 1e-9)), "pocket floor drawn");
     // …and shaded as a step: the floor's normals tilt at the pocket's edge.
     assert!(mesh.normals.iter().zip(&mesh.positions).any(|(n, p)| p.z < -4.0 && n.z < 0.0 && n.z > -0.99), "the step is shaded");
+}
+
+#[test]
+fn boundaries_follow_the_part_and_choose_by_what_the_operation_does() {
+    use crate::boundary::{Boundary, Containment, Plan, Source, region};
+    let kind = |t: &str| -> OpKind { serde_json::from_value(serde_json::json!({ "type": t })).unwrap() };
+    // A 20 × 20 block in a 100 × 100 stock, a 6 mm cutter.
+    let m = DropMesh::new(&box_mesh(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 20.0, 10.0)));
+    let tool = flat(6.0);
+    let mut ctx = ctx_3d(&tool, &m, heights(12.0, 0.0));
+    ctx.stock = StockShape::Box { min: Vec3::new(-40.0, -40.0, 0.0), max: Vec3::new(60.0, 60.0, 12.0) };
+    let bounds_for = |ctx: &mut Context, plan: Plan| {
+        ctx.boundary = plan;
+        ctx.boundary_cache = Default::default();
+        let (loops, rep) = region(ctx).unwrap();
+        (polyline::bounds_of(&loops), rep, loops)
+    };
+    let auto = Boundary::default();
+    // Roughing: the part's outline, the tool outside it and a ring a tool wide cleared around.
+    let plan = Plan::new(&auto, &kind("adaptive3d"), false, true, false);
+    assert_eq!((plan.source, plan.containment), (Source::Part, Containment::Outside));
+    let (b, rep, _) = bounds_for(&mut ctx, plan);
+    assert!(close(b.min.x, -6.0, 0.3) && close(b.max.y, 26.0, 0.3), "{b:?}");
+    assert!(rep.why.contains("roughing around the part"), "{}", rep.why);
+    // Surface finishing: the tool's centre on the part.
+    let plan = Plan::new(&auto, &kind("parallel"), false, true, false);
+    assert_eq!((plan.source, plan.containment), (Source::Part, Containment::Center));
+    let (b, rep, _) = bounds_for(&mut ctx, plan);
+    assert!(close(b.min.x, 0.0, 0.3) && close(b.max.x, 20.0, 0.3), "{b:?}");
+    assert!((rep.area_mm2 - 400.0).abs() < 15.0, "{}", rep.area_mm2);
+    // Walls: the tool outside so it reaches them.
+    let plan = Plan::new(&auto, &kind("contour3d"), false, true, false);
+    let (b, _, _) = bounds_for(&mut ctx, plan);
+    assert!(close(b.min.x, -3.0, 0.3), "{b:?}");
+    // No bodies: the stock.
+    let plan = Plan::new(&auto, &kind("adaptive3d"), false, false, false);
+    assert_eq!(plan.source, Source::Stock);
+    // A selection: roughing keeps the tool inside it, finishing machines all of it.
+    ctx.geometry.loops = vec![polyline::rect(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0))];
+    let plan = Plan::new(&auto, &kind("pocket3d"), true, true, false);
+    assert_eq!((plan.source, plan.containment), (Source::Selection, Containment::Inside));
+    let (b, _, _) = bounds_for(&mut ctx, plan);
+    assert!(close(b.min.x, 3.0, 0.05) && close(b.max.x, 7.0, 0.05), "{b:?}");
+    let plan = Plan::new(&auto, &kind("scallop"), true, true, false);
+    assert_eq!(plan.containment, Containment::Center);
+    ctx.geometry.loops.clear();
+    // Grown far, the boundary stops at the stock (the tool's edge at its edge).
+    let wide = Boundary { source: Source::Part, containment: Containment::Center, offset: 100.0, ..Boundary::default() };
+    let (b, rep, _) = bounds_for(&mut ctx, Plan::new(&wide, &kind("parallel"), false, true, false));
+    assert!(close(b.min.x, -43.0, 0.3) && close(b.max.x, 63.0, 0.3), "{b:?}");
+    assert!(rep.clipped_to_stock);
+    // A clamp beside the part is kept clear of by the tool's radius and the clearance.
+    let clamp = DropMesh::new(&box_mesh(Vec3::new(30.0, 0.0, 0.0), Vec3::new(40.0, 20.0, 15.0)));
+    ctx.fixtures = Some(&clamp);
+    let near = Boundary { source: Source::Part, containment: Containment::Outside, offset: 20.0, ..Boundary::default() };
+    let (_, rep, loops) = bounds_for(&mut ctx, Plan::new(&near, &kind("adaptive3d"), false, true, false));
+    assert!(rep.fixtures_avoided);
+    assert!(!polyline::set_contains(&loops, Vec2::new(35.0, 10.0)), "not over the clamp");
+    assert!(!polyline::set_contains(&loops, Vec2::new(27.0, 10.0)), "3 mm radius + 1 mm clearance from the clamp");
+    assert!(polyline::set_contains(&loops, Vec2::new(-10.0, 10.0)), "the other side is free");
+    ctx.fixtures = None;
+    // And the toolpath: adaptive clearing now stays around the part, not across the whole stock.
+    ctx.boundary = Plan::new(&auto, &kind("adaptive3d"), false, true, false);
+    ctx.boundary_cache = Default::default();
+    let mut o = op(kind("adaptive3d"));
+    o.tolerance = 0.05;
+    if let OpKind::Adaptive3d { stepdown, optimal_load, .. } = &mut o.kind {
+        *stepdown = 5.0;
+        *optimal_load = 1.0;
+    }
+    let (tp, notice) = generate(&o, &ctx).unwrap();
+    let (lo, hi) = cutting_bounds(&tp);
+    assert!(lo.x > -6.5 && hi.x < 26.5, "{lo:?} {hi:?}");
+    let _ = notice;
+    let r = ctx.boundary_report().unwrap();
+    let mut n = crate::notice::Notice::default();
+    r.add_to(&mut n);
+    assert_eq!(n.values["boundary_source"], "part");
 }

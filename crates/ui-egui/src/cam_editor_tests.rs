@@ -265,3 +265,24 @@ fn setups_open_with_stock_origin_and_machine_and_turn_over() {
     assert_eq!(h.app.session.doc.manufacture.setup(bottom).unwrap().machine.post, "makera");
     assert_eq!(h.app.session.doc.manufacture.setups[0].id, top, "the first setup is untouched");
 }
+
+#[test]
+fn area_operations_show_their_boundary() {
+    let mut h = Harness::new();
+    pocket(&mut h);
+    let tool = h.app.session.doc.manufacture.tools.tools[0].id;
+    let id = h.app.run("cam.operation.adaptive3d", json!({"tool": tool})).unwrap()["id"].as_u64().unwrap();
+    crate::browser::cam::edit(&mut h.app, id);
+    h.frames(20);
+    for w in ["Boundary", "Machine within", "Tool", "Additional offset (mm)", "Stay within the stock", "Keep clear of fixtures"] {
+        assert!(h.widget(w).is_some(), "{w} is drawn");
+    }
+    let ed = h.app.cam_editor.as_mut().unwrap();
+    assert_eq!(ed.draft["boundary"]["source"], "auto");
+    ed.draft["boundary"]["source"] = json!("bounding_box");
+    ed.draft["boundary"]["containment"] = json!("center");
+    h.frames(1);
+    h.step(&json!({"widget": "Apply"})).unwrap();
+    let b = h.app.session.doc.manufacture.operation(id).unwrap().1.boundary;
+    assert_eq!((b.source, b.containment), (cam::boundary::Source::BoundingBox, cam::boundary::Containment::Center));
+}

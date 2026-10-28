@@ -92,7 +92,10 @@ Carvera Air to 13 000 rev/min and 4 000 mm/min, tool changes by hand; Z1 150 W t
    `cam.tool.set {"tool":7,"number":4}`, so the machine changes them itself. On the Air and Z1
    every change is by hand, and the program pauses and asks for each tool.
 6. If clamps or a vise jaw sit near the toolpath, model them as bodies and list them as the
-   setup's `fixtures`; the simulation then checks the tool against them.
+   setup's `fixtures`; the toolpaths then keep clear of them (the boundary's keep-out) and the
+   simulation checks the tool against them. Say how each operation's boundary was chosen (its
+   notice says why): roughing clears around the part, not the whole block, unless they want the
+   whole stock cleared (`boundary: "stock"`).
 7. **Features on the bottom?** Add a second setup that turns the part over:
    `cam.setup.create {"name":"Bottom","machine":"carvera","flip":"x"}`. It starts from what the
    top left and its origin is the turned-over stock's front-left top corner. Tell them to flip

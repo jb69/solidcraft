@@ -41,6 +41,7 @@ const COMMON: &[&str] = &[
     "stock_to_leave_radial",
     "stock_to_leave_axial",
     "rest_machining",
+    "boundary",
     "type",
 ];
 
@@ -246,6 +247,13 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         _ => 0,
     };
     let setups: Vec<(u64, String)> = app.session.doc.manufacture.setups.iter().map(|x| (x.id, x.name.clone())).collect();
+    // The boundary the last generation used, from its notice.
+    let used: Option<String> = match ed.target {
+        Target::Operation(id) => {
+            app.session.cam.operations.get(&id).and_then(|g| g.notice.issues.iter().find(|i| i.code == "boundary").map(|i| i.message.clone()))
+        }
+        _ => None,
+    };
     let tools: Vec<(u64, String)> = app.session.doc.manufacture.tools.tools.iter().map(|tl| (tl.id, format!("T{} {}", tl.number, tl.name))).collect();
     let mut open = true;
     let (mut ok, mut apply_now, mut cancel, mut reload) = (false, false, false, false);
@@ -286,7 +294,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     egui::ScrollArea::vertical().max_height(480.0).auto_shrink([false, true]).show(ui, |ui| {
                         let CamEditor { draft, inputs, target, flip, .. } = &mut ed;
                         match target {
-                            Target::Operation(_) => fields(ui, draft, inputs, &tools),
+                            Target::Operation(_) => fields(ui, draft, inputs, &tools, used.as_deref()),
                             Target::Tool(_) => tool_fields(ui, draft, inputs, uses),
                             Target::Setup(id) => {
                                 if let Some(axis) = setup_fields(ui, draft, inputs, *id, &setups) {
@@ -375,7 +383,7 @@ fn switch(ed: &mut CamEditor, to: Tab) {
 }
 
 /// The Fields tab.
-fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u64, String)]) {
+fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u64, String)], used: Option<&str>) {
     let Value::Object(op) = draft else { return };
     // Name, type, tool, enabled.
     if let Some(Value::String(name)) = op.get_mut("name") {
@@ -446,6 +454,42 @@ fn fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, tools: &[(u
             }
         }
     });
+    // Where the operation may machine (area operations).
+    let bounded = serde_json::from_value::<cam::ops::OpKind>(json!({"type": ty})).is_ok_and(|k| k.uses_boundary());
+    if bounded {
+        if !op.contains_key("boundary") {
+            op.insert("boundary".into(), serde_json::to_value(cam::boundary::Boundary::default()).unwrap_or(Value::Null));
+        }
+        if let Some(Value::Object(b)) = op.get_mut("boundary") {
+            section(ui, "Boundary", true, |ui| {
+                let t = Tokens::get();
+                let sources = cam::ops::variants::<cam::boundary::Source>(Value::Null);
+                let contain = cam::ops::variants::<cam::boundary::Containment>(Value::Null);
+                for (key, label) in [
+                    ("source", "Machine within"),
+                    ("containment", "Tool"),
+                    ("offset", "Additional offset (mm)"),
+                    ("clip_to_stock", "Stay within the stock"),
+                    ("avoid_fixtures", "Keep clear of fixtures"),
+                    ("fixture_clearance", "Fixture clearance (mm)"),
+                ] {
+                    let choices = match key {
+                        "source" => Some(sources.as_slice()),
+                        "containment" => Some(contain.as_slice()),
+                        _ => None,
+                    };
+                    if let Some(v) = b.get_mut(key) {
+                        value(ui, inputs, &format!("boundary.{key}"), label, v, choices);
+                    }
+                }
+                let hint = "Auto: roughing clears around the part's outline, wall finishing reaches the walls from outside, surface finishing keeps to the part, and a selection bounds the operation to what was picked.";
+                ui.label(RichText::new(crate::i18n::tr_label(hint)).color(t.text_dim));
+                if let Some(u) = used {
+                    ui.label(RichText::new(format!("Last generated: {u}")).color(t.text_dim));
+                }
+            });
+        }
+    }
     if let Some(g) = op.get_mut("geometry") {
         section(ui, "Geometry", false, |ui| {
             let sources = cam::ops::variants::<cam::setup::Geometry>(json!({"source": "\u{1}"}));

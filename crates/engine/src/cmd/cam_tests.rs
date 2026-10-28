@@ -327,6 +327,7 @@ fn hostile_cam_params_never_panic() {
         "points",
         "loops",
         "feeds",
+        "boundary",
     ];
     for cmd in cmds {
         for k in keys {
@@ -360,6 +361,11 @@ fn hostile_cam_params_never_panic() {
         json!({"heights": {"bottom": -1000}}),
         json!({"type": "parallel", "angle_deg": 1e9}),
         json!({"type": "rotary", "stepover": 0.001}),
+        json!({"boundary": {"offset": 1e300}}),
+        json!({"boundary": {"offset": -1e9, "containment": "inside"}}),
+        json!({"type": "parallel", "boundary": {"source": "rest", "fixture_clearance": 1e300}}),
+        json!({"boundary": "selection"}),
+        json!({"boundary": {"source": "bounding_box", "clip_to_stock": false, "offset": 5000}}),
     ] {
         let mut p = json!({"setup": setup, "tool": flat, "type": "pocket3d"});
         for (k, v) in params.as_object().unwrap() {
@@ -910,3 +916,47 @@ fn a_second_setup_turns_the_part_over_and_starts_from_what_the_first_left() {
     assert_eq!(list["setups"][0]["stock"]["mode"], "relative_box", "{list}");
 }
 
+#[test]
+fn area_operations_machine_within_a_boundary_chosen_for_them() {
+    let mut s = block();
+    let tool = add_flat(&mut s, 6.0);
+    // A big block of stock around the part: 30 mm on every side.
+    let st = run(
+        &mut s,
+        "cam.setup.create",
+        json!({"stock": {"mode": "relative_box", "x_neg": 30, "x_pos": 30, "y_neg": 30, "y_pos": 30, "z_pos": 1}}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let rough =
+        run(&mut s, "cam.operation.adaptive3d", json!({"setup": st, "tool": tool, "stepdown": 3, "optimal_load": 1.5}))["id"].as_u64().unwrap();
+    let g = run(&mut s, "cam.generate", json!({}));
+    let op = &g["setups"][0]["operations"][0];
+    assert_eq!(op["notice"]["values"]["boundary_source"], "part", "{op}");
+    assert_eq!(op["notice"]["values"]["boundary_containment"], "outside");
+    let issues = op["notice"]["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|i| i["code"] == "boundary" && i["message"].as_str().unwrap().contains("roughing around the part")), "{issues:?}");
+    let around = s.cam.operations.get(&rough).unwrap().stats.time_s;
+    let tp = run(&mut s, "cam.toolpath", json!({"operation": rough, "limit": 1}));
+    let lo = tp["bounds"]["min"][0].as_f64().unwrap();
+    assert!(lo > -7.0, "stays around the 40 × 30 part, not across the stock: {}", tp["bounds"]);
+    // The whole stock, asked for by name: much longer.
+    run(&mut s, "cam.operation.set", json!({"operation": rough, "boundary": "stock"}));
+    run(&mut s, "cam.generate", json!({}));
+    let whole = s.cam.operations.get(&rough).unwrap().stats.time_s;
+    assert!(whole > around * 1.5, "whole stock {whole} s vs around the part {around} s");
+    // A bad boundary is refused, with what it takes.
+    let e = fails(&mut s, "cam.operation.set", json!({"operation": rough, "boundary": {"containment": "sideways"}}));
+    assert!(e.contains("containment"), "{e}");
+    // Finishing the top: the tool's centre on the part.
+    let ball = run(&mut s, "cam.tool.add", json!({"name": "6 ball", "kind": "ball", "diameter": 6, "flute_length": 20, "overall_length": 50}))["id"]
+        .as_u64()
+        .unwrap();
+    let fin = run(&mut s, "cam.operation.parallel", json!({"setup": st, "tool": ball, "stepover": 1}))["id"].as_u64().unwrap();
+    run(&mut s, "cam.generate", json!({}));
+    let n = run(&mut s, "cam.notices", json!({}));
+    let fin_n = n["notices"].as_array().unwrap().iter().find(|o| o["operation"] == fin).unwrap();
+    assert_eq!(fin_n["values"]["boundary_containment"], "center", "{fin_n}");
+    let area = fin_n["values"]["boundary_area_mm2"].as_f64().unwrap();
+    assert!((area - 1200.0).abs() < 40.0, "the 40 × 30 outline: {area}");
+}

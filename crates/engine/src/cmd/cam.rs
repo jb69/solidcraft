@@ -19,7 +19,7 @@ use solidcraft_cam::ops::{Context, OpKind, ResolvedGeometry};
 use solidcraft_cam::setup::{Geometry, Operation, Setup, Stock};
 use solidcraft_cam::tool::{Tool, ToolKind};
 use solidcraft_cam::toolpath::{MoveKind, Toolpath, ToolpathStats};
-use solidcraft_geom::{Aabb2, Aabb3, Mesh, Vec2, Vec3};
+use solidcraft_geom::{Aabb3, Mesh, Vec2, Vec3};
 
 use super::CommandSpec;
 use crate::{
@@ -270,7 +270,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists the machine presets").noundo(),
     CommandSpec::new("cam.operation.add", "Add Operation", operation_add)
         .icon("cam")
-        .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
+        .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; boundary?: where an area operation (3D roughing and finishing) may machine: a source name or {source: auto | stock | part | bounding_box | selection | rest, containment: auto | inside | center | outside, offset, clip_to_stock, avoid_fixtures, fixture_clearance} (auto: roughing clears a ring a tool wide around the part's outline, wall finishing runs outside it, surface finishing keeps the tool's centre on the part, a selection bounds it; each notice says which and why); heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
     CommandSpec::new("cam.operation.set", "Edit Operation", operation_set).icon("cam").params("operation: id; any cam.operation.add field (type included): changes an operation; cam.generate again afterwards"),
     CommandSpec::new("cam.operation.remove", "Remove Operation", operation_remove).icon("cam").params("operation: id"),
     CommandSpec::new("cam.toolpath.visibility", "Show/Hide Toolpath", toolpath_visibility)
@@ -759,6 +759,7 @@ const COMMON_KEYS: &[&str] = &[
     "stock_to_leave_axial",
     "rest_machining",
     "orientation",
+    "boundary",
     "id",
 ];
 
@@ -863,6 +864,19 @@ fn operation_from(p: &Value, cmd: &str, base: Value, setup: &Setup, tools: &cam:
         let mut base = v.get("linking").cloned().unwrap_or_else(|| serde_json::to_value(cam::linking::Linking::default()).unwrap_or(Value::Null));
         merge_json(&mut base, l, &[]);
         v["linking"] = base;
+    }
+    if let Some(b) = p.get("boundary") {
+        // A source name alone, or the boundary's fields.
+        let given = match b {
+            Value::String(src) => json!({"source": src.trim().to_ascii_lowercase().replace([' ', '-'], "_")}),
+            other => other.clone(),
+        };
+        let mut base = v.get("boundary").cloned().unwrap_or_else(|| serde_json::to_value(cam::boundary::Boundary::default()).unwrap_or(Value::Null));
+        merge_json(&mut base, &given, &[]);
+        serde_json::from_value::<cam::boundary::Boundary>(base.clone()).map_err(|e| {
+            bad(cmd, format!("boundary: {e} (source: auto | stock | part | bounding_box | selection | rest; containment: auto | inside | center | outside; offset, clip_to_stock, avoid_fixtures, fixture_clearance)"))
+        })?;
+        v["boundary"] = base;
     }
     for k in ["tolerance", "stock_to_leave_radial", "stock_to_leave_axial", "rest_machining"] {
         if let Some(x) = p.get(k) {
@@ -1538,18 +1552,7 @@ fn resolve_geometry(
         Geometry::Stock => {}
         Geometry::Silhouette => {
             let Some(m) = model else { return Err(bad(cmd, "silhouette geometry needs model bodies in the setup")) };
-            let b = m.bounds;
-            let mut b2 = Aabb2::default();
-            b2.add(Vec2::new(b.min.x - 1.0, b.min.y - 1.0));
-            b2.add(Vec2::new(b.max.x + 1.0, b.max.y + 1.0));
-            let cell = (tol * 4.0).max(0.05).max(b2.diagonal() / 3000.0);
-            let probe = Tool::new(0, "probe", ToolKind::FlatEnd, 1e-3);
-            let floor = b.min.z - 1.0;
-            let map = cam::heightmap::HeightMap::from_fn(b2, cell, |p| m.drop_z(&probe, p, floor).map_or(floor, |c| c.z))
-                .map_err(|e| engine_err(cmd, e))?;
-            // The outer loops only: a through hole is no part of the silhouette's profile.
-            let loops: Vec<Vec<Vec2>> = map.contours(floor + 0.5).iter().map(|l| cam::polyline::simplify_closed(l, tol)).collect();
-            g.loops = loops.iter().enumerate().filter(|(i, _)| cam::polyline::nesting_depth(&loops, *i) == 0).map(|(_, l)| l.clone()).collect();
+            g.loops = cam::boundary::silhouette(m, tol).map_err(|e| engine_err(cmd, e))?;
         }
         Geometry::Loops { loops } => {
             g.loops = cam::polyline::normalize_set(loops);
@@ -1839,6 +1842,8 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
         _ => None,
     };
     let rest_map = rest_map.as_ref();
+    let has_selection = !geometry.loops.is_empty();
+    let has_model = model_mesh.as_ref().is_some_and(|m| !m.is_empty());
     let ctx = Context {
         tool: &tool,
         model: model_mesh.as_ref(),
@@ -1852,6 +1857,8 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
         stock_to_leave_radial: op.stock_to_leave_radial,
         stock_to_leave_axial: op.stock_to_leave_axial,
         rest: rest_map,
+        boundary: cam::boundary::Plan::new(&op.boundary, &op.kind, has_selection, has_model, rest_map.is_some()),
+        boundary_cache: Default::default(),
     };
     let (tp, n) = match cam::ops::generate(&op, &ctx) {
         Ok(x) => x,
@@ -1862,6 +1869,10 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
         }
     };
     notice.merge(n);
+    // Which boundary the operation machined within, and why.
+    if let Some(rep) = ctx.boundary_report() {
+        rep.add_to(&mut notice);
+    }
     // To the WCS.
     let tp_wcs = tp.transformed(|p| orient.to_world(p), |a| orient.dir_to_world(a));
     let stats = tp_wcs.stats(machine.rapid_feed, None);

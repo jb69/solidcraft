@@ -678,7 +678,9 @@ operation or a tool shows the editor: a Fields tab with an input for every value
 tab with the same draft as text, both applied through `cam.operation.set`. Setups run in sequence: a later setup starts from the
 stock the earlier ones left (turned over exactly along the tool axis, two-sided per column),
 `flip` turns its origin to the new top corner, rest machining sees the earlier cuts, and its
-chain depends on the earlier setup's.
+chain depends on the earlier setup's. Area operations machine within a boundary (part silhouette,
+stock, bounding box, selection or rest material, with inside / center / outside containment,
+an offset, stock clipping and fixture keep-outs) chosen automatically for each kind.
 
 Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image
 (grey-level) laser engraving, drag-to-reorder in the Browser, CAM

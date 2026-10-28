@@ -59,6 +59,17 @@ cam.post            {setup, path: part.nc}   → G-code
 `cam.notices` lists every operation's report (with `stale: true` once the design changed);
 `cam.inspect` says what exists and what needs attention; `cam.toolpath` returns the moves.
 
+## Machining boundaries
+
+Area operations (3D roughing and finishing, multi-axis contour) machine within a boundary:
+a source (the stock, the part's silhouette, its bounding box, the selection, or the rest
+material), a tool containment (inside, center, outside), an offset, clipping to the stock and
+keep-out areas around fixtures. `auto` chooses for the operation: roughing clears a ring a tool
+wide around the part rather than the whole stock, wall finishing reaches the walls from
+outside, surface finishing keeps to the part, and a selection bounds the operation to what was
+picked. Each notice says which boundary was used and why. See
+[cam-boundaries.md](cam-boundaries.md).
+
 ## Setups in sequence: the top and the bottom
 
 Each setup defines the stock and the origin its operations are measured from (its WCS). A

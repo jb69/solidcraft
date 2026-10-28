@@ -26,9 +26,6 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
    (`laser_cut`, `laser_engrave`) needs a laser tool (`cam.tool.kit` adds one for a machine
    with a module) and turning (`turn_face`, `turn_profile`, `turn_groove`, `turn_thread`) a
    `_4axis` machine with a cylinder stock along x.
-4. Operations are parametric steps: changing one (or its tool, the setup or the model) makes
-   it and every later one stale, and `cam.generate` regenerates only those. Reorder with
-   `cam.operation.move`; read `regenerated` and `reused` in the result.
 3. `cam.machine.list` and `cam.post.list` when the machine matters (4/5-axis work needs a
    4/5-axis machine on the setup and the `fiveaxis` post). For a Makera Carvera, Carvera Air
    or Z1 put the preset on the setup (`machine: "carvera"`, `"carvera_air"`, `"z1"`, or the
@@ -37,6 +34,9 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
    the work area and tool changes against the machine, and `cam.post` writes the `makera`
    dialect (`.cnc`) by itself.
 
+4. Operations are parametric steps: changing one (or its tool, the setup or the model) makes
+   it and every later one stale, and `cam.generate` regenerates only those. Reorder with
+   `cam.operation.move`; read `regenerated` and `reused` in the result.
 ## Build
 - **Tools** first: `cam.tool.add {name, kind, diameter, flute_length, overall_length, feeds}`.
   Kinds: `flat`, `ball`, `bull` (+ `corner_radius`), `chamfer`, `drill`, `spot`, `tapered_ball`.

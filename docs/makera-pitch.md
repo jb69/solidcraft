@@ -39,6 +39,34 @@ costs a subscription, and the software is not built around these machines. This 
 give every Makera owner that depth in free, open software that knows their machine, so the
 hardware can do everything it is capable of without a second licence.
 
+## An AI assistant bridges the gap
+
+Makera's included software is aimed at new users who have never used CAM, and its guided modes
+suit them well. The gap is between those guided modes and professional CAM, and most owners
+would not cross it alone: a professional package expects you to already know which roughing
+and finishing strategies to use, at what stepover and depth, and why.
+
+SolidCraft is built to be driven by an AI assistant, which can walk a user across that gap:
+
+- The user describes the part and the goal in plain words, for example an aluminium bracket
+  with a smooth curved top and tapped M4 holes, to run on a Carvera.
+- The assistant, guided by a tuned skill, picks the machine preset and the tool kit, proposes
+  the operations in order, and explains each one in plain language: why an adaptive rough
+  first, why a waterline finish on the steep walls, and why the holes are tapped.
+- It generates the toolpaths, reads the notices every command returns (a feed past the
+  machine's limit, a tool too short, an operation gone stale) and fixes what they flag, then
+  simulates and shows the cut before anything is posted.
+- The user decides at every step and learns as they go. The assistant never sends a job to
+  the machine: the user loads the `.cnc` file into Makera's controller.
+
+A skill is a short set of instructions in the repository that tells the assistant how to do a
+kind of work well. The `solidcraft-cam` skill already teaches it the commands, the checks and
+the Makera presets. Makera-tuned skills are the next step: Makera's recommended feeds for each
+material, workholding and probing routines, a first-job checklist, and the strategy choices that
+work best on these machines, written with Makera's input and refined by the test results.
+Because skills are plain text in a public repository, Makera can read, review and contribute to
+them directly.
+
 ## What exists today
 
 - **CAD**: sketches with a constraint solver, a parametric timeline, a B-rep kernel,
@@ -124,6 +152,8 @@ Either tier on **loan** for the test period (I return it at my cost) or **at cos
 cover materials, tooling wear and measuring equipment. I also ask for:
 
 - **One short call with an engineer** to answer the open questions below.
+- **Makera's recommendations** (feeds per material, workholding, the first-job routine) to tune
+  the assistant's skill for these machines.
 - **Permission to say "tested on a Makera Carvera"** (and Air or Z1) once the tests pass.
 
 ## What Makera gets
@@ -133,10 +163,12 @@ cover materials, tooling wear and measuring equipment. I also ask for:
   Makera presets, post and kit live in the main repository, so anyone can read, fix and extend
   them, and they are maintained in public with the rest of SolidCraft rather than in a private
   fork.
-- **An AI-assistant-first workflow.** Every step is a JSON command with a self-describing
-  result and a notice: what went well, what was clamped, what to change, with a stable code
-  and a suggested fix. A whole Carvera job is six commands: add the kit, create a setup with
-  `machine: "carvera"`, add operations, generate, simulate, post.
+- **A path from beginner to advanced for its customers.** An assistant guided by
+  Makera-tuned skills takes new users beyond the guided modes one explained step at a time.
+  Every step is a JSON command with a self-describing result and a notice: what went well,
+  what was clamped, what to change, with a stable code and a suggested fix. A whole Carvera
+  job is six commands: add the kit, create a setup with `machine: "carvera"`, add operations,
+  generate, simulate, post.
 - **Posts tested on Makera's dialect**, with automated regression tests built from what the
   machines teach me, run by the project's CI on every change to the main repository.
 - **Published results**: a public report with programs, measurements and photos, and credit

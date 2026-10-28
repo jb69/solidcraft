@@ -1,4 +1,4 @@
-# SolidCraft CAM for Makera machines: a proposal (draft)
+# SolidCraft CAM for Makera machines: a pathway to push their boundaries (draft)
 
 *A request to Makera for test machines, from an independent contributor to the open-source
 SolidCraft project. Draft of 28 October 2026.*
@@ -15,7 +15,8 @@ spindles, feeds, tool changers, collets, rotary modules and laser modules, a pos
 dialect, and a tool kit for the machines. It is at an early stage and none of it has run on a
 Makera machine yet. I am asking Makera to lend (or sell at cost) the machines to test it on. In
 return every Makera owner gets a free, open CAD-to-G-code path for intricate work, tested on
-real hardware and maintained in public, that people and their AI assistants can use.
+real hardware and maintained in public, and an AI assistant whose skills give them capability
+beyond their own training: a pathway to push the boundaries of what these machines do.
 
 ## Who I am and why
 
@@ -39,12 +40,20 @@ costs a subscription, and the software is not built around these machines. This 
 give every Makera owner that depth in free, open software that knows their machine, so the
 hardware can do everything it is capable of without a second licence.
 
-## An AI assistant bridges the gap
+## An AI assistant bridges the gap, and goes beyond it
 
 Makera's included software is aimed at new users who have never used CAM, and its guided modes
 suit them well. The gap is between those guided modes and professional CAM, and most owners
 would not cross it alone: a professional package expects you to already know which roughing
 and finishing strategies to use, at what stepover and depth, and why.
+
+An assistant with the right skills changes who can do intricate work. A skill carries an
+experienced machinist's judgement (which strategy suits a steep wall, how much to leave for the
+finish, when to thread-mill rather than tap, how to hold a thin part), so an untrained user
+works with that judgement from the first job instead of after years of practice. The aim is not
+only to catch beginners up but to let them push past what they could do alone: rest machining,
+finishing strategies matched to the surface, turning and threads on the rotary axis, and
+multi-axis work, each explained as it is used.
 
 SolidCraft is built to be driven by an AI assistant, which can walk a user across that gap:
 
@@ -163,8 +172,10 @@ cover materials, tooling wear and measuring equipment. I also ask for:
   Makera presets, post and kit live in the main repository, so anyone can read, fix and extend
   them, and they are maintained in public with the rest of SolidCraft rather than in a private
   fork.
-- **A path from beginner to advanced for its customers.** An assistant guided by
-  Makera-tuned skills takes new users beyond the guided modes one explained step at a time.
+- **A pathway for its customers to push the machines' boundaries.** An assistant guided by
+  Makera-tuned skills gives new users capability beyond their own training and takes them
+  beyond the guided modes one explained step at a time, so more owners make the intricate
+  parts the hardware is capable of.
   Every step is a JSON command with a self-describing result and a notice: what went well,
   what was clamped, what to change, with a stable code and a suggested fix. A whole Carvera
   job is six commands: add the kit, create a setup with `machine: "carvera"`, add operations,

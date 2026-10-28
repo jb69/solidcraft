@@ -29,9 +29,15 @@ are a good way in, and they get a first part cut quickly. Where I want more is i
 rest machining that knows what earlier operations removed, a choice of 3D finishing strategies
 for steep and shallow areas, pencil passes in corners, turning and threads on the rotary axis,
 true multi-axis toolpaths, and a simulation that shows the stock, the tool and every move before
-the machine runs. Professional CAM packages offer that depth but cost a subscription and are not
-built around these machines. This module aims to give Makera owners that depth in free, open
-software that knows their machine, so the hardware can do everything it is capable of.
+the machine runs.
+
+The machines are more capable than the software that comes with them, and owners know it: many
+of the most impressive Carvera parts are programmed in Fusion on a paid licence, and Makera
+itself publishes a Fusion post processor and machine definitions for the Carvera and Carvera
+Air (its CarveraProfiles repository) because that is how its advanced users work. That depth
+costs a subscription, and the software is not built around these machines. This module aims to
+give every Makera owner that depth in free, open software that knows their machine, so the
+hardware can do everything it is capable of without a second licence.
 
 ## What exists today
 

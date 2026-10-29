@@ -980,3 +980,41 @@ fn area_operations_machine_within_a_boundary_chosen_for_them() {
     let area = fin_n["values"]["boundary_area_mm2"].as_f64().unwrap();
     assert!((area - 1200.0).abs() < 40.0, "the 40 × 30 outline: {area}");
 }
+
+#[test]
+fn the_origin_goes_to_a_coordinate_a_point_of_the_stock_or_model_or_a_placed_point() {
+    use solidcraft_geom::Vec3;
+    let mut s = block();
+    add_flat(&mut s, 6.0);
+    let id = run(&mut s, "cam.setup.create", json!({"name": "Top"}))["id"].as_u64().unwrap();
+    let origin = |s: &Session| s.doc.manufacture.setup(id).unwrap().wcs.origin;
+    let near = |a: Vec3, b: [f64; 3]| (a - Vec3::new(b[0], b[1], b[2])).len() < 1e-6;
+    // A coordinate, as a pick on the model gives it.
+    run(&mut s, "cam.setup.set", json!({"setup": id, "origin": [10, 10, 10]}));
+    assert!(near(origin(&s), [10.0, 10.0, 10.0]), "{:?}", origin(&s));
+    // The stock's top front-left corner (the default point), and the model's centre top: the
+    // stock is 1 mm round the 40 × 30 × 10 block and 1 mm above it.
+    run(&mut s, "cam.setup.set", json!({"setup": id, "origin_at": {}}));
+    assert!(near(origin(&s), [-1.0, -1.0, 11.0]), "{:?}", origin(&s));
+    run(&mut s, "cam.setup.set", json!({"setup": id, "origin_at": {"of": "model", "x": "center", "y": "center", "z": "top"}}));
+    assert!(near(origin(&s), [20.0, 15.0, 10.0]), "{:?}", origin(&s));
+    // The relative stock stays round the model wherever the origin is.
+    let b = super::cam::stock_shape_for_tests(&s, id).bounds();
+    assert!((b.min.x + 21.0).abs() < 1e-6 && (b.max.z - 1.0).abs() < 1e-6, "{b:?}");
+    // A point the designer placed.
+    run(&mut s, "construct.point.vertex", json!({"point": {"vertex": [40, 30, 10]}, "name": "Datum"}));
+    run(&mut s, "cam.setup.set", json!({"setup": id, "origin": {"point": "Datum"}}));
+    assert!(near(origin(&s), [40.0, 30.0, 10.0]), "{:?}", origin(&s));
+    // A fixed box is given from the origin: moving the origin keeps it where it is.
+    run(&mut s, "cam.setup.set", json!({"setup": id, "origin": [0, 0, 0], "stock": {"mode": "fixed_box", "min": [-2, -2, 0], "max": [42, 32, 12]}}));
+    run(&mut s, "cam.setup.set", json!({"setup": id, "origin_at": {"x": "left", "y": "front", "z": "top"}}));
+    assert!(near(origin(&s), [-2.0, -2.0, 12.0]), "{:?}", origin(&s));
+    let b = super::cam::stock_shape_for_tests(&s, id).bounds();
+    assert!(b.min.x.abs() < 1e-6 && (b.max.x - 44.0).abs() < 1e-6 && (b.min.z + 12.0).abs() < 1e-6, "{b:?}");
+    // Bad requests say what they take.
+    assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": {"point": "Nowhere"}})).contains("no construction point"));
+    assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin_at": {"x": "sideways"}})).contains("left"));
+    assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": [1e9, 0, 0]})).contains("origin"));
+    assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": [0, 0, 0], "origin_at": {}})).contains("not both"));
+    assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": "here"})).contains("coordinate"));
+}

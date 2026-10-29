@@ -96,8 +96,26 @@ pub struct CamEditor {
     inputs: Inputs,
     /// The last Apply's outcome: a refusal (true) or the warnings it gave (false).
     pub message: Option<(String, bool)>,
-    /// A setup to turn over about this axis with the next Apply (`cam.setup.set`'s `flip`).
-    pub flip: Option<&'static str>,
+    /// What the next Apply adds to `cam.setup.set`: `flip` (turn the setup over), `origin` (a
+    /// coordinate or a construction point) or `origin_at` (a point of the stock or model).
+    pub place: Option<Value>,
+    /// Placing a setup's origin: the choices in the form, and picking on the model.
+    pub origin: OriginForm,
+}
+
+/// Placing a setup's origin: which point of the stock or model, which construction point, and
+/// picking on the model (the snap under the pointer, and the selection when picking began, so
+/// the click that picks is the one that changes it).
+#[derive(Default)]
+pub struct OriginForm {
+    of: usize,
+    x: usize,
+    y: usize,
+    z: usize,
+    point: usize,
+    pub picking: bool,
+    before: Option<Vec<solidcraft_engine::Sel>>,
+    hover: Option<(solidcraft_engine::Sel, Option<crate::dialogs_assembly::SnapPt>)>,
 }
 
 /// The text typed in each field (by the parameter's path), so a value half typed survives the
@@ -119,7 +137,8 @@ impl CamEditor {
             text_error: None,
             inputs: Inputs::default(),
             message: None,
-            flip: None,
+            place: None,
+            origin: OriginForm::default(),
         }
     }
 
@@ -242,8 +261,10 @@ pub fn apply(app: &mut SolveApp, ed: &mut CamEditor) -> bool {
     }
     let (command, key, id) = ed.target.command();
     params[key] = json!(id);
-    if let Some(axis) = ed.flip.take() {
-        params["flip"] = json!(axis);
+    if let Some(Value::Object(extra)) = ed.place.take() {
+        for (k, v) in extra {
+            params[k.as_str()] = v;
+        }
     }
     if let Value::Object(m) = &mut params {
         m.remove("id");
@@ -312,12 +333,27 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         _ => None,
     };
     let tools: Vec<(u64, String)> = app.session.doc.manufacture.tools.tools.iter().map(|tl| (tl.id, format!("T{} {}", tl.number, tl.name))).collect();
+    // Points the designer placed (construction points), for the setup's origin.
+    let points: Vec<String> = match ed.target {
+        Target::Setup(_) => app
+            .session
+            .model
+            .state()
+            .construct
+            .iter()
+            .filter(|c| matches!(c.geom, solidcraft_engine::doc::construct::ConstructGeom::Point(_)))
+            .map(|c| c.name.clone())
+            .collect(),
+        _ => Vec::new(),
+    };
     let picked = match ed.target {
         Target::Operation(_) | Target::NewOperation(_) => selection_geometry(app, ed.draft["type"].as_str().unwrap_or("")),
         _ => None,
     };
     let mut open = true;
     let (mut ok, mut apply_now, mut cancel, mut reload) = (false, false, false, false);
+    // The form scrolls within most of the window's height.
+    let tall = (ctx.content_rect().height() * 0.72).max(320.0);
     // Held by its top edge: opening and folding sections grows and shrinks it downwards
     // instead of moving it under the pointer.
     let area = ctx.content_rect();
@@ -352,8 +388,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             }
             match ed.tab {
                 Tab::Fields => {
-                    egui::ScrollArea::vertical().max_height(480.0).auto_shrink([false, true]).show(ui, |ui| {
-                        let CamEditor { draft, inputs, target, flip, .. } = &mut ed;
+                    egui::ScrollArea::vertical().max_height(tall).auto_shrink([false, true]).show(ui, |ui| {
+                        let CamEditor { draft, inputs, target, place, origin, .. } = &mut ed;
                         match target {
                             Target::Operation(_) => fields(ui, draft, inputs, &tools, used.as_deref(), picked.as_ref()),
                             Target::NewOperation(setup) => {
@@ -368,8 +404,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             }
                             Target::Tool(_) => tool_fields(ui, draft, inputs, uses),
                             Target::Setup(id) => {
-                                if let Some(axis) = setup_fields(ui, draft, inputs, *id, &setups) {
-                                    *flip = Some(axis);
+                                if let Some(extra) = setup_fields(ui, draft, inputs, *id, &setups, origin, &points) {
+                                    *place = Some(extra);
                                     apply_now = true;
                                 }
                             }
@@ -377,7 +413,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     });
                 }
                 Tab::Json => {
-                    egui::ScrollArea::vertical().max_height(480.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(tall).auto_shrink([false, true]).show(ui, |ui| {
                         let r = ui.add(
                             egui::TextEdit::multiline(&mut ed.text)
                                 .id(egui::Id::new("sc_cam_editor_json"))
@@ -420,6 +456,27 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         ed.base = now.clone();
         ed.set_draft(now);
         ed.message = None;
+    }
+    // Picking the origin on the model: the click that changes the selection places it, at the
+    // snap of what it picked (a coordinate).
+    if ed.origin.picking {
+        let sel = &app.session.selection;
+        match &ed.origin.before {
+            None => ed.origin.before = Some(sel.clone()),
+            Some(before) if before != sel => {
+                if let Some(snap) = sel.last().and_then(|x| crate::dialogs_assembly::snap_of(&app.session, x)) {
+                    ed.place = Some(json!({"origin": [snap.at.x, snap.at.y, snap.at.z]}));
+                    ed.origin.picking = false;
+                    apply_now = true;
+                } else {
+                    ed.origin.before = Some(sel.clone());
+                }
+            }
+            Some(_) => {}
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ed.origin.picking = false;
+        }
     }
     if ok || apply_now {
         let taken = apply(app, &mut ed);
@@ -727,10 +784,20 @@ fn tool_fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, uses: 
 }
 
 /// The Fields tab of a setup; returns an axis when a Turn Over button was pressed.
-fn setup_fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, id: u64, setups: &[(u64, String)]) -> Option<&'static str> {
+/// The setup's form; returns what to add to `cam.setup.set` when a button applies at once
+/// (turn over, place the origin).
+fn setup_fields(
+    ui: &mut egui::Ui,
+    draft: &mut Value,
+    inputs: &mut Inputs,
+    id: u64,
+    setups: &[(u64, String)],
+    of: &mut OriginForm,
+    points: &[String],
+) -> Option<Value> {
     let Value::Object(st) = draft else { return None };
     let t = Tokens::get();
-    let mut flip = None;
+    let mut flip: Option<Value> = None;
     if let Some(Value::String(name)) = st.get_mut("name") {
         crate::ui_kit::row(ui, "Name", |ui| crate::ui_kit::text_field(ui, name, ""));
     }
@@ -769,12 +836,17 @@ fn setup_fields(ui: &mut egui::Ui, draft: &mut Value, inputs: &mut Inputs, id: u
             );
             ui.horizontal(|ui| {
                 if crate::ui_kit::button(ui, "Turn Over About X", crate::ui_kit::Button::Normal).clicked() {
-                    flip = Some("x");
+                    flip = Some(json!({"flip": "x"}));
                 }
                 if crate::ui_kit::button(ui, "Turn Over About Y", crate::ui_kit::Button::Normal).clicked() {
-                    flip = Some("y");
+                    flip = Some(json!({"flip": "y"}));
                 }
             });
+            // Put the origin somewhere: a point of the stock or the model, a point the designer
+            // placed, or picked on the model (it snaps as the pointer moves).
+            if let Some(extra) = origin_rows(ui, of, points) {
+                flip = Some(extra);
+            }
         });
     }
     // The machine: a preset, then its properties.
@@ -1114,6 +1186,82 @@ fn geometry_picks(g: &Value) -> Option<String> {
         1 => Some(format!("1 {}", n.1)),
         c => Some(format!("{c} {}s", n.1)),
     }
+}
+
+/// The origin's rows in the setup form; returns what to add to `cam.setup.set` when one of its
+/// buttons is pressed.
+fn origin_rows(ui: &mut egui::Ui, of: &mut OriginForm, points: &[String]) -> Option<Value> {
+    let t = Tokens::get();
+    let mut out = None;
+    ui.add_space(t.space_8);
+    ui.label(RichText::new("Place the origin").strong());
+    crate::ui_kit::row(ui, "On", |ui| crate::ui_kit::dropdown(ui, "cam_ed_origin_of", &mut of.of, &["Stock", "Model"]));
+    crate::ui_kit::row(ui, "X", |ui| crate::ui_kit::dropdown(ui, "cam_ed_origin_x", &mut of.x, &["Left", "Center", "Right"]));
+    crate::ui_kit::row(ui, "Y", |ui| crate::ui_kit::dropdown(ui, "cam_ed_origin_y", &mut of.y, &["Front", "Center", "Back"]));
+    crate::ui_kit::row(ui, "Z", |ui| crate::ui_kit::dropdown(ui, "cam_ed_origin_z", &mut of.z, &["Top", "Middle", "Bottom"]));
+    let on = ["stock", "model"].get(of.of).copied().unwrap_or("stock");
+    if crate::ui_kit::button(ui, "Place Origin", crate::ui_kit::Button::Normal)
+        .on_hover_text("Moves the origin to that point of the stock's or the model's box, in the setup's axes")
+        .clicked()
+    {
+        fn pick(i: usize, names: [&'static str; 3]) -> &'static str {
+            names.get(i).copied().unwrap_or(names[0])
+        }
+        out = Some(json!({"origin_at": {
+            "of": on,
+            "x": pick(of.x, ["left", "center", "right"]),
+            "y": pick(of.y, ["front", "center", "back"]),
+            "z": pick(of.z, ["top", "middle", "bottom"]),
+        }}));
+    }
+    // Points the designer placed for it.
+    if !points.is_empty() {
+        let refs: Vec<&str> = points.iter().map(String::as_str).collect();
+        of.point = of.point.min(points.len() - 1);
+        crate::ui_kit::row(ui, "Design point", |ui| crate::ui_kit::dropdown(ui, "cam_ed_origin_point", &mut of.point, &refs));
+        if crate::ui_kit::button(ui, "Use Point", crate::ui_kit::Button::Normal).clicked()
+            && let Some(name) = points.get(of.point)
+        {
+            out = Some(json!({"origin": {"point": name}}));
+        }
+    }
+    // Picked on the model: it snaps to vertices, edge midpoints, circle and face centres.
+    let label = if of.picking { "Stop Picking" } else { "Pick on Model" };
+    if crate::ui_kit::button(ui, label, crate::ui_kit::Button::Normal).clicked() {
+        of.picking = !of.picking;
+        of.before = None;
+        of.hover = None;
+    }
+    if of.picking {
+        ui.label(
+            RichText::new("Move over the model: the origin snaps to vertices, edge midpoints and circle and face centres. Click to place it; Esc stops.")
+                .color(t.warning),
+        );
+    }
+    out
+}
+
+/// While a setup's origin is being picked: the snap under the pointer, drawn over the model
+/// (called by the viewport after the model is drawn).
+pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, proj: &crate::viewport::Proj) {
+    let Some(mut ed) = app.cam_editor.take() else { return };
+    if ed.origin.picking {
+        let under = app.viewport.hover.as_ref().and_then(crate::viewport::hit_sel);
+        match under {
+            Some(sel) => {
+                let fresh = !matches!(&ed.origin.hover, Some((s, _)) if *s == sel);
+                if fresh {
+                    ed.origin.hover = Some((sel.clone(), crate::dialogs_assembly::snap_of(&app.session, &sel)));
+                }
+                if let Some((_, Some(s))) = ed.origin.hover.as_ref() {
+                    let t = Tokens::get();
+                    crate::dialogs_assembly::glyph(painter, proj, s, t.accent, app.cam.half_height(), Some(crate::dialogs_assembly::snap_name(s.kind)));
+                }
+            }
+            None => ed.origin.hover = None,
+        }
+    }
+    app.cam_editor = Some(ed);
 }
 
 /// The parameters a ramp kind or geometry source starts with.

@@ -283,6 +283,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
     if app.dialog.is_none() && app.tool.is_none() {
         crate::browser::occurrence_triad(app, ui, painter, proj);
     }
+    // A setup's origin being picked on the model: the snap under the pointer.
+    crate::cam_editor::overlay(app, painter, proj);
     let Some(mut d) = app.dialog.take() else { return };
     if matches!(d.kind, Kind::Assembly(_)) {
         crate::dialogs_assembly::overlay(app, painter, proj, &mut d);

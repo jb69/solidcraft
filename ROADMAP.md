@@ -684,7 +684,8 @@ an offset, stock clipping and fixture keep-outs) chosen automatically for each k
 Selected takes the viewport's faces or sketch profiles. The Browser groups setups under their
 machine with its tools; operations drag to reorder or into another setup; a new operation
 opens in the editor for the picked setup; editing clears an operation's toolpath; the
-simulation draws gouges red.
+simulation draws gouges red. The setup's origin is a coordinate set directly, at a point of the stock or
+model, at a construction point, or picked on the model with snapping.
 
 Not built yet: ramp finishing, geodesic finishing, multi-axis blend (registered, greyed), image
 (grey-level) laser engraving, arc output (G2/G3) in posts,

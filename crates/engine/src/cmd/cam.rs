@@ -265,7 +265,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.tool.list", "Tools", tool_list).icon("cam").params("lists the tool library").noundo(),
     CommandSpec::new("cam.setup.create", "Create Setup", setup_create).at("MANUFACTURE", "SETUP")
         .icon("cam")
-        .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} | {mode: from_setup, setup?: id (default the setup before)}: what the earlier setup's operations left, for rest machining the other side (default a box 1 mm around the model, flush at the bottom, for the first setup; from_setup for every later one); flip?: x | y: the WCS of the setup before turned over about its x or y axis, the origin at the turned-over stock's front-left top corner (machining the bottom: every operation is measured from this origin); machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc | carvera | carvera_4axis | carvera_air | carvera_air_4axis | z1 | z1_4axis or a machine object (cam.machine.list); program?: name for the post. Returns the setup with its id and the resolved stock"),
+        .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} | {mode: from_setup, setup?: id (default the setup before)}: what the earlier setup's operations left, for rest machining the other side (default a box 1 mm around the model, flush at the bottom, for the first setup; from_setup for every later one); flip?: x | y: the WCS of the setup before turned over about its x or y axis, the origin at the turned-over stock's front-left top corner (machining the bottom: every operation is measured from this origin); origin?: [x,y,z] | {point: construction point name}: the origin at this coordinate (design coordinates, axes kept; what picking a point on the model gives) or at a point the designer placed; origin_at?: {of: stock | model, x: left | center | right, y: front | center | back, z: top | middle | bottom} (default the stock's top front-left corner): the origin at that point of the stock's or the model's box, in the setup's axes; a fixed stock stays where it is; machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc | carvera | carvera_4axis | carvera_air | carvera_air_4axis | z1 | z1_4axis or a machine object (cam.machine.list); program?: name for the post. Returns the setup with its id and the resolved stock"),
     CommandSpec::new("cam.setup.set", "Edit Setup", setup_set).icon("cam").params("setup: id; any cam.setup.create field (flip: x | y turns the setup's WCS over, the origin at the stock's new front-left top corner): changes a setup; its toolpaths, and those of setups that carry its stock over, show as stale"),
     CommandSpec::new("cam.setup.remove", "Remove Setup", setup_remove).icon("cam").params("setup: id: removes a setup and its operations"),
     CommandSpec::new("cam.setup.list", "Setups", setup_list).icon("cam").params("lists the setups with their operations").noundo(),
@@ -608,6 +608,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(axis) = flip {
         setup.wcs = flipped_wcs(s, &setup, &axis, cmd)?;
     }
+    place_origin(s, &mut setup, p, cmd)?;
     let out = setup_json(s, &setup);
     s.doc_mut().manufacture.setups.push(setup);
     Ok(out)
@@ -643,6 +644,7 @@ fn setup_set(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(axis) = str_(p, "flip") {
         st.wcs = flipped_wcs(s, &st, axis, cmd)?;
     }
+    place_origin(s, &mut st, p, cmd)?;
     let out = setup_json(s, &st);
     if let Some(slot) = s.doc_mut().manufacture.setup_mut(id) {
         *slot = st;
@@ -650,6 +652,87 @@ fn setup_set(s: &mut Session, p: &Value) -> Result<Value> {
     // The toolpaths stay until the next generate: the setup's signature changed, so they (and
     // those of setups that carry its stock over) show as stale.
     Ok(out)
+}
+
+/// The setup's origin moved, its axes kept: to a coordinate (`origin: [x, y, z]`, design
+/// coordinates; what an interactive pick on the model gives) or to a point of the stock's or
+/// the model's box (`origin_at: {of: stock | model, x: left | center | right, y: front |
+/// center | back, z: top | middle | bottom}`, in the setup's own axes). Every operation is
+/// measured from the origin. A stock given in WCS coordinates (a fixed box or cylinder) stays
+/// where it is, unless the same call gives the stock.
+fn place_origin(s: &Session, st: &mut Setup, p: &Value, cmd: &str) -> Result<()> {
+    let world = match (p.get("origin").filter(|v| !v.is_null()), p.get("origin_at").filter(|v| !v.is_null())) {
+        (Some(_), Some(_)) => return Err(bad(cmd, "give `origin` (a coordinate) or `origin_at` (a point of the stock or model), not both")),
+        (Some(v), None) => {
+            // A point the designer placed (a construction point), by name.
+            let named = v.get("point").and_then(Value::as_str).map(|name| {
+                let state = s.model.state();
+                state
+                    .construct
+                    .iter()
+                    .find(|c| c.name == name)
+                    .and_then(|c| if let solidcraft_doc::construct::ConstructGeom::Point(q) = c.geom { Some(q) } else { None })
+                    .ok_or_else(|| bad(cmd, format!("no construction point `{name}`")))
+            });
+            let q = match named {
+                Some(q) => q?,
+                None => vec3(v).ok_or_else(|| bad(cmd, "`origin` is a coordinate [x, y, z] in mm, or {point: name} of a construction point"))?,
+            };
+            if q.x.abs().max(q.y.abs()).max(q.z.abs()) > 1e6 {
+                return Err(bad(cmd, "`origin` is more than a kilometre away"));
+            }
+            q
+        }
+        (None, Some(a)) => {
+            let pick = |key: &str, names: [&str; 3], default: usize| -> Result<f64> {
+                let v = a.get(key).and_then(Value::as_str).map(|x| x.trim().to_ascii_lowercase());
+                let i = match v.as_deref() {
+                    None => default,
+                    Some(x) if x == names[0] || x == "min" => 0,
+                    Some("center" | "centre" | "middle" | "mid") => 1,
+                    Some(x) if x == names[2] || x == "max" => 2,
+                    Some(x) => return Err(bad(cmd, format!("origin_at {key}: `{x}` is not {} | center | {}", names[0], names[2]))),
+                };
+                Ok(i as f64 * 0.5)
+            };
+            let (fx, fy, fz) = (pick("x", ["left", "", "right"], 0)?, pick("y", ["front", "", "back"], 0)?, pick("z", ["bottom", "", "top"], 2)?);
+            let of = a.get("of").and_then(Value::as_str).unwrap_or("stock").trim().to_ascii_lowercase();
+            let b = match of.as_str() {
+                "stock" => stock_shape(s, st).map_err(|e| bad(cmd, e.to_string()))?.bounds(),
+                "model" | "part" => setup_model_bounds(s, st).ok_or_else(|| bad(cmd, "the setup has no bodies to put the origin on"))?,
+                other => return Err(bad(cmd, format!("origin_at of: `{other}` is not stock | model"))),
+            };
+            let at = |lo: f64, hi: f64, f: f64| lo + (hi - lo) * f;
+            st.wcs.to_world(Vec3::new(at(b.min.x, b.max.x, fx), at(b.min.y, b.max.y, fy), at(b.min.z, b.max.z, fz)))
+        }
+        (None, None) => return Ok(()),
+    };
+    // How far the origin moves, in the setup's axes. A stock given in this same call is already
+    // measured from the new origin.
+    let d = st.wcs.to_local(world);
+    let given = p.get("stock").is_some_and(|v| !v.is_null());
+    match &mut st.stock {
+        _ if given => {}
+        Stock::FixedBox { min, max } => {
+            *min = *min - d;
+            *max = *max - d;
+        }
+        Stock::FixedCylinder { axis, start, end, .. } => {
+            let (along, across) = match axis {
+                cam::setup::Axis::X => (d.x, d.y.hypot(d.z)),
+                cam::setup::Axis::Y => (d.y, d.x.hypot(d.z)),
+                cam::setup::Axis::Z => (d.z, d.x.hypot(d.y)),
+            };
+            if across > 1e-6 {
+                return Err(bad(cmd, "a fixed cylinder stock lies on the WCS axis: the origin can only move along it (or use a relative cylinder)"));
+            }
+            *start -= along;
+            *end -= along;
+        }
+        _ => {}
+    }
+    st.wcs.origin = world;
+    Ok(())
 }
 
 /// `wcs` turned over about its own `x` or `y` axis, with the origin at the turned-over stock's
@@ -1149,6 +1232,12 @@ fn previous_setup<'a>(s: &'a Session, st: &Setup) -> Result<Option<&'a Setup>> {
 
 /// A setup's stock shape in its WCS: resolved around the model, or, for stock carried over,
 /// the earlier setup's stock seen from this setup's WCS.
+/// The stock of setup `id`, as generation sees it (for tests).
+#[cfg(test)]
+pub(crate) fn stock_shape_for_tests(s: &Session, id: u64) -> cam::setup::StockShape {
+    s.doc.manufacture.setup(id).and_then(|st| stock_shape(s, st).ok()).unwrap_or(cam::setup::StockShape::Box { min: Vec3::ZERO, max: Vec3::ZERO })
+}
+
 fn stock_shape(s: &Session, st: &Setup) -> Result<cam::setup::StockShape> {
     stock_shape_at(s, st, 0)
 }

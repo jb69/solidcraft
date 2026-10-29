@@ -59,6 +59,23 @@ cam.post            {setup, path: part.nc}   → G-code
 `cam.notices` lists every operation's report (with `stale: true` once the design changed);
 `cam.inspect` says what exists and what needs attention; `cam.toolpath` returns the moves.
 
+## The setup's origin
+
+Every operation of a setup is measured from its origin (the WCS). It is a coordinate, set in
+any of three ways, all through `cam.setup.set` (or `cam.setup.create`):
+
+- `origin: [x, y, z]`: a coordinate in design coordinates, the axes kept;
+- `origin: {point: "<name>"}`: a construction point the designer placed for it;
+- `origin_at: {of: stock | model, x: left | center | right, y: front | center | back, z: top
+  | middle | bottom}`: a point of the stock's or the model's box in the setup's axes (default
+  the stock's top front-left corner, where a Makera probes).
+
+A fixed stock (box or cylinder, given from the origin) stays where it is when the origin
+moves, unless the same call gives the stock. In the setup editor, **Place the origin** offers the
+stock and model points and the design's construction points, and **Pick on Model** places it
+interactively: as the pointer moves over the model it snaps to vertices, edge midpoints, circle
+centres and face centres, labelled under the pointer, and the click puts the origin there.
+
 ## Machining boundaries
 
 Area operations (3D roughing and finishing, multi-axis contour) machine within a boundary:

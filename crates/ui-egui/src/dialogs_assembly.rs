@@ -1156,14 +1156,14 @@ pub fn overlay(app: &SolveApp, painter: &egui::Painter, proj: &Proj, d: &mut Dia
 }
 
 /// A snap: its kind's marker at the point and the z axis as an arrow.
-fn glyph(painter: &egui::Painter, proj: &Proj, s: &SnapPt, col: Color32, half_height: f64, tag: Option<&str>) {
+pub(crate) fn glyph(painter: &egui::Painter, proj: &Proj, s: &SnapPt, col: Color32, half_height: f64, tag: Option<&str>) {
     let Some(c) = proj.to_screen(s.at) else { return };
     let len = half_height * 2.0 * 0.06;
     crate::icons::markers::snap(painter, c, proj.to_screen(s.at + s.z * len), s.kind, col, tag);
 }
 
 /// What a snap is called (the hover label).
-fn snap_name(k: SnapKind) -> &'static str {
+pub(crate) fn snap_name(k: SnapKind) -> &'static str {
     match k {
         SnapKind::FaceCenter => "Face center",
         SnapKind::CircleCenter => "Circle center",

@@ -357,3 +357,41 @@ fn operations_drag_to_reorder_and_into_another_setup() {
         assert!(crate::scenario::handle_at(w).is_some() || h.widget(&w[4..]).is_some(), "{w}");
     }
 }
+
+#[test]
+fn a_setups_origin_is_placed_on_the_stock_a_design_point_or_picked_on_the_model() {
+    let mut h = Harness::new();
+    pocket(&mut h);
+    let id = h.app.session.doc.manufacture.setups[0].id;
+    let origin = |h: &Harness| h.app.session.doc.manufacture.setup(id).unwrap().wcs.origin;
+    h.app.run("construct.point.vertex", json!({"point": {"vertex": [40, 30, 10]}, "name": "Datum"})).unwrap();
+    h.call("ui.resize", json!({"width": 1400, "height": 1300}));
+    h.settle();
+    crate::browser::cam::edit_setup(&mut h.app, id);
+    h.frames(20);
+    for w in ["Place the origin", "Place Origin", "Design point", "Use Point", "Pick on Model"] {
+        assert!(h.widget(w).is_some(), "{w} is drawn");
+    }
+    // The stock's top front-left corner (the form's first choices).
+    h.step(&json!({"widget": "Place Origin"})).unwrap();
+    h.frames(2);
+    assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(-1.0, -1.0, 11.0)).len() < 1e-6, "{:?}", origin(&h));
+    assert_eq!(h.app.cam_editor.as_ref().unwrap().draft["wcs"]["origin"], json!([-1.0, -1.0, 11.0]), "the form shows the coordinate");
+    // The point the designer placed.
+    h.step(&json!({"widget": "Use Point"})).unwrap();
+    h.frames(2);
+    assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(40.0, 30.0, 10.0)).len() < 1e-6, "{:?}", origin(&h));
+    // Picked on the model: the click that picks the top face puts the origin at its centre.
+    h.step(&json!({"widget": "Pick on Model"})).unwrap();
+    h.frames(2);
+    assert!(h.app.cam_editor.as_ref().unwrap().origin.picking);
+    let top = {
+        let st = h.app.session.model.state();
+        let b = st.bodies.first().unwrap();
+        b.body.faces(0.01).unwrap().into_iter().find(|f| f.plane_normal.is_some_and(|n| n.z > 0.99)).unwrap().index
+    };
+    h.app.run("select.set", json!({"items": [{"type": "face", "body": "Block", "index": top, "point": [5.0, 5.0, 10.0]}]})).unwrap();
+    h.frames(3);
+    assert!(!h.app.cam_editor.as_ref().unwrap().origin.picking, "a pick ends picking");
+    assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(20.0, 15.0, 10.0)).len() < 1e-3, "the face's centre: {:?}", origin(&h));
+}

@@ -61,6 +61,11 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   region, `{containment: inside | center | outside, offset}` to adjust (docs/cam-boundaries.md).
   `"selection"` without picked geometry is refused. Pick faces by a point on each:
   `geometry: {source: "faces", points: [[x, y, z]]}` (a pocket floor keeps its islands).
+- **The origin**: `cam.setup.set {setup, origin: [x, y, z]}` (a coordinate),
+  `{origin: {point: "<construction point>"}}` or `{origin_at: {of: stock | model, x: left |
+  center | right, y: front | center | back, z: top | middle | bottom}}`. Every operation is
+  measured from it; put it where the machine will be zeroed (a Makera probes the stock's top
+  front-left corner, the default of `origin_at`).
 - **Editing clears the toolpath**: after `cam.operation.set` (other than a rename) the
   operation is not generated until `cam.generate`. `cam.operation.move {operation, setup}`
   moves it to another setup.

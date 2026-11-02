@@ -8,6 +8,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+raytrace-cpu = []
+
 [dependencies]
 solidcraft-geom = { workspace = true }
 serde = { workspace = true }
@@ -15,7 +19,12 @@ image = { workspace = true, features = ["jpeg"] }
 moxcms = { workspace = true }
 png = { workspace = true }
 sha2 = { workspace = true }
+web-time = { workspace = true }
 weezl = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[[example]]
+name = "cpu_resource_smoke"
+required-features = ["raytrace-cpu"]

@@ -20,8 +20,10 @@ use solidcraft_geom::tess::{EvalCurve, EvalSurface, TessPlan};
 use wgpu::util::DeviceExt;
 
 pub mod capture;
+pub mod concurrent;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod path;
 mod pbr;
-pub mod pick;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod select;
 pub mod view;
@@ -59,6 +61,65 @@ fn popped(f: impl std::future::Future<Output = Option<wgpu::Error>>) -> Option<w
     }
 }
 
+/// Error scopes catching what GPU work may raise (popped by [`caught`]).
+fn error_scopes(device: &wgpu::Device) -> [wgpu::ErrorScopeGuard; 3] {
+    [wgpu::ErrorFilter::OutOfMemory, wgpu::ErrorFilter::Internal, wgpu::ErrorFilter::Validation].map(|f| device.push_error_scope(f))
+}
+
+/// The first error the scopes caught.
+fn caught(scopes: [wgpu::ErrorScopeGuard; 3]) -> Option<String> {
+    let mut failed = None;
+    for scope in scopes.into_iter().rev() {
+        if let Some(e) = popped(scope.pop()) {
+            failed.get_or_insert(e.to_string());
+        }
+    }
+    failed
+}
+
+/// The D3D12 shader compiler every wgpu instance starts with (#6756). `WGPU_DX12_COMPILER` names
+/// one as wgpu reads it; unset, `auto` or a value wgpu does not know leave the choice to
+/// SolidCraft: DXC from the `dxcompiler.dll` beside the program, by its full path, else FXC.
+/// wgpu's own `auto` loads `dxcompiler.dll` by name, so Windows takes the first one on `PATH`,
+/// whichever program put it there, and DXC 1.8.2505 from such folders (Obsidian's, NVIDIA SDK
+/// Manager's) crashed every start. `WGPU_DX12_COMPILER=dxc` still loads it that way. Looked up
+/// once: neither the variable nor the program's folder changes while the app runs.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn dx12_compiler() -> wgpu::Dx12Compiler {
+    static CHOSEN: std::sync::OnceLock<wgpu::Dx12Compiler> = std::sync::OnceLock::new();
+    CHOSEN.get_or_init(|| dx12_compiler_for(std::env::var("WGPU_DX12_COMPILER").ok().as_deref(), dxc_beside_program())).clone()
+}
+
+/// [`dx12_compiler`] for the variable's value `setting` and the `dxcompiler.dll` beside the
+/// program, if there is one.
+#[cfg(not(target_arch = "wasm32"))]
+fn dx12_compiler_for(setting: Option<&str>, beside_program: Option<std::path::PathBuf>) -> wgpu::Dx12Compiler {
+    match setting.map(str::parse::<wgpu::Dx12Compiler>) {
+        Some(Ok(wgpu::Dx12Compiler::Auto) | Err(_)) | None => match beside_program.as_deref().and_then(std::path::Path::to_str) {
+            Some(dxc_path) => wgpu::Dx12Compiler::DynamicDxc { dxc_path: dxc_path.to_string() },
+            None => wgpu::Dx12Compiler::Fxc,
+        },
+        Some(Ok(named)) => named,
+    }
+}
+
+/// The `dxcompiler.dll` in the program's own folder, if there is one.
+#[cfg(not(target_arch = "wasm32"))]
+fn dxc_beside_program() -> Option<std::path::PathBuf> {
+    let program = std::env::current_exe().ok()?;
+    let dll = program.parent()?.join("dxcompiler.dll");
+    dll.is_file().then_some(dll)
+}
+
+/// wgpu's instance settings from the environment, with SolidCraft's D3D12 shader compiler
+/// ([`dx12_compiler`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn instance_descriptor_from_env() -> wgpu::InstanceDescriptor {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    desc.backend_options.dx12.shader_compiler = dx12_compiler();
+    desc
+}
+
 /// An adapter and device without a window (native only): the adapter [`select::pick`] chooses
 /// under the `SOLIDCRAFT_GPU` policy. The environment may narrow the backends and pick the D3D12
 /// shader compiler (`WGPU_BACKEND`, `WGPU_DX12_COMPILER`).
@@ -66,14 +127,19 @@ fn popped(f: impl std::future::Future<Output = Option<wgpu::Error>>) -> Option<w
 fn open_headless() -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     let policy = select::Policy::from_env().map_err(GpuError::Policy)?;
     let (adapter, _) = select::pick(policy).ok_or(GpuError::NoAdapter(policy.name()))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let (device, queue) = open_device(&adapter)?;
+    Ok((adapter, device, queue))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue)> {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("solidcraft headless"),
-        required_features: depth_features(&adapter),
+        required_features: depth_features(adapter),
         required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
         ..Default::default()
     }))
-    .map_err(|e| GpuError::Device(e.to_string()))?;
-    Ok((adapter, device, queue))
+    .map_err(|e| GpuError::Device(e.to_string()))
 }
 
 /// Most vertices evaluated in one dispatch (bounds the buffers; larger plans go in batches).
@@ -96,13 +162,15 @@ pub enum GpuError {
     Pipeline(String),
     #[error("not supported yet: {0}")]
     Unsupported(String),
+    #[error("the GPU device was lost (the graphics driver was reset); it can't draw again")]
+    DeviceLost,
 }
 
 pub type Result<T> = std::result::Result<T, GpuError>;
 
 /// Bytes per evaluated vertex in [`GpuMesh::vertices`]: the position (x, y, z, 1) then the
 /// normal (x, y, z, 0), each four f32.
-pub const VERTEX_STRIDE: u64 = 32;
+pub const VERTEX_STRIDE: u64 = std::mem::size_of::<[f32; VERTEX_WORDS]>() as u64;
 /// Byte offset of the normal within a vertex.
 pub const NORMAL_OFFSET: u64 = 16;
 
@@ -120,6 +188,7 @@ pub struct GpuMesh {
     /// Per plan (in the order given), its vertices and indices.
     pub parts: Vec<Part>,
     bind: wgpu::BindGroup,
+    workgroups: u32,
     // The inputs, kept until the evaluation has run.
     _inputs: [wgpu::Buffer; 4],
 }
@@ -132,6 +201,7 @@ pub struct Part {
 }
 
 /// The compute pipeline, ready to evaluate plans on one device.
+#[derive(Clone)]
 pub struct TessGpu {
     adapter: String,
     device: wgpu::Device,
@@ -289,17 +359,12 @@ impl TessGpu {
         }
         let d = &self.device;
         let count = word(packed.count)?;
-        let init = |label: &str, contents: &[u8], usage| {
-            // wgpu rejects empty bindings: pad to one word.
-            let contents = if contents.is_empty() { &[0u8; 16][..] } else { contents };
-            d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
-        };
         let words = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
         let floats = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
-        let params = init("tess params", &words(&[count, 0, 0, 0]), wgpu::BufferUsages::UNIFORM);
-        let surfaces = init("tess surfaces", &words(&packed.surfaces), wgpu::BufferUsages::STORAGE);
-        let data = init("tess data", &floats(&packed.data), wgpu::BufferUsages::STORAGE);
-        let verts = init("tess vertices", &words(&packed.vertices), wgpu::BufferUsages::STORAGE);
+        let params = tess_buffer::<[u32; 4]>(d, "tess params", words(&[count, 0, 0, 0]), wgpu::BufferUsages::UNIFORM);
+        let surfaces = tess_buffer::<[u32; SURFACE_WORDS]>(d, "tess surfaces", words(&packed.surfaces), wgpu::BufferUsages::STORAGE);
+        let data = tess_buffer::<f32>(d, "tess data", floats(&packed.data), wgpu::BufferUsages::STORAGE);
+        let verts = tess_buffer::<[u32; VERTEX_WORDS]>(d, "tess vertices", words(&packed.vertices), wgpu::BufferUsages::STORAGE);
         let vertices = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tess mesh vertices"),
             size: (packed.count.max(1) as u64) * VERTEX_STRIDE,
@@ -322,7 +387,7 @@ impl TessGpu {
             }
             parts.push(Part { vertices: v0..offset, indices: i0..word(tri.len())? });
         }
-        let indices = init("tess mesh indices", &words(&tri), wgpu::BufferUsages::INDEX);
+        let indices = tess_buffer::<u32>(d, "tess mesh indices", words(&tri), wgpu::BufferUsages::INDEX);
         let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tess mesh"),
             layout: &self.layout,
@@ -342,6 +407,7 @@ impl TessGpu {
             vertex_face,
             parts,
             bind,
+            workgroups: if packed.surfaces.is_empty() { 0 } else { count.div_ceil(WORKGROUP) },
             _inputs: [params, surfaces, data, verts],
         })
     }
@@ -349,28 +415,29 @@ impl TessGpu {
     /// Add `mesh`'s evaluation to `encoder` (one dispatch, no wait, nothing read back): once the
     /// encoder is submitted, render passes after it read the evaluated vertices.
     pub fn record(&self, encoder: &mut wgpu::CommandEncoder, mesh: &GpuMesh) {
+        if mesh.workgroups == 0 {
+            return;
+        }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("tess mesh"), timestamp_writes: None });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &mesh.bind, &[]);
-        pass.dispatch_workgroups(mesh.vertex_count.div_ceil(WORKGROUP).max(1), 1, 1);
+        pass.dispatch_workgroups(mesh.workgroups, 1, 1);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn run(&self, packed: &Packed, vertices: &[u32], n: usize) -> Result<Vec<f32>> {
+        if n == 0 || packed.surfaces.is_empty() {
+            return Ok(Vec::new());
+        }
         let d = &self.device;
         let bytes_u32 = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
         let bytes_f32 = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
         let count = u32::try_from(n).map_err(|_| GpuError::Failed("batch too large".into()))?;
-        let init = |label: &str, contents: &[u8], usage| {
-            // wgpu rejects empty bindings: pad to one word.
-            let contents = if contents.is_empty() { &[0u8; 16][..] } else { contents };
-            d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
-        };
-        let params = init("tess params", &bytes_u32(&[count, 0, 0, 0]), wgpu::BufferUsages::UNIFORM);
-        let surfaces = init("tess surfaces", &bytes_u32(&packed.surfaces), wgpu::BufferUsages::STORAGE);
-        let data = init("tess data", &bytes_f32(&packed.data), wgpu::BufferUsages::STORAGE);
-        let verts = init("tess vertices", &bytes_u32(vertices), wgpu::BufferUsages::STORAGE);
-        let size = (n.max(1) * 32) as u64;
+        let params = tess_buffer::<[u32; 4]>(d, "tess params", bytes_u32(&[count, 0, 0, 0]), wgpu::BufferUsages::UNIFORM);
+        let surfaces = tess_buffer::<[u32; SURFACE_WORDS]>(d, "tess surfaces", bytes_u32(&packed.surfaces), wgpu::BufferUsages::STORAGE);
+        let data = tess_buffer::<f32>(d, "tess data", bytes_f32(&packed.data), wgpu::BufferUsages::STORAGE);
+        let verts = tess_buffer::<[u32; VERTEX_WORDS]>(d, "tess vertices", bytes_u32(vertices), wgpu::BufferUsages::STORAGE);
+        let size = (n as u64) * VERTEX_STRIDE;
         let out = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tess out"),
             size,
@@ -399,7 +466,7 @@ impl TessGpu {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("tess"), timestamp_writes: None });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(count.div_ceil(WORKGROUP).max(1), 1, 1);
+            pass.dispatch_workgroups(count.div_ceil(WORKGROUP), 1, 1);
         }
         enc.copy_buffer_to_buffer(&out, 0, &read, 0, size);
         self.queue.submit([enc.finish()]);
@@ -422,6 +489,12 @@ impl TessGpu {
 const VERTEX_WORDS: usize = 8;
 /// Words per surface header (matches `Surface` in the shader).
 const SURFACE_WORDS: usize = 12;
+
+// Each empty binding still needs a whole element of its packed shader representation.
+fn tess_buffer<T>(device: &wgpu::Device, label: &str, mut contents: Vec<u8>, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    contents.resize(contents.len().max(std::mem::size_of::<T>()), 0);
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &contents, usage })
+}
 
 /// A plan as the shader reads it.
 struct Packed {
@@ -466,8 +539,9 @@ fn pack(plans: &[&TessPlan]) -> Result<Packed> {
                 push3(&mut data, *du);
                 push3(&mut data, *dv);
             }
-            EvalSurface::Nurbs { degree, knots, count, ctrl } => {
+            EvalSurface::Nurbs { degree, knots, count, ctrl, closed } => {
                 head[0] = 1;
+                head[11] = u32::from(closed[0]) | (u32::from(closed[1]) << 1);
                 head[1] = word(degree[0])?;
                 head[2] = word(degree[1])?;
                 head[3] = word(count[0])?;

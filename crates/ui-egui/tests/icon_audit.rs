@@ -5,6 +5,15 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use solidcraft_ui_egui::{icon_svg, scenario::Harness, workspace};
 
+/// A harness whose feature windows don't choose their operation (`auto_operation`): this test
+/// opens every window only to look at its icons, and each choice would run a Join on the design.
+fn harness() -> Harness {
+    let mut h = Harness::new();
+    h.app.preferences.auto_operation = false;
+    h.app.preferences.browser_components_open = true;
+    h
+}
+
 fn click(h: &mut Harness, handle: &str) {
     h.step(&json!({"click":{"handle":handle}})).unwrap_or_else(|e| panic!("{handle}: {e}"));
 }
@@ -97,6 +106,28 @@ fn ribbon(h: &mut Harness, requested: &mut BTreeMap<String, bool>) {
     }
 }
 
+fn assistant(h: &mut Harness, requested: &mut BTreeMap<String, bool>) {
+    use solidcraft_ui_egui::agent_chat::{Item, backend::ToolStatus};
+    h.call("ui.agent_chat", json!({"features":true,"open":true,"picker":false,"width":440}));
+    h.app.agent_chat.items = vec![
+        Item::User { text: "Round the plate edges".into(), image: false, pictures: vec![], context: Default::default(), files: vec![] },
+        Item::Tool {
+            id: "audit".into(),
+            title: "solid.fillet".into(),
+            kind: "other".into(),
+            status: Some(ToolStatus::Failed),
+            input: None,
+            output: Some("Use a smaller radius".into()),
+        },
+        Item::Approval { id: 1, title: "Export plate.step".into(), tool: "export".into(), answer: None },
+    ];
+    h.frames(3);
+    collect(h, "Assistant composer, tool and approval", requested);
+    h.app.agent_chat.items.clear();
+    h.call("ui.agent_chat", json!({"open":false}));
+    h.frames(2);
+}
+
 fn panels(h: &mut Harness, requested: &mut BTreeMap<String, bool>) {
     for command in solidcraft_engine::command_specs() {
         let panel = solidcraft_ui_egui::dialogs::Dialog::for_command(&h.app, command.id).is_some()
@@ -135,7 +166,7 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     if evidence.exists() {
         std::fs::remove_file(&evidence).unwrap();
     }
-    let mut h = Harness::new();
+    let mut h = harness();
     h.app.home.open = false;
     h.app.services.install_app = Some(solidcraft_ui_egui::install::InstallApp {
         offer: Box::new(|| Some(solidcraft_ui_egui::install::Offer::Prompt)),
@@ -146,9 +177,64 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     h.app.session.run_script(&solidcraft_engine::sample::script()).unwrap();
     h.frames(3);
     let mut requested = BTreeMap::new();
+    for preset in ["kinds", "key"] {
+        h.call("ui.status_fixture", json!({"preset":preset}));
+        h.frames(3);
+        collect(&mut h, "viewport status specimens", &mut requested);
+        if preset == "kinds" {
+            click(&mut h, "viewport_status:summary");
+            h.frames(3);
+            collect(&mut h, "viewport status summary menu", &mut requested);
+            escape(&mut h);
+        }
+    }
+    h.call("ui.status_fixture", json!({"preset":"off"}));
     collect(&mut h, "initial browser and timeline", &mut requested);
+    assistant(&mut h, &mut requested);
+
+    let navigation = h.app.preferences.navigation_bar.clone();
+    h.call("ui.prefs", json!({"navigation_bar":{"slots":["orbit","pan","zoom","spin","fit","look_at","home","visual_style","projection","display","grid","ground_shadow","ambient_occlusion"]}}));
+    collect(&mut h, "navigation catalogue", &mut requested);
+    let size = h.ctx.content_rect().size();
+    h.call("ui.resize", json!({"width":500,"height":800}));
+    h.frames(3);
+    click(&mut h, "nav:more");
+    h.frames(3);
+    collect(&mut h, "navigation overflow", &mut requested);
+    escape(&mut h);
+    h.call("ui.resize", json!({"width":size.x,"height":size.y}));
+    h.call("ui.prefs", json!({"navigation_bar":navigation}));
+    h.frames(3);
+
+    for (handle, surface) in [("nav:slot:visual_style", "navigation visual styles"), ("nav:view", "navigation display")] {
+        click(&mut h, handle);
+        h.frames(3);
+        collect(&mut h, surface, &mut requested);
+        click(&mut h, handle);
+    }
+
+    h.step(&json!({"click":{"handle":"nav:slot:pan"},"button":"right"})).unwrap();
+    h.frames(3);
+    collect(&mut h, "navigation context menu", &mut requested);
+    escape(&mut h);
+    h.call("ui.prefs", json!({"open":"Interface/Navigation bar"}));
+    h.frames(20);
+    collect(&mut h, "navigation editor and available tiles", &mut requested);
+    click(&mut h, "prefs:navbar:slot:pan");
+    h.step(&json!({"click":{"handle":"prefs:navbar:slot:pan"},"button":"right"})).unwrap();
+    h.frames(3);
+    collect(&mut h, "navigation editor slot menu", &mut requested);
+    escape(&mut h);
+    h.call("ui.prefs", json!({"button":"cancel"}));
+    h.frames(3);
 
     ribbon(&mut h, &mut requested);
+    h.app.start("inspect.colored_components");
+    h.frames(2);
+    click(&mut h, "panel:INSPECT:CHECK");
+    collect(&mut h, "component colors enabled", &mut requested);
+    escape(&mut h);
+    h.app.start("inspect.colored_components");
     click(&mut h, "appbar:file");
     assert!(h.widget("Export Current View as DXF…").is_some(), "painted File rows retain accessible action labels");
     collect(&mut h, "File", &mut requested);
@@ -198,18 +284,32 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     h.app.run("select.clear", json!({})).unwrap();
 
     // Keep history traversal in a small fixture, independent of viewport/browser selection.
-    let mut history = Harness::new();
+    let mut history = harness();
     history.app.home.open = false;
     for name in ["History A", "History B"] {
         history.app.run("solid.box", json!({"length":10,"width":10,"height":10,"name":name})).unwrap();
     }
     history.frames(3);
+    history.app.run("timeline.roll_to", json!({"position":0})).unwrap();
+    history.app.ui.tab = "INSPECT".into();
+    history.frames(2);
+    click(&mut history, "toolbar:timeline.play");
+    history.frames(1);
+    collect(&mut history, "history playback stop", &mut requested);
+    history.app.ui.tab = "INSPECT".into();
+    history.frames(2);
+    click(&mut history, "toolbar:timeline.play");
+    history.app.run("timeline.roll_to", json!({})).unwrap();
     // Named feature history has independent menus in both layout preferences.
     for left in [false, true] {
         history.app.preferences.timeline_left = left;
         history.frames(3);
         context_rows(&mut history, "timeline:", &mut requested);
     }
+    // The seam has its own checked display menu, independent of feature and folder rows.
+    history.step(&json!({"click":{"handle":"history:names"},"button":"right"})).unwrap();
+    collect(&mut history, "history seam", &mut requested);
+    escape(&mut history);
     let features = history.app.session.doc.features.iter().take(2).map(|f| f.id).collect::<Vec<_>>();
     let group = history.app.run("timeline.group", json!({"features":features,"name":"Audit history folder"})).unwrap()["group"].as_u64().unwrap();
     history.frames(3);
@@ -217,13 +317,13 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     history.app.tree.picked_timeline_groups.clear();
     history.app.run("select.set", json!({"items":features.iter().map(|id| json!({"type":"feature","id":id})).collect::<Vec<_>>()})).unwrap();
     history.frames(3);
-    history.step(&json!({"widget":"2 selected"})).unwrap();
+    history.step(&json!({"click":{"handle":"timeline:History A"},"button":"right"})).unwrap();
     collect(&mut history, "history feature selection", &mut requested);
     escape(&mut history);
     history.app.run("select.clear", json!({})).unwrap();
     history.app.tree.picked_timeline_groups = vec![group];
     history.frames(3);
-    history.step(&json!({"widget":"1 selected"})).unwrap();
+    history.step(&json!({"click":{"handle":"timeline-folder:Audit history folder"},"button":"right"})).unwrap();
     collect(&mut history, "history folder selection", &mut requested);
     escape(&mut history);
     history.app.tree.picked_timeline_groups.clear();
@@ -300,7 +400,7 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     // Sheet and assembly contexts expose contextual tabs and browser row kinds that
     // a single solid part cannot offer. Use repository-owned public sample recipes.
     for sample in solidcraft_engine::sample::samples().into_iter().filter(|s| matches!(s.name, "Sheet Metal Bracket" | "Hinge Assembly")) {
-        let mut sample_h = Harness::new();
+        let mut sample_h = harness();
         sample_h.app.home.open = false;
         sample_h.app.session.run_script(&(sample.script)()).unwrap();
         sample_h.frames(3);
@@ -318,7 +418,7 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
         panels(&mut sample_h, &mut requested);
         collect(&mut sample_h, sample.name, &mut requested);
     }
-    let mut geometry = Harness::new();
+    let mut geometry = harness();
     geometry.app.home.open = false;
     geometry.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Audit block"})).unwrap();
     geometry.app.run("solid.split_body", json!({"body":"Audit block","plane":{"origin":[5,0,0],"normal":[1,0,0]}})).unwrap();
@@ -344,6 +444,13 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     let path = geometry.dir.join("audit.solidcraft");
     geometry.app.run("file.save", json!({"path":path})).unwrap();
     geometry.app.home.recent = vec![path.to_string_lossy().into_owned()];
+    geometry.app.recoverable.push(solidcraft_engine::recovery::Entry {
+        id: "icon-audit".into(),
+        path: Some("audit.solidcraft".into()),
+        name: "Audit design".into(),
+        saved_at: 0,
+        features: 1,
+    });
     geometry.app.home.open = true;
     geometry.frames(3);
     context_rows(&mut geometry, "home:recent:", &mut requested);
@@ -354,7 +461,7 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     collect(&mut geometry, "File recent designs", &mut requested);
     escape(&mut geometry);
     // Populate actual document slots, then click the same overflow launcher as a person.
-    let mut documents = Harness::new();
+    let mut documents = harness();
     for _ in 0..12 {
         solidcraft_ui_egui::documents::open_tab(&mut documents.app, solidcraft_engine::Session::default()).unwrap();
     }
@@ -366,7 +473,7 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     collect(&mut documents, "document overflow list (active icon is a selection marker)", &mut requested);
     // Diagnostic badges and Copy Error/Warning Message only appear on troubled features.
     for failing in [false, true] {
-        let mut diagnostics = Harness::new();
+        let mut diagnostics = harness();
         diagnostics.app.home.open = false;
         if failing {
             diagnostics.app.session.run_script(&solidcraft_engine::sample::script()).unwrap();
@@ -391,7 +498,7 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
         ("sketch Select Other", include_str!("scenarios/select_other_coincident_lines.json")),
         ("canvas calibration", include_str!("scenarios/s19_canvas_calibrate.json")),
     ] {
-        let mut scenario = Harness::new();
+        let mut scenario = harness();
         scenario.run(&serde_json::from_str(source).unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
         collect(&mut scenario, name, &mut requested);
     }
@@ -401,7 +508,8 @@ fn requested_menu_icons_have_artwork_and_match_manifest() {
     if std::env::var("UPDATE_ICON_MANIFEST").as_deref() == Ok("1") {
         std::fs::write(&path, &manifest).unwrap();
     } else {
-        let expected = std::fs::read_to_string(&path).unwrap_or_default();
+        // A Windows checkout (core.autocrlf) gives the file CRLF line endings (#4932).
+        let expected = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
         assert_eq!(
             expected, manifest,
             "Runtime icon discovery changed. Regenerate with UPDATE_ICON_MANIFEST=1 cargo test -p solidcraft-ui-egui --test icon_audit"
@@ -449,7 +557,7 @@ fn offset_mode_artwork_review() {
             );
             let mut x = column as i32 * 200 + 8;
             for px in [64, 24, 16] {
-                let look = icon_svg::Look { dark, accent: resolved.accent, vision: ColorVision::Off };
+                let look = icon_svg::Look::themed(dark, resolved.accent, ColorVision::Off);
                 let pm = icon_svg::render(icon_svg::doc_for(resolved.master, px).unwrap(), look, px).unwrap();
                 sheet.draw_pixmap(x, row as i32 * 88 + 8, pm.as_ref(), &tiny_skia::PixmapPaint::default(), tiny_skia::Transform::identity(), None);
                 x += px as i32 + 16;
@@ -463,7 +571,7 @@ fn offset_mode_artwork_review() {
 
 #[test]
 fn overflow_icons_with_many_pins_at_200_points() {
-    let mut h = Harness::new();
+    let mut h = harness();
     icon_svg::audit::start();
     let steps = serde_json::from_str(include_str!("scenarios/s48_toolbar_many_pins.json")).unwrap();
     if let Err(error) = h.run(&steps) {

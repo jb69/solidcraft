@@ -1,12 +1,9 @@
-//! Every command dialog and every window stays within the width limits of `frame`: started
+//! Every command dialog and shared window stays within its content-width limits: started
 //! through the control channel (the toolbar's way) and measured as drawn.
 
 use serde_json::json;
 use solidcraft_ui_egui::frame::{DIALOG_MAX_W, DIALOG_MIN_W};
 
-// Preserve the established acceptance bounds after retiring the old window helpers.
-const DIALOG_WIDE_MAX_W: f32 = 560.0;
-const WINDOW_WIDE_MAX_W: f32 = 760.0;
 use solidcraft_ui_egui::scenario::Harness;
 
 /// Widths of the windows on screen (their areas in the middle layer).
@@ -15,15 +12,25 @@ fn window_widths(h: &Harness) -> Vec<(egui::Id, f32)> {
         m.areas()
             .visible_layer_ids()
             .into_iter()
-            .filter(|l| l.order == egui::Order::Middle && l.id != egui::Id::new("sc_browser_card"))
+            // Workspace hosts are not command windows; Shots has wide expanded and small collapsed forms.
+            .filter(|l| {
+                l.order == egui::Order::Middle
+                    && ![egui::Id::new("sc_browser_card"), egui::Id::new("sc_render_shots_strip"), egui::Id::new("sc_render_shots_pill")]
+                        .contains(&l.id)
+            })
             .filter_map(|l| m.area_rect(l.id).map(|r| (l.id, r.width())))
             .collect()
     })
 }
 
 fn kit_table_limit(id: egui::Id) -> Option<f32> {
+    // The accepted Preferences board has a page list and one control/preview pair at 880 pt.
+    if id == egui::Id::new("sc_prefs") {
+        return Some(solidcraft_ui_egui::theme::Tokens::get().form_card_width * 10.0 / 3.0);
+    }
     [
-        egui::Id::new("sc_prefs"),
+        egui::Id::new("sc_bom"),
+        egui::Id::new("sc_gesture_editor"),
         egui::Id::new("sc_params_dialog"),
         egui::Id::new("sc_material_card_review"),
         egui::Id::new(("sc_dialog", "CONFIGURATIONS")),
@@ -42,6 +49,32 @@ fn fresh() -> Harness {
 }
 
 #[test]
+fn render_strip_is_excluded_while_real_windows_are_still_measured() {
+    let mut h = fresh();
+    assert_eq!(h.call("ui.workspace", json!({"workspace":"render"}))["ok"], true);
+    h.app.help.about = true;
+    h.frames(6);
+    let strip = egui::Id::new("sc_render_shots_strip");
+    let width = h.ctx.memory(|m| m.area_rect(strip)).expect("visible Shots strip").width();
+    assert!(width > DIALOG_MAX_W, "the workspace strip should span the canvas: {width}");
+    let windows = window_widths(&h);
+    assert!(!windows.iter().any(|(id, _)| *id == strip));
+    assert!(windows.iter().any(|(id, _)| *id == egui::Id::new("sc_about")), "real About window is still measured: {windows:?}");
+    assert_eq!(h.call("engine.execute", json!({"command":"view.shots_strip","params":{"visible":false}}))["ok"], true);
+    h.frames(6);
+    let pill = egui::Id::new("sc_render_shots_pill");
+    let width = h.ctx.memory(|m| m.area_rect(pill)).expect("visible Shots restore control").width();
+    assert!(width < DIALOG_MIN_W, "the restore control is intentionally smaller than a dialog: {width}");
+    let windows = window_widths(&h);
+    assert!(!windows.iter().any(|(id, _)| *id == pill));
+    assert!(windows.iter().any(|(id, _)| *id == egui::Id::new("sc_about")), "real window remains measured with Shots collapsed: {windows:?}");
+    assert_eq!(h.call("ui.start", json!({"command":"file.export_view_dxf"}))["ok"], true);
+    h.frames(6);
+    let dialog = solidcraft_ui_egui::scenario::rect_of("dialog:outer").expect("DXF dialog has an outer rectangle");
+    assert!(dialog.width() >= DIALOG_MIN_W - 4.0, "actual DXF dialog remains at least the dialog minimum: {dialog:?}");
+}
+
+#[test]
 fn command_dialogs_shrink_to_their_content_within_limits() {
     let mut h = fresh();
     let mut bad = Vec::new();
@@ -50,27 +83,31 @@ fn command_dialogs_shrink_to_their_content_within_limits() {
     for spec in solidcraft_engine::command_specs() {
         h.call("ui.start", json!({"command": spec.id}));
         h.frames(4);
-        let wide = h.app.dialog.as_ref().is_some_and(|d| d.is_wide());
-        let max = if wide { DIALOG_WIDE_MAX_W } else { DIALOG_MAX_W };
         for (layer, w) in window_widths(&h) {
             // Floating windows a command opened (Parameters…) have their own limit.
-            let limit = kit_table_limit(layer).unwrap_or(if h.app.dialog.is_some() { max } else { WINDOW_WIDE_MAX_W });
+            let limit = kit_table_limit(layer).unwrap_or(if h.app.dialog.is_some() {
+                DIALOG_MAX_W
+            } else {
+                solidcraft_ui_egui::theme::Tokens::get().form_card_width * 3.0
+            });
             if w > limit + slack {
                 bad.push(format!("{} ({layer:?}): {w} px", spec.id));
             }
         }
         // The docked dialog shrinks to its content: most dialogs stay well under the maximum.
-        if h.app.dialog.is_some() && !wide {
-            for (_, w) in window_widths(&h) {
-                if w < DIALOG_MIN_W - slack {
-                    bad.push(format!("{}: {w} px is narrower than {DIALOG_MIN_W}", spec.id));
-                }
+        if let Some(rect) = solidcraft_ui_egui::scenario::rect_of("dialog:outer").filter(|_| h.app.dialog.is_some()) {
+            let w = rect.width();
+            if w < DIALOG_MIN_W - slack {
+                bad.push(format!("{}: active dialog {w} px is narrower than {DIALOG_MIN_W}", spec.id));
             }
         }
         h.app.dialog = None;
         h.app.params = None;
         h.app.design_properties = None;
+        h.app.sketch_report = None;
         h.app.bom = None;
+        // Properties (Inspect → Measure) opens the Properties card.
+        h.app.menu.props = None;
         if spec.id == "material.properties.validate" {
             h.step(&json!({"click":{"handle":"dialog:close"}})).unwrap();
         }
@@ -111,7 +148,7 @@ fn floating_windows_stay_within_limits() {
     // Keyboard Shortcuts is a page of Preferences (one window, #36).
     assert!(ws.len() >= 3, "windows on screen: {ws:?}");
     for (layer, w) in ws {
-        let limit = kit_table_limit(layer).unwrap_or(WINDOW_WIDE_MAX_W);
+        let limit = kit_table_limit(layer).unwrap_or(solidcraft_ui_egui::theme::Tokens::get().form_card_width * 3.0);
         assert!(w <= limit + 4.0, "{layer:?} is {w} px wide");
     }
 }

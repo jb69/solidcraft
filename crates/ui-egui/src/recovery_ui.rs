@@ -111,7 +111,7 @@ pub fn close(app: &mut SolveApp) {
     }
 }
 
-fn ago(secs: u64) -> String {
+pub(crate) fn ago(secs: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(secs);
     let d = now.saturating_sub(secs);
     match d {
@@ -123,55 +123,112 @@ fn ago(secs: u64) -> String {
 }
 
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
-    if app.recoverable.is_empty() {
+    // File view presents the same entries inline, without a second window covering them.
+    if app.home.open || app.recoverable.is_empty() {
+        app.recovery_discard_all = false;
         return;
     }
-    let dir = app.autosave.as_ref().map(|a| a.dir.clone()).or_else(recovery::default_dir);
+    if app.recovery_discard_all {
+        confirm_discard_all(app, ctx);
+        return;
+    }
     let mut act: Option<(Entry, bool)> = None;
+    let mut discard_all = false;
     let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_recover_prompt"), "restore", crate::i18n::tr_label("Recover unsaved design?"))
         .actions("", crate::i18n::tr_label("Later"), None)
-        .show(ctx, true, |ui| {
-            ui_kit::text(
-                ui,
-                crate::i18n::tr_label("SolidCraft closed before these designs were saved. Their last autosave can be opened."),
-                ui_kit::Text::Report("intro", false),
-            );
-            for (index, e) in app.recoverable.iter().take(20).enumerate() {
-                ui_kit::divider(ui, &format!("entry:{index}"));
-                ui_kit::label_actions(ui, &e.name, |ui| {
-                    if ui_kit::button(ui, crate::i18n::tr_label("Recover"), ui_kit::Button::Normal).clicked() {
-                        act = Some((e.clone(), true));
-                    }
-                    if ui_kit::button(ui, crate::i18n::tr_label("Discard"), ui_kit::Button::Normal).clicked() {
-                        act = Some((e.clone(), false));
-                    }
-                });
-                let file = e.path.clone().unwrap_or_else(|| crate::i18n::tr("recovery.never_saved").to_string());
-                let detail =
-                    crate::i18n::format("recovery.detail", &[("file", &file), ("features", &e.features.to_string()), ("when", &ago(e.saved_at))]);
-                ui_kit::text(ui, &detail, ui_kit::Text::Note(&format!("detail:{index}")));
-            }
-        });
+        .show_with_left(
+            ctx,
+            true,
+            |ui| {
+                ui_kit::text(
+                    ui,
+                    crate::i18n::tr_label("SolidCraft closed before these designs were saved. Their last autosave can be opened."),
+                    ui_kit::Text::Report("intro", false),
+                );
+                for (index, e) in app.recoverable.iter().take(20).enumerate() {
+                    ui_kit::divider(ui, &format!("entry:{index}"));
+                    ui_kit::label_actions(ui, &e.name, |ui| {
+                        if ui_kit::button(ui, crate::i18n::tr_label("Recover"), ui_kit::Button::Normal).clicked() {
+                            act = Some((e.clone(), true));
+                        }
+                        if ui_kit::button(ui, crate::i18n::tr_label("Discard"), ui_kit::Button::Normal).clicked() {
+                            act = Some((e.clone(), false));
+                        }
+                    });
+                    let file = e.path.clone().unwrap_or_else(|| crate::i18n::tr("recovery.never_saved").to_string());
+                    let detail =
+                        crate::i18n::format("recovery.detail", &[("file", &file), ("features", &e.features.to_string()), ("when", &ago(e.saved_at))]);
+                    ui_kit::text(ui, &detail, ui_kit::Text::Note(&format!("detail:{index}")));
+                }
+            },
+            // Away from Later: it asks first, then discards every listed autosave (#9299).
+            |ui| {
+                let response = ui_kit::button(ui, crate::i18n::tr("recovery.discard_all"), ui_kit::Button::Normal);
+                crate::scenario::publish_target("recovery:discard_all", response.rect);
+                discard_all = response.clicked();
+            },
+        );
+    if discard_all {
+        app.recovery_discard_all = true;
+        return;
+    }
     let later = closed || action != ui_kit::Action::None;
-    let dir_s = dir.map(|d| d.to_string_lossy().to_string());
-    if let Some((e, recover)) = act {
-        app.recoverable.retain(|x| x.id != e.id);
-        if recover {
-            if app.session.is_dirty() {
-                app.set_status("save or discard the open design's changes before recovering another", true);
-                app.recoverable.insert(0, e);
-                return;
-            }
-            // Rebuilt off the window thread like any other file; once it is in, it is
-            // autosaved under this app's entry before the old entry goes.
-            let kind = crate::file_load::Kind::Recover { id: e.id.clone(), dir: dir_s };
-            let _ = crate::file_load::begin_request(app, crate::file_load::Request::new(&e.name, kind));
-        } else {
-            let _ = app.run("doc.recovery_discard", json!({"id": e.id, "dir": dir_s}));
-        }
+    if let Some((entry, recover)) = act {
+        apply(app, entry, recover);
     }
     if later {
         app.recoverable.clear();
+    }
+}
+
+/// Discard all asks first; Cancel (or the close button) goes back to the list unchanged.
+fn confirm_discard_all(app: &mut SolveApp, ctx: &egui::Context) {
+    let count = app.recoverable.len();
+    let title = if count == 1 {
+        crate::i18n::tr("recovery.discard_all_title_one").to_string()
+    } else {
+        crate::i18n::format("recovery.discard_all_title", &[("count", &count.to_string())])
+    };
+    let (closed, action) = ui_kit::Confirm::new(egui::Id::new("sc_recover_discard_all"), "delete", &title)
+        .tone(ui_kit::Tone::Danger)
+        .actions(crate::i18n::tr("recovery.discard_all"), crate::i18n::tr("ui.cancel"), None)
+        .show(ctx, true, |ui| {
+            ui_kit::text(ui, crate::i18n::tr("recovery.discard_all_detail"), ui_kit::Text::Report("discard_all", false));
+        });
+    match action {
+        ui_kit::Action::Ok => {
+            app.recovery_discard_all = false;
+            discard_all(app);
+        }
+        ui_kit::Action::Cancel => app.recovery_discard_all = false,
+        _ if closed => app.recovery_discard_all = false,
+        _ => {}
+    }
+}
+
+/// Discard every listed autosave, each the way its own Discard button does.
+fn discard_all(app: &mut SolveApp) {
+    for entry in std::mem::take(&mut app.recoverable) {
+        apply(app, entry, false);
+    }
+}
+
+/// Shared recovery action for the launch prompt and File view; dirty work is never replaced.
+pub(crate) fn apply(app: &mut SolveApp, entry: Entry, recover: bool) {
+    let dir_s = app.autosave.as_ref().map(|a| a.dir.clone()).or_else(recovery::default_dir).map(|d| d.to_string_lossy().to_string());
+    app.recoverable.retain(|x| x.id != entry.id);
+    if recover {
+        if app.session.is_dirty() {
+            app.set_status("save or discard the open design's changes before recovering another", true);
+            app.recoverable.insert(0, entry);
+            return;
+        }
+        // Rebuilt off the window thread like any other file; once it is in, it is
+        // autosaved under this app's entry before the old entry goes.
+        let kind = crate::file_load::Kind::Recover { id: entry.id.clone(), dir: dir_s };
+        let _ = crate::file_load::begin_request(app, crate::file_load::Request::new(&entry.name, kind));
+    } else {
+        let _ = app.run("doc.recovery_discard", json!({"id": entry.id, "dir": dir_s}));
     }
 }
 
@@ -397,7 +454,7 @@ mod tests {
         edit(&mut app);
         tick_and_wait(&mut app);
         let id = entries(&dir)[0].id.clone();
-        let blocked = dir.join(format!("{id}.solidcraft"));
+        let blocked = dir.join(format!("{id}.sc"));
         fs::remove_file(&blocked).unwrap();
         fs::create_dir(&blocked).unwrap();
         edit(&mut app);
@@ -454,6 +511,26 @@ mod tests {
     }
 
     #[test]
+    fn file_view_recovery_is_inline_and_the_design_workspace_keeps_the_prompt() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = true;
+        h.app.recoverable = vec![entry("a", "Bracket"), entry("b", "Housing")];
+        h.frames(4);
+        assert!(crate::scenario::handle_at("home:recovery:recover").is_some());
+        assert!(h.widget("Later").is_none(), "the recovery window must not cover File view");
+        assert_eq!(h.app.recoverable.len(), 2);
+        h.step(&json!({"click": {"handle": "home:recover"}})).unwrap();
+        h.frames(2);
+        assert!(crate::scenario::handle_at("home:recovery:0:recover").is_some());
+        assert!(crate::scenario::handle_at("home:recovery:1:discard").is_some());
+        assert!(h.widget("Later").is_none());
+        h.app.home.open = false;
+        h.frames(4);
+        assert!(h.widget("Later").is_some());
+        assert_eq!(h.app.recoverable.len(), 2);
+    }
+
+    #[test]
     fn recovered_sessions_are_a_card_with_one_row_each_and_later_keeps_them_for_next_launch() {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
@@ -466,5 +543,51 @@ mod tests {
         h.step(&json!({"widget": "Later"})).unwrap();
         h.frames(2);
         assert!(h.app.recoverable.is_empty(), "Later hides the card for this launch");
+    }
+
+    /// #9299: Discard all asks first; Cancel keeps every entry, confirming discards them all.
+    #[test]
+    fn discard_all_asks_first_then_discards_every_listed_autosave() {
+        let (mut crashed, dir) = app("discard-all", Duration::ZERO);
+        for i in 0..3 {
+            if i > 0 {
+                documents::new_tab(&mut crashed);
+            }
+            name(&mut crashed, &format!("Design {i}"));
+            edit(&mut crashed);
+        }
+        tick_and_wait(&mut crashed);
+        drop(crashed);
+        assert_eq!(recovery::orphans(&dir).len(), 3);
+
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        start(&mut h.app, &dir, Duration::from_secs(3600));
+        h.frames(4);
+        assert_eq!(h.app.recoverable.len(), 3);
+        assert!(crate::scenario::handle_at("recovery:discard_all").is_some());
+        h.step(&json!({"widget": "Discard all"})).unwrap();
+        h.frames(2);
+        assert!(h.app.recovery_discard_all, "Discard all opens its confirmation");
+        assert!(h.widget("Cancel").is_some() && h.widget("Discard all").is_some(), "a confirmation first");
+        assert!(h.widget("Discard 3 autosaves?").is_some(), "the title counts the autosaves");
+        assert!(h.widget("Later").is_none(), "the confirmation replaces the list");
+        assert_eq!(recovery::orphans(&dir).len(), 3, "nothing discarded before the answer");
+        h.step(&json!({"widget": "Cancel"})).unwrap();
+        h.frames(2);
+        assert!(h.widget("Later").is_some(), "Cancel goes back to the list");
+        assert_eq!(h.app.recoverable.len(), 3);
+        assert_eq!(recovery::orphans(&dir).len(), 3);
+
+        h.step(&json!({"widget": "Discard all"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"widget": "Discard all"})).unwrap();
+        h.frames(2);
+        assert!(h.app.recoverable.is_empty());
+        assert!(!h.app.recovery_discard_all);
+        assert!(recovery::orphans(&dir).is_empty(), "every listed autosave is gone");
+        assert!(h.widget("Later").is_none());
+        drop(h);
+        let _ = fs::remove_dir_all(dir);
     }
 }

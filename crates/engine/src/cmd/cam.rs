@@ -584,8 +584,8 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .map_or_else(|| format!("Setup {}", s.doc.manufacture.setups.len() + 1), str::to_string);
-    let bodies = crate::params::string_list(p, "bodies");
-    let fixtures = crate::params::string_list(p, "fixtures");
+    let bodies = crate::params::string_list(cmd, p, "bodies")?;
+    let fixtures = crate::params::string_list(cmd, p, "fixtures")?;
     for b in bodies.iter().chain(&fixtures) {
         if s.model.state().body(b).is_none() {
             return Err(bad(cmd, format!("no body `{b}`")));
@@ -631,10 +631,10 @@ fn setup_set(s: &mut Session, p: &Value) -> Result<Value> {
         st.name = n.trim().to_string();
     }
     if p.get("bodies").is_some() {
-        st.bodies = crate::params::string_list(p, "bodies");
+        st.bodies = crate::params::string_list(cmd, p, "bodies")?;
     }
     if p.get("fixtures").is_some() {
-        st.fixtures = crate::params::string_list(p, "fixtures");
+        st.fixtures = crate::params::string_list(cmd, p, "fixtures")?;
     }
     for b in st.bodies.iter().chain(&st.fixtures) {
         if s.model.state().body(b).is_none() {

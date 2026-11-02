@@ -3,7 +3,6 @@
 //! `cam.simulate.show`, so the viewport's stock, tool and path follow. Closing runs
 //! `cam.simulate.hide`.
 
-use egui::RichText;
 use serde_json::json;
 
 use crate::SolveApp;
@@ -32,11 +31,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     };
     let t = Tokens::get();
     let mut pb: Playback = ctx.data(|d| d.get_temp(state_id())).unwrap_or(Playback { progress: preview.progress, ..Default::default() });
-    let mut open = true;
+
     let mut want: Option<serde_json::Value> = None;
     let setup = preview.setup;
-    let title = RichText::new(crate::i18n::tr_label("Machining Simulation")).strong().size(t.font_button);
-    crate::frame::window(ctx, title, crate::frame::Width::Normal).id(egui::Id::new("sc_cam_sim")).open(&mut open).resizable(false).show(ctx, |ui| {
+    let closed = crate::ui_kit::Window::new(egui::Id::new("sc_cam_sim"), "ws_manufacture", crate::i18n::tr_label("Machining Simulation")).show_body(ctx, |ui| {
         let op: String = preview.operation.as_ref().map_or_else(|| crate::i18n::tr_label("no operation").to_string(), |(_, n)| n.clone());
         crate::ui_kit::caption(ui, "Operation", &format!("{op}  ({} / {} moves)", preview.move_index + 1, preview.total_moves));
         crate::ui_kit::caption(ui, "Time", &format!("{:.0} s / {:.0} s", preview.time_s, preview.total_time_s));
@@ -95,7 +93,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             ui.ctx().request_repaint();
         }
     });
-    if !open {
+    if closed {
         let _ = app.run("cam.simulate.hide", json!({}));
         ctx.data_mut(|d| d.remove::<Playback>(state_id()));
         return;

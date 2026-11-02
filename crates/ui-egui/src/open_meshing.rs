@@ -4,7 +4,7 @@
 //! file) and placed; the display meshes are made afterwards, off the UI thread. Until they all
 //! are, the viewport draws the bodies already meshed ([`shown_world`]), so the first parts show
 //! within moments and the window stays responsive while the rest come in. The first placement of
-//! every part is meshed first: its other placements only move that mesh. The view is framed from
+//! every part is meshed first: its other placements are drawn from that mesh. The view is framed from
 //! the bodies' outlines meanwhile, and framed again from the meshes when they are all made, unless
 //! the camera was moved in between. Editing the design meanwhile meshes the new world instead.
 //!
@@ -15,6 +15,7 @@
 //!
 //! Display only: commands, picking of what is drawn and exports read the session's world as ever.
 
+use crate::ui_kit::{Container, Surface};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +52,9 @@ pub(crate) struct Meshing {
 }
 
 impl Meshing {
-    fn start(world: Arc<ModelState>, plans: bool) -> Meshing {
+    /// `plans`: the bodies are drawn from their display plans; `shared`: large meshes are drawn
+    /// from shared vertices (a GPU viewport), made here too.
+    fn start(world: Arc<ModelState>, plans: bool, shared: bool) -> Meshing {
         let n = world.bodies.len();
         let ready = Arc::new(Mutex::new(Vec::with_capacity(n)));
         let (done, stop) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
@@ -63,27 +66,41 @@ impl Meshing {
         }
         first.extend(rest);
         let job = (world.clone(), ready.clone(), done.clone(), stop.clone());
-        let spawned = std::thread::Builder::new().name("open-meshing".into()).spawn(move || {
-            let (world, ready, done, stop) = job;
-            solidcraft_engine::kernel::for_each_on_threads(&first, 16, |&i| {
-                if stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                if let Some(b) = world.bodies.get(i) {
-                    let _ = b.mesh();
-                    if plans {
-                        let _ = b.display_plan();
-                        let _ = b.plan_mesh();
-                    }
-                }
-                if let Ok(mut r) = ready.lock() {
-                    r.push(i);
-                }
-                done.fetch_add(1, Ordering::Release);
-            });
-        });
-        if spawned.is_err() {
-            // No thread: the viewport meshes as it draws, as before.
+        let spawned = threads()
+            && std::thread::Builder::new()
+                .name("open-meshing".into())
+                .spawn(move || {
+                    let (world, ready, done, stop) = job;
+                    solidcraft_engine::kernel::for_each_on_threads(&first, 16, |&i| {
+                        if stop.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if let Some(b) = world.bodies.get(i) {
+                            // What the viewport draws and picks: a placed part's shared mesh, not a
+                            // moved copy of it (its placements are drawn as instances of it).
+                            let (mesh, _) = b.mesh_in_place();
+                            // A large mesh's shared vertices too, so its first frame does not weld them.
+                            if shared {
+                                crate::viewport::warm_shared_tris(&mesh);
+                            }
+                            if plans {
+                                let _ = b.display_plan();
+                                let _ = b.plan_mesh_in_place_at(solidcraft_engine::doc::display_quality::current());
+                            }
+                        }
+                        if let Ok(mut r) = ready.lock() {
+                            r.push(i);
+                        }
+                        done.fetch_add(1, Ordering::Release);
+                    });
+                })
+                .is_ok();
+        if !spawned {
+            // No thread (the web build): the viewport meshes as it draws, as before. Every body
+            // is listed ready too, or the picture stays empty with "Loading parts n/n" (#10198).
+            if let Ok(mut r) = ready.lock() {
+                r.extend(0..n);
+            }
             done.store(n, Ordering::Release);
         }
         Meshing {
@@ -117,11 +134,21 @@ impl Drop for Meshing {
 pub(crate) fn start(app: &mut SolveApp, remember: Option<String>) {
     app.open_meshing_next = false;
     let plans = app.viewport.gpu.is_some_and(|g| g.tess);
-    let mut meshing = Meshing::start(app.session.world_state(), plans);
+    let mut meshing = Meshing::start(app.session.world_state(), plans, app.viewport.gpu.is_some());
     meshing.remember = remember;
     app.open_meshing = Some(meshing);
     app.fit_view();
     if let Some(m) = app.open_meshing.as_mut() {
+        m.framed = Some(app.cam);
+    }
+}
+
+/// Take the camera as the one the open framed, after a fit the app itself resolved (the view is
+/// framed again as the design goes in, once the layout is known): `tick` frames the meshes only
+/// while the camera is still the one it framed, which is how the user taking the view over keeps
+/// their own framing.
+pub(crate) fn note_framed(app: &mut SolveApp) {
+    if let Some(m) = app.open_meshing.as_mut().filter(|m| !m.complete && m.framed.is_some()) {
         m.framed = Some(app.cam);
     }
 }
@@ -137,13 +164,14 @@ pub(crate) fn show(app: &SolveApp, ctx: &egui::Context) {
     let (Some((done, total)), Some(view)) = (progress(app), app.viewport.rect) else { return };
     let t = crate::theme::Tokens::get();
     let at = egui::pos2(view.left() + 12.0, view.bottom() - 12.0);
-    egui::Area::new(egui::Id::new("open_meshing"))
+    Container::new(ctx, Surface::Toast)
+        .area(egui::Id::new("open_meshing"))
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::LEFT_BOTTOM)
         .fixed_pos(at)
         .interactable(false)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).fill(t.panel).show(ui, |ui| {
+            Container::popup_frame(ui.style()).fill(t.panel).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(egui::RichText::new(format!("Loading parts {done}/{total}")).color(t.text));
@@ -176,7 +204,7 @@ pub(crate) fn tick(app: &mut SolveApp, ctx: &egui::Context) {
         // The design changed (an edit, an undo): mesh the new world; what is made is kept.
         let (framed, remember) = (m.framed, m.remember.clone());
         let plans = app.viewport.gpu.is_some_and(|g| g.tess);
-        let mut next = Meshing::start(world.clone(), plans);
+        let mut next = Meshing::start(world.clone(), plans, app.viewport.gpu.is_some());
         (next.framed, next.remember) = (framed, remember);
         app.open_meshing = Some(next);
     }
@@ -242,6 +270,30 @@ pub(crate) fn refresh(app: &mut SolveApp, now: f64) {
     }
     m.shown = Some((done, Arc::new(st)));
     m.shown_at = now;
+}
+
+/// Whether the meshes may be made on a thread of their own. The web build cannot start one; a
+/// test says no to do the same ([`without_threads`]).
+fn threads() -> bool {
+    #[cfg(test)]
+    if NO_THREADS.with(std::cell::Cell::get) {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    static NO_THREADS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` as the web build runs: meshing cannot start a thread.
+#[cfg(test)]
+pub(crate) fn without_threads<R>(f: impl FnOnce() -> R) -> R {
+    NO_THREADS.with(|t| t.set(true));
+    let r = f();
+    NO_THREADS.with(|t| t.set(false));
+    r
 }
 
 fn profiling() -> bool {

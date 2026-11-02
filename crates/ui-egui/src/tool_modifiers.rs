@@ -7,7 +7,7 @@
 //! so that neither gizmo nor canvas needs access to application state.
 //!
 //! Strategy: bindings name a chord; call sites ask whether the chord matches the
-//! held keys (`held` / `matches_exact`) instead of reading `Modifiers` fields
+//! held keys (`held` / `matches`) instead of reading `Modifiers` fields
 //! directly. Platform primary is Ctrl on Windows/Linux and Cmd on macOS; the
 //! physical Ctrl key on macOS is never treated as primary.
 
@@ -104,11 +104,6 @@ impl ModifierCombo {
         }
     }
 
-    /// True if **exactly** these modifiers (and no others) are held.
-    pub fn matches_exact(self, m: Modifiers) -> bool {
-        self.matches(Held::from_modifiers(m), Match::Exact)
-    }
-
     /// True if **at least** these modifiers are held (subset / "held" match).
     pub fn held(self, m: Modifiers) -> bool {
         self.matches(Held::from_modifiers(m), Match::AtLeast)
@@ -141,18 +136,24 @@ impl ModifierCombo {
         parts.join("+")
     }
 
+    /// The display label in the user's language, for the host platform: "Cmd or Option" reads
+    /// "Cmd oder Option" in German. Key names stay as the keyboard prints them.
+    pub fn shown_label(self) -> String {
+        let platform = Platform::host();
+        if self == Self::CTRL_ALT {
+            return crate::i18n::format("ui.modifiers_either", &[("first", ctrl_name_for(platform)), ("second", alt_name_for(platform))]);
+        }
+        if self == Self::NONE {
+            return crate::i18n::tr_label("None").to_string();
+        }
+        self.label_for(platform)
+    }
+
     /// Combos offered by the sketch snap-suppress picker (classic OR first).
     pub const SNAP_SUPPRESS_CHOICES: [Self; 4] = [Self::CTRL_ALT, Self::CTRL, Self::ALT, Self::SHIFT];
-
-    /// All single-key combos, in display order (for a picker widget).
-    pub const SINGLE_KEYS: [Self; 3] = [Self::CTRL, Self::ALT, Self::SHIFT];
 }
 
 /// "Ctrl/Cmd" on Windows/Linux, "Cmd" on macOS.
-pub fn ctrl_name() -> &'static str {
-    ctrl_name_for(Platform::host())
-}
-
 pub fn ctrl_name_for(platform: Platform) -> &'static str {
     match platform {
         Platform::Mac => "Cmd",
@@ -161,10 +162,6 @@ pub fn ctrl_name_for(platform: Platform) -> &'static str {
 }
 
 /// "Alt" on Windows/Linux, "Option" on macOS.
-pub fn alt_name() -> &'static str {
-    alt_name_for(Platform::host())
-}
-
 pub fn alt_name_for(platform: Platform) -> &'static str {
     match platform {
         Platform::Mac => "Option",
@@ -230,6 +227,7 @@ pub enum ModAction {
     TextSingleLetter = 7,
     TextHandleConstrain = 8,
     IsoCurveAlternate = 9,
+    ExtendPair = 10,
 }
 
 impl ModAction {
@@ -244,6 +242,7 @@ impl ModAction {
         Self::TextSingleLetter,
         Self::TextHandleConstrain,
         Self::IsoCurveAlternate,
+        Self::ExtendPair,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -258,6 +257,7 @@ impl ModAction {
             Self::TextSingleLetter => "text_single_letter",
             Self::TextHandleConstrain => "text_handle_constrain",
             Self::IsoCurveAlternate => "isocurve_alternate",
+            Self::ExtendPair => "extend_pair",
         }
     }
 
@@ -500,9 +500,9 @@ mod tests {
     #[test]
     fn exact_match_requires_no_extra_keys() {
         let ctrl = ModifierCombo::CTRL;
-        assert!(ctrl.matches_exact(mods(false, true, false)));
-        assert!(!ctrl.matches_exact(mods(true, true, false)), "extra shift must fail");
-        assert!(!ctrl.matches_exact(mods(false, false, false)));
+        assert!(ctrl.matches(Held::from_modifiers(mods(false, true, false)), Match::Exact));
+        assert!(!ctrl.matches(Held::from_modifiers(mods(true, true, false)), Match::Exact), "extra shift must fail");
+        assert!(!ctrl.matches(Held::from_modifiers(mods(false, false, false)), Match::Exact));
     }
 
     #[test]
@@ -526,7 +526,7 @@ mod tests {
         let ctrl = ModifierCombo::CTRL;
         let cmd_mods = Modifiers { command: true, ..Default::default() };
         assert!(ctrl.held(cmd_mods), "Cmd on macOS should match a ctrl binding");
-        assert!(ctrl.matches_exact(cmd_mods), "exact match also normalises command");
+        assert!(ctrl.matches(Held::from_modifiers(cmd_mods), Match::Exact), "exact match also normalises command");
     }
 
     #[test]
@@ -626,6 +626,20 @@ mod tests {
         assert!(set.contains(ModAction::IsoCurveAlternate));
         let bare = resolve(&[], None, held, Trigger::Press);
         assert!(!bare.contains(ModAction::IsoCurveAlternate));
+    }
+
+    #[test]
+    fn extend_shift_is_the_pair_action_and_not_a_midpoint_snap() {
+        let held = Held { shift: true, ..Default::default() };
+        let press = resolve(&[], descriptor("sketch.extend"), held, Trigger::Press);
+        assert!(press.contains(ModAction::ExtendPair));
+        let plain = resolve(&[], descriptor("sketch.extend"), Held::default(), Trigger::Press);
+        assert!(!plain.contains(ModAction::ExtendPair));
+        // Sketch scopes give Shift the midpoint snap while drawing; Extend's own entry turns it off.
+        let live = resolve(&[Scope::SketchDraw, Scope::SketchDrag], descriptor("sketch.extend"), held, Trigger::Live);
+        assert!(!live.contains(ModAction::TargetMidpoint));
+        let drawing = resolve(&[Scope::SketchDraw, Scope::SketchDrag], descriptor("sketch.line"), held, Trigger::Live);
+        assert!(drawing.contains(ModAction::TargetMidpoint));
     }
 
     #[test]

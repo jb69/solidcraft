@@ -59,12 +59,12 @@ fn certified_annulus_side_rows_follow_radius_edits_and_clone() {
     run(&mut s, "component.paste_new", json!({"component":part,"translate":[30,0,0]}));
     assert_eq!(s.doc.configs.columns.len(), 2);
     run(&mut s, "config.activate", json!({"row":"Painted"}));
-    assert_eq!(painted_radius(&s, "Ring (copy)", 12.), 2);
+    assert_eq!(painted_radius(&s, "Ring (2)", 12.), 2);
     let reopened = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
     let mut reopened = Session::new(reopened);
     run(&mut reopened, "config.activate", json!({"row":"Painted"}));
     assert_eq!(painted_radius(&reopened, "Ring", 12.), 2);
-    assert_eq!(painted_radius(&reopened, "Ring (copy)", 12.), 2);
+    assert_eq!(painted_radius(&reopened, "Ring (2)", 12.), 2);
     run(&mut reopened, "config.activate", json!({"row":"Default"}));
     assert!(reopened.doc.appearances.faces.is_empty());
 }
@@ -111,8 +111,9 @@ fn legacy_v9_imported_emboss_anchor_and_ordinary_face_paint_replay_without_renam
     let mut legacy: Value = serde_json::from_str(&s.doc.to_json()).unwrap();
     legacy["format"] = json!("solidcraft/9");
     let reopened = Session::new(solidcraft_doc::Document::from_json(&legacy.to_string()).unwrap());
-    // Saved before format 14, it keeps naming the pieces it makes in the kernel's shell order.
-    let anchored = solidcraft_doc::Feature { shell_piece_order: true, ..anchored };
+    // Saved before format 14, it keeps naming the pieces it makes in the kernel's shell order,
+    // and numbering the pieces of its faces as that build did (#3902).
+    let anchored = solidcraft_doc::Feature { shell_piece_order: true, kernel_piece_order: true, ..anchored };
     assert_eq!(reopened.doc.feature(anchored.id).unwrap(), &anchored);
     // Names saved before format 14 keep naming the face they named, marked so they are found as
     // the build that saved them found them.
@@ -213,7 +214,7 @@ fn certified_side_transfer_preserves_geometry_and_unsupported_taper_refuses_atom
     run(&mut s, "sketch.finish", json!({}));
     let source = run(&mut s, "solid.extrude", json!({"distance":10,"body_name":"Round"}))["feature"].as_u64().unwrap();
     paint(&mut s, "Round", json!([10, 0, 5]));
-    let created = run(&mut s, "component.create", json!({"name":"Placed"}));
+    let created = run(&mut s, "component.create", json!({"name":"Placed","grounded":false}));
     let destination = created["component"].as_u64().unwrap();
     let occurrence = created["occurrence"].as_u64().unwrap();
     run(&mut s, "occurrence.move", json!({"occurrence":occurrence,"translate":[30,20,0],"angle":90,"axis":[0,0,1],"capture":false}));
@@ -258,7 +259,7 @@ fn certified_import_payload_binding_roundtrip_clone_and_replacement_refusal() {
     );
     run(&mut s, "component.paste_new", json!({"component":part,"translate":[30,0,0]}));
     run(&mut s, "config.activate", json!({"row":"Painted"}));
-    assert_eq!(painted_radius(&s, "Imported (copy)", 10.), pieces);
+    assert_eq!(painted_radius(&s, "Imported (2)", 10.), pieces);
     let reopened = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
     let mut s = Session::new(reopened);
     run(&mut s, "config.activate", json!({"row":"Painted"}));
@@ -269,7 +270,7 @@ fn certified_import_payload_binding_roundtrip_clone_and_replacement_refusal() {
     assert_ne!(&**payload, step.as_str());
     s.refresh();
     assert!(s.doc.face_colors(s.model.state().body("Imported").unwrap()).is_empty());
-    assert_eq!(painted_radius(&s, "Imported (copy)", 10.), pieces);
+    assert_eq!(painted_radius(&s, "Imported (2)", 10.), pieces);
     let before = s.doc.clone();
     let history = s.undo.len();
     assert!(s.execute("config.preview", &json!({"row":"Painted"})).is_err());

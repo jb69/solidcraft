@@ -324,7 +324,6 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         (Some(n), Target::Setup(_)) => format!("Setup: {n}"),
         (None, _) => kind_label(ed.target.noun()),
     };
-    let title = RichText::new(name).strong().size(t.font_button);
     let uses = match ed.target {
         Target::Tool(id) => app.session.doc.manufacture.tool_uses(id),
         _ => 0,
@@ -355,21 +354,21 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         Target::Operation(_) | Target::NewOperation(_) => selection_geometry(app, ed.draft["type"].as_str().unwrap_or("")),
         _ => None,
     };
-    let mut open = true;
     let (mut ok, mut apply_now, mut cancel, mut reload) = (false, false, false, false);
     // The form scrolls within most of the window's height.
     let tall = (ctx.content_rect().height() * 0.72).max(320.0);
     // Held by its top edge: opening and folding sections grows and shrinks it downwards
     // instead of moving it under the pointer.
     let area = ctx.content_rect();
-    crate::frame::window(ctx, title, crate::frame::Width::Wide)
-        .id(egui::Id::new("sc_cam_editor"))
-        .pivot(egui::Align2::CENTER_TOP)
-        .default_pos(egui::pos2(area.center().x, area.top() + t.space_24 * 5.0))
-        .min_width(t.space_24 * 18.0)
-        .open(&mut open)
-        .resizable(true)
-        .show(ctx, |ui| {
+    // Esc stops picking an origin; it does not close the editor (its close and Cancel do).
+    let can = ed.blocked().is_none();
+    let (closed, action) = crate::ui_kit::Window::new(egui::Id::new("sc_cam_editor"), "ws_manufacture", &name)
+        .cards(2.5)
+        .placed(egui::Align2::CENTER_TOP, egui::pos2(area.center().x, area.top() + t.space_24 * 5.0))
+        .fields()
+        .keep_open_on_escape()
+        .actions("OK", "Cancel", Some("Apply"))
+        .show(ctx, can, |ui| {
             // Tabs.
             let mut tab = usize::from(ed.tab == Tab::Json);
             // Room for both labels side by side (narrower, the kit turns segments into a dropdown).
@@ -441,22 +440,14 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Some((m, error)) = &ed.message {
                 ui.label(RichText::new(m).color(if *error { t.error } else { t.warning }));
             }
-            ui.separator();
-            ui.horizontal(|ui| {
-                let can = ed.blocked().is_none();
-                ui.add_enabled_ui(can, |ui| {
-                    if crate::ui_kit::primary_button(ui, "OK").clicked() {
-                        ok = true;
-                    }
-                    if crate::ui_kit::button(ui, "Apply", crate::ui_kit::Button::Normal).clicked() {
-                        apply_now = true;
-                    }
-                });
-                if crate::ui_kit::button(ui, "Cancel", crate::ui_kit::Button::Normal).clicked() {
-                    cancel = true;
-                }
-            });
         });
+    match action {
+        crate::ui_kit::Action::Ok if can => ok = true,
+        crate::ui_kit::Action::Apply if can => apply_now = true,
+        crate::ui_kit::Action::Cancel => cancel = true,
+        _ => {}
+    }
+    let open = !closed;
     if reload {
         ed.base = now.clone();
         ed.set_draft(now);
@@ -1276,7 +1267,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, proj: &crate::viewpo
         _ => None,
     };
     if let Some((shape, wcs)) = &stock {
-        draw_stock(painter, proj, shape, wcs, t.accent);
+        draw_stock(painter, proj, shape, wcs, t.text);
     }
     if ed.origin.picking {
         let ctx = painter.ctx().clone();
@@ -1314,7 +1305,8 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, proj: &crate::viewpo
     app.cam_editor = Some(ed);
 }
 
-/// The stock's outline: a box's twelve edges, or a cylinder's end circles and four lines.
+/// The stock's outline (in the text colour, apart from the toolpaths' accent): a box's twelve
+/// edges, or a cylinder's end circles and four lines.
 fn draw_stock(painter: &egui::Painter, proj: &crate::viewport::Proj, shape: &cam::setup::StockShape, wcs: &cam::frame::Frame, col: egui::Color32) {
     use solidcraft_engine::geom::Vec3;
     let stroke = egui::Stroke::new(1.5, col.gamma_multiply(0.85));

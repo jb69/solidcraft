@@ -8,14 +8,15 @@
 //! error that names the policy.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use solidcraft_geom::Vec3;
 use solidcraft_render::{AnalysisMode, Camera, Rgb, SECTION_CAP, Scene};
 use wgpu::util::DeviceExt;
 
-use crate::view::{AccessMap, Frame, GpuScene, GpuTarget, Renderer, analysis_colors, analysis_uniform};
-use crate::{GpuError, Result, popped};
+use crate::view::{AccessMap, DrawStats, Frame, GpuScene, GpuTarget, Renderer, analysis_colors, analysis_uniform};
+use crate::{GpuError, Result, caught, error_scopes};
 
 /// The colour format pictures are drawn in: sRGB bytes as they are, like the viewport's usual
 /// (non-sRGB) target.
@@ -42,6 +43,9 @@ pub struct Capturer {
     depth: wgpu::TextureFormat,
     max_side: u32,
     state: Mutex<State>,
+    /// The device was lost (#4172): set by the device's lost callback, which whoever made the
+    /// device registered ([`Capturer::watching`]).
+    lost: Arc<AtomicBool>,
 }
 
 struct State {
@@ -72,7 +76,7 @@ impl Capturer {
         let samples =
             if samples > 1 && flags(FORMAT).sample_count_supported(samples) && flags(depth).sample_count_supported(samples) { samples } else { 1 };
         let scopes = error_scopes(&device);
-        let renderer = Renderer::new(&device, GpuTarget { format: FORMAT, depth: Some(depth), samples, tess: false }, None);
+        let renderer = Renderer::new(&device, GpuTarget { format: FORMAT, depth: Some(depth), samples, tess: false, oit: false }, None);
         let background = background_pipeline(&device, samples, depth);
         caught(scopes).map_or(Ok(()), |e| Err(GpuError::Pipeline(e)))?;
         let max_side = device.limits().max_texture_dimension_2d.min(MAX_SIDE);
@@ -85,7 +89,35 @@ impl Capturer {
             state: Mutex::new(State { renderer, background, key: 0, access_version: 0 }),
             device,
             queue,
+            lost: Arc::default(),
         })
+    }
+
+    /// Stop drawing once `lost` is set: the flag the device's lost callback sets (the app's
+    /// window device has one, `egui_wgpu::DeviceLost`). A lost device can't draw again; its
+    /// pictures fail with [`GpuError::DeviceLost`] without touching it (#4172).
+    pub fn watching(mut self, lost: Arc<AtomicBool>) -> Self {
+        self.lost = lost;
+        self
+    }
+
+    /// The device was lost: pictures fail with [`GpuError::DeviceLost`].
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
+    /// [`Capturer::is_lost`], asking the driver first: a submission that opens a command list
+    /// meets a loss the driver reports and marks it, where the picture's first upload would
+    /// panic inside wgpu. As `egui_wgpu::DeviceLost::probe`: an empty submission only signals a
+    /// fence, which a reset D3D12 device let through (#6528).
+    fn probe_lost(&self) -> bool {
+        if self.is_lost() {
+            return true;
+        }
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("device lost probe") });
+        encoder.insert_debug_marker("device lost probe");
+        self.queue.submit([encoder.finish()]);
+        self.is_lost()
     }
 
     /// A device of its own, without a window (native only): the adapter the `SOLIDCRAFT_GPU`
@@ -95,7 +127,8 @@ impl Capturer {
         let (adapter, device, queue) = crate::open_headless()?;
         // Errors are caught per picture (error scopes); anything else is logged, never a panic.
         device.on_uncaptured_error(Arc::new(|e: wgpu::Error| log::error!("GPU: {e}")));
-        Self::new(&adapter, device, queue)
+        let lost = watch_lost(&device);
+        Ok(Self::new(&adapter, device, queue)?.watching(lost))
     }
 
     /// As [`Capturer::headless`], drawing with the depth format `depth` ([`Capturer::with_depth`]).
@@ -103,7 +136,8 @@ impl Capturer {
     pub fn headless_with_depth(depth: wgpu::TextureFormat) -> Result<Self> {
         let (adapter, device, queue) = crate::open_headless()?;
         device.on_uncaptured_error(Arc::new(|e: wgpu::Error| log::error!("GPU: {e}")));
-        Self::with_depth(&adapter, device, queue, depth)
+        let lost = watch_lost(&device);
+        Ok(Self::with_depth(&adapter, device, queue, depth)?.watching(lost))
     }
 
     /// As [`Capturer::headless`], without multisampling: one sample per pixel, as the viewport
@@ -113,7 +147,8 @@ impl Capturer {
         let (adapter, device, queue) = crate::open_headless()?;
         device.on_uncaptured_error(Arc::new(|e: wgpu::Error| log::error!("GPU: {e}")));
         let depth = crate::depth_format(&device, true);
-        Self::with_samples(&adapter, device, queue, depth, 1)
+        let lost = watch_lost(&device);
+        Ok(Self::with_samples(&adapter, device, queue, depth, 1)?.watching(lost))
     }
 
     /// The depth format pictures are drawn with; float formats are drawn with reversed depth.
@@ -139,8 +174,28 @@ impl Capturer {
 
     /// `scene` seen by `cam`, `width` × `height` pixels: straight RGBA, rows top to bottom.
     pub fn rgba(&self, scene: &Scene, cam: &Camera, width: u32, height: u32) -> Result<Vec<u8>> {
+        self.rgba_highlighted(scene, None, cam, width, height)
+    }
+
+    /// [`Capturer::rgba`] with `highlight` drawn as the viewport draws its highlight scene
+    /// (selection and hover feedback), over the model scene.
+    pub fn rgba_highlighted(&self, scene: &Scene, highlight: Option<GpuScene>, cam: &Camera, width: u32, height: u32) -> Result<Vec<u8>> {
+        self.draw(scene, highlight, cam, width, height).map(|(rgba, _)| rgba)
+    }
+
+    /// [`Capturer::rgba`] and what the picture drew ([`DrawStats`]). Both come from the same
+    /// turn on the device, so another thread's picture can't put its counts in their place.
+    pub fn rgba_with_stats(&self, scene: &Scene, cam: &Camera, width: u32, height: u32) -> Result<(Vec<u8>, DrawStats)> {
+        self.draw(scene, None, cam, width, height)
+    }
+
+    /// The picture and what it drew, both read while this call has the device to itself.
+    fn draw(&self, scene: &Scene, highlight: Option<GpuScene>, cam: &Camera, width: u32, height: u32) -> Result<(Vec<u8>, DrawStats)> {
         if !(1..=self.max_side).contains(&width) || !(1..=self.max_side).contains(&height) {
             return Err(GpuError::Render(format!("a picture is 1 to {} pixels a side, not {width} × {height}", self.max_side)));
+        }
+        if self.probe_lost() {
+            return Err(GpuError::DeviceLost);
         }
         let mut state = self.state.lock().map_err(|_| GpuError::Render("an earlier picture failed on this device".into()))?;
         let state = &mut *state;
@@ -153,7 +208,12 @@ impl Capturer {
             }
             _ => None,
         };
-        let frame = frame(scene, cam, [width, height], state.key, access);
+        let mut frame = frame(scene, cam, [width, height], state.key, access);
+        // Always a highlight scene of the picture's own, empty without one: the renderer keeps
+        // its last highlight scene while the slot is empty (as the viewport does until the next
+        // is built), so the previous picture's highlight would show in this one.
+        frame.hl_key = state.key;
+        frame.hl_slot = Arc::new(Mutex::new(Some(highlight.unwrap_or_default())));
         let (device, queue) = (&self.device, &self.queue);
         let scopes = error_scopes(device);
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
@@ -228,6 +288,10 @@ impl Capturer {
             size,
         );
         let submission = queue.submit([encoder.finish()]);
+        // Waiting on a device the submission found lost would panic inside wgpu.
+        if self.is_lost() {
+            return Err(GpuError::DeviceLost);
+        }
         if let Some(e) = caught(scopes) {
             return Err(GpuError::Render(e));
         }
@@ -239,11 +303,7 @@ impl Capturer {
         device
             .poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(TIMEOUT) })
             .map_err(|e| GpuError::Render(format!("waiting for the picture: {e}")))?;
-        match rx.try_recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(GpuError::Render(format!("reading the picture back: {e}"))),
-            Err(_) => return Err(GpuError::Unsupported("reading a picture back without waiting for the browser".into())),
-        }
+        read_back(&rx)?;
         let data = slice.get_mapped_range().map_err(|e| GpuError::Render(format!("reading the picture back: {e}")))?;
         let mut rgba = Vec::with_capacity((row as usize) * (height as usize));
         for r in data.chunks(padded as usize).take(height as usize) {
@@ -252,7 +312,8 @@ impl Capturer {
         if rgba.len() != (row as usize) * (height as usize) {
             return Err(GpuError::Render("the picture read back short".into()));
         }
-        Ok(rgba)
+        let stats = state.renderer.stats().lock().map(|s| *s).unwrap_or_default();
+        Ok((rgba, stats))
     }
 
     /// [`Capturer::rgba`] as PNG bytes.
@@ -322,7 +383,9 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
     let cap = scene.cap.unwrap_or(SECTION_CAP);
     let mode = scene.analysis.map(|a| a.mode);
     Frame {
+        product_lights: None,
         product: false,
+        upload_error: None,
         key,
         slot: Arc::new(Mutex::new(Some(scene_geometry(scene)))),
         sketch_key: 0,
@@ -336,15 +399,20 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
         back: cam.back().to_f32(),
         size_px: [width as f32, height as f32],
         clip: scene.clip.map_or([0.0; 4], |(n, d)| [n.x as f32, n.y as f32, n.z as f32, d as f32]),
-        cap: [f32::from(cap.0) / 255.0, f32::from(cap.1) / 255.0, f32::from(cap.2) / 255.0, 1.0],
+        cap: [f32::from(cap.0) / 255.0, f32::from(cap.1) / 255.0, f32::from(cap.2) / 255.0, if scene.plain_cap { 0.0 } else { 1.0 }],
         images: Vec::new(),
+        clouds: Vec::new(),
         analysis: analysis_uniform(mode, access.as_ref()),
         analysis_colors: scene.analysis.map_or([0.0; 36], |a| analysis_colors(&a.colors)),
         access,
         outline: true,
         eye: [eye[0], eye[1], eye[2], if cam.fov > 0.0 { 1.0 } else { 0.0 }],
         ao_radius: 0.0,
+        ao_samples: crate::view::AO_SAMPLES,
+        sky: [0.0; 4],
         ssaa: 1.0,
+        hover_tint: [0.0; 3],
+        selection_tint: [0.0; 3],
     }
 }
 
@@ -361,7 +429,7 @@ pub fn scene_geometry(scene: &Scene) -> GpuScene {
         let faces: HashMap<u32, Rgb> = m.face_colors.iter().copied().collect();
         let mesh = &m.mesh;
         for (ti, t) in mesh.triangles.iter().enumerate() {
-            let col = c4(mesh.tri_face.get(ti).and_then(|f| faces.get(f)).copied().unwrap_or(m.color));
+            let col = sc.color(c4(mesh.tri_face.get(ti).and_then(|f| faces.get(f)).copied().unwrap_or(m.color)));
             let [Some(a), Some(b), Some(c)] = t.map(|k| mesh.positions.get(k as usize).copied()) else { continue };
             let flat = (b - a).cross(c - a).normalized().unwrap_or(Vec3::Z);
             for (k, p) in t.iter().zip([a, b, c]) {
@@ -374,34 +442,46 @@ pub fn scene_geometry(scene: &Scene) -> GpuScene {
             }
         }
     }
-    let c4 = |c: Rgb| [c.0, c.1, c.2, 255];
+    let alpha = |a: f32| (a.clamp(0.0, 1.0) * 255.0).round() as u8;
     for l in &scene.grid {
+        let col = sc.color([l.color.0, l.color.1, l.color.2, alpha(l.alpha)]);
         for w in l.points.windows(2) {
-            sc.under_line(w[0].to_f32(), w[1].to_f32(), c4(l.color), l.width as f32);
+            sc.under_line(w[0].to_f32(), w[1].to_f32(), col, l.width as f32);
         }
     }
     for l in &scene.lines {
+        let col = sc.color([l.color.0, l.color.1, l.color.2, alpha(l.alpha)]);
         for w in l.points.windows(2) {
-            sc.line(w[0].to_f32(), w[1].to_f32(), c4(l.color), l.width as f32, l.on_top);
+            sc.line(w[0].to_f32(), w[1].to_f32(), col, l.width as f32, l.on_top);
         }
     }
     sc
 }
 
-/// Error scopes catching what a picture's GPU work may raise (popped by [`caught`]).
-fn error_scopes(device: &wgpu::Device) -> [wgpu::ErrorScopeGuard; 3] {
-    [wgpu::ErrorFilter::OutOfMemory, wgpu::ErrorFilter::Internal, wgpu::ErrorFilter::Validation].map(|f| device.push_error_scope(f))
+/// A flag `device`'s lost callback sets (a device of this crate's own: a device has one lost
+/// callback, and the app's window device has egui-wgpu's).
+#[cfg(not(target_arch = "wasm32"))]
+fn watch_lost(device: &wgpu::Device) -> Arc<AtomicBool> {
+    let lost = Arc::new(AtomicBool::new(false));
+    let seen = lost.clone();
+    device.set_device_lost_callback(move |reason, message| {
+        log::error!("GPU: the device was lost ({reason:?}): {message}");
+        seen.store(true, Ordering::Release);
+    });
+    lost
 }
 
-/// The first error the scopes caught.
-fn caught(scopes: [wgpu::ErrorScopeGuard; 3]) -> Option<String> {
-    let mut failed = None;
-    for scope in scopes.into_iter().rev() {
-        if let Some(e) = popped(scope.pop()) {
-            failed.get_or_insert(e.to_string());
-        }
-    }
-    failed
+/// The answer to a picture's read-back, once the wait for its submission is over. The read-back
+/// is ready by then, but its answer may still be on its way: any other submit or poll on the
+/// device (the window's frames, another picture's device check) can pick it up and answer it on
+/// its own thread once it lets go of the device. So a native picture waits for the answer; a
+/// browser answers later, on its own, and a picture can't wait for it there.
+fn read_back(answer: &std::sync::mpsc::Receiver<std::result::Result<(), wgpu::BufferAsyncError>>) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let answer = answer.recv_timeout(TIMEOUT).map_err(|e| GpuError::Render(format!("reading the picture back: {e}")))?;
+    #[cfg(target_arch = "wasm32")]
+    let answer = answer.try_recv().map_err(|_| GpuError::Unsupported("reading a picture back without waiting for the browser".into()))?;
+    answer.map_err(|e| GpuError::Render(format!("reading the picture back: {e}")))
 }
 
 /// The background gradient: the viewport's top colour at the top, its bottom one at the bottom,
@@ -498,9 +578,10 @@ mod tests {
         })
     }
 
-    /// The alpha of a triangle `scene_geometry` wrote (the last byte of its first vertex).
-    fn alpha(bytes: &[u8]) -> Option<u8> {
-        bytes.get(TRI_SIZE - 1).copied()
+    /// The colour of a triangle `scene_geometry` wrote (its first vertex's palette entry).
+    fn color(scene: &GpuScene, bytes: &[u8]) -> Option<[u8; 4]> {
+        let index = bytes.get(TRI_SIZE - 4..TRI_SIZE)?.try_into().ok().map(u32::from_le_bytes)?;
+        scene.palette.get(crate::view::PaletteIndex(index))
     }
 
     /// A body the design draws see-through goes into the scene's glass, at its own alpha, and
@@ -513,17 +594,19 @@ mod tests {
 
         let solid = geometry(1.0);
         assert_eq!((solid.tris.len(), solid.glass.len()), (3 * TRI_SIZE, 0));
-        assert_eq!(alpha(&solid.tris), Some(255), "a solid body is drawn opaque");
+        assert_eq!(color(&solid, &solid.tris), Some([200, 30, 30, 255]), "a solid body is drawn opaque");
 
         let glass = geometry(0.3);
         assert_eq!((glass.tris.len(), glass.glass.len()), (0, 3 * TRI_SIZE), "a see-through body is glass, not a solid triangle");
-        assert_eq!(alpha(&glass.glass), Some(77), "0.3 of 255");
+        assert_eq!(color(&glass, &glass.glass).map(|c| c[3]), Some(77), "0.3 of 255");
 
         // The threshold and the floor are the viewport's: an appearance a hair under 1 stays
         // solid, and opacity 0 still leaves a trace rather than vanishing.
         let almost = geometry(0.9995);
         assert_eq!((almost.tris.len(), almost.glass.len()), (3 * TRI_SIZE, 0), "an appearance a hair under 1 is still solid");
-        assert_eq!(alpha(&geometry(0.0).glass), Some(13), "0.05 of 255");
+        assert_eq!(color(&almost, &almost.tris).map(|c| c[3]), Some(255));
+        let trace = geometry(0.0);
+        assert_eq!(color(&trace, &trace.glass).map(|c| c[3]), Some(13), "0.05 of 255");
     }
 
     /// A face with a colour of its own is drawn in that colour, and takes its body's opacity:
@@ -533,7 +616,6 @@ mod tests {
         let mesh = SceneMesh { mesh: sheet(), color: Rgb(200, 30, 30), face_colors: vec![(0, Rgb(0, 255, 0))], opacity: 0.5 };
         let sc = scene_geometry(&Scene { meshes: vec![mesh], ..Default::default() });
         assert_eq!(sc.tris.len(), 0);
-        let first = sc.glass.get(TRI_SIZE - 4..TRI_SIZE);
-        assert_eq!(first, Some(&[0, 255, 0, 128][..]), "the face's own colour at the body's alpha");
+        assert_eq!(color(&sc, &sc.glass), Some([0, 255, 0, 128]), "the face's own colour at the body's alpha");
     }
 }

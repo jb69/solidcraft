@@ -374,3 +374,123 @@ fn drilled_sketch_points_break_through_a_sloping_back_face() {
     assert!(reopened.model.result(id).unwrap().error.is_none());
     near(volume(&mut reopened), left);
 }
+
+/// Back (z 0…6) under a smaller Front (z 14…20), and a sketch on Front's top face with points
+/// over Front (`in`) and beyond its edges, over Back (`out1`, `out2`).
+fn front_and_back(s: &mut Session) {
+    run(s, "solid.box", json!({"length": 40, "width": 40, "height": 6, "body_name": "Back"}));
+    run(s, "solid.box", json!({"corner": [10, 10, 14], "length": 20, "width": 20, "height": 6, "body_name": "Front"}));
+    run(s, "sketch.create", json!({"plane": {"face": [20, 20, 20]}, "name": "Pts", "project_edges": false}));
+    for (id, p) in [("in", [20, 20]), ("out1", [5, 5]), ("out2", [35, 35])] {
+        run(s, "sketch.point", json!({"point": p, "id": id}));
+    }
+    run(s, "sketch.finish", json!({}));
+}
+
+/// #2882: holes at the points of a sketch on a body's face drill that body, never one behind it.
+#[test]
+fn holes_from_a_sketch_on_a_face_drill_that_body_only() {
+    let mut s = Session::default();
+    front_and_back(&mut s);
+    let base = volume(&mut s);
+    run(&mut s, "solid.hole", json!({"sketch": "Pts", "points": ["in", "out1", "out2"], "diameter": 5, "depth": 4, "name": "H"}));
+    assert_eq!(s.doc.find_feature("H").unwrap().participants, vec!["Front".to_string()]);
+    near(base - volume(&mut s), pi() * 6.25 * 4.0);
+    assert!(!solid_at(&s, 20.0, 20.0, 18.0), "drilled into Front");
+    for (x, y) in [(5.0, 5.0), (35.0, 35.0), (20.0, 20.0)] {
+        assert!(solid_at(&s, x, y, 5.5) && solid_at(&s, x, y, 3.0), "Back is not drilled at ({x}, {y})");
+    }
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    near(base - volume(&mut reopened), pi() * 6.25 * 4.0);
+}
+
+/// Through all from Front's face stops at Front; `targets` picks another body to drill instead.
+#[test]
+fn face_sketch_holes_through_all_stay_in_their_body_unless_targets_say_otherwise() {
+    let mut s = Session::default();
+    front_and_back(&mut s);
+    run(&mut s, "solid.hole", json!({"sketch": "Pts", "points": ["in"], "diameter": 5, "name": "H"}));
+    assert!(!solid_at(&s, 20.0, 20.0, 15.0) && solid_at(&s, 20.0, 20.0, 3.0));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "solid.hole", json!({"sketch": "Pts", "points": ["in"], "diameter": 5, "targets": ["Back"], "name": "H"}));
+    assert!(solid_at(&s, 20.0, 20.0, 15.0) && !solid_at(&s, 20.0, 20.0, 3.0));
+}
+
+/// A hole starts on a face: a position off every face (here 1 mm past the box's side) is
+/// refused at once, instead of drilling where nobody picked; a point on the face still drills.
+#[test]
+fn a_hole_position_off_every_face_is_refused() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20}));
+    let v0 = volume(&mut s);
+    let started = std::time::Instant::now();
+    let hole = |x: f64| json!({"position": [x, 15, 20], "diameter": 8, "depth": 10, "type": "drilled", "tip_angle": 118});
+    let e = s.execute("solid.hole", &hole(-1.0)).unwrap_err().to_string();
+    assert!(e.contains("is not on a face of a body"), "{e}");
+    assert!(started.elapsed().as_secs_f64() < 2.0, "refusing took {:?}", started.elapsed());
+    // Above the top face, and given a direction: still not on a face.
+    let e = s.execute("solid.hole", &json!({"position": [20, 15, 25], "direction": [0, 0, -1], "diameter": 8})).unwrap_err().to_string();
+    assert!(e.contains("is not on a face of a body"), "{e}");
+    assert_eq!(volume(&mut s), v0, "the refused holes changed nothing");
+    run(&mut s, "solid.hole", hole(20.0));
+    assert!(volume(&mut s) < v0, "a hole on the face drills");
+    assert!(!solid_at(&s, 20.0, 15.0, 15.0));
+}
+
+#[test]
+fn a_hole_may_start_over_the_mouth_of_an_existing_bore() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20}));
+    run(&mut s, "solid.hole", json!({"position": [20, 15, 20], "diameter": 8, "depth": 10, "type": "drilled", "tip_angle": 118}));
+    // A counterbore centred on the bore starts in its mouth, which is in the top face's plane.
+    let v1 = volume(&mut s);
+    run(&mut s, "solid.hole", json!({"position": [20, 15, 20], "diameter": 12, "depth": 3, "type": "drilled", "tip_angle": 118}));
+    assert!(volume(&mut s) < v1, "the wider hole cuts round the bore");
+    // Past the face's edge is still off the face.
+    let e = s.execute("solid.hole", &json!({"position": [-1, 15, 20], "diameter": 8})).unwrap_err().to_string();
+    assert!(e.contains("is not on a face of a body"), "{e}");
+}
+
+/// A hole moved off the part cuts nothing and says so (#10701), as a pattern's copies do: by a
+/// parameter of its position or a sketch point moved away. Back on the part it is silent.
+#[test]
+fn a_hole_moved_off_the_part_says_it_removes_no_material() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "hx", "expression": "10 mm"}));
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 10, "name": "Plate"}));
+    run(&mut s, "solid.hole", json!({"position": ["hx", "10 mm", "10 mm"], "diameter": 5, "name": "H1"}));
+    assert_eq!(said(&s, "H1"), "");
+    change(&mut s, "hx", "100 mm");
+    assert!((volume(&mut s) - 12_000.0).abs() < 1e-6, "nothing is cut");
+    assert!(said(&s, "H1").contains("the hole removes no material"), "{}", said(&s, "H1"));
+    change(&mut s, "hx", "30 mm");
+    assert_eq!(said(&s, "H1"), "");
+    // Holes at two sketch points, one of them moved off the plate.
+    run(&mut s, "sketch.create", json!({"plane": "XY", "offset": 10, "name": "HP"}));
+    run(&mut s, "sketch.point", json!({"point": [10, 20], "id": "a"}));
+    run(&mut s, "sketch.point", json!({"point": [20, 20], "id": "b"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.hole", json!({"sketch": "HP", "points": ["a", "b"], "diameter": 4, "name": "H2"}));
+    assert_eq!(said(&s, "H2"), "");
+    run(&mut s, "sketch.edit", json!({"sketch": "HP"}));
+    run(&mut s, "sketch.move_point", json!({"point": "a", "to": [100, 100]}));
+    run(&mut s, "sketch.finish", json!({}));
+    assert!(said(&s, "H2").contains("1 of 2 holes remove no material"), "{}", said(&s, "H2"));
+}
+
+/// A hole wider than the part takes all of it away and says so (#10702): at creation, and when
+/// a parameter widens it later. A hole across the part's width keeps the rest, silently.
+#[test]
+fn a_hole_wider_than_the_part_says_it_removes_all_of_it() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "hd", "expression": "40 mm"}));
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 10, "name": "Plate"}));
+    run(&mut s, "solid.hole", json!({"position": [10, 10, 10], "diameter": "hd", "name": "H1"}));
+    assert_eq!(said(&s, "H1"), "");
+    assert_eq!(s.model.state().bodies.len(), 1);
+    change(&mut s, "hd", "100 mm");
+    assert!(s.model.state().bodies.is_empty());
+    assert!(said(&s, "H1").contains("the hole removes all of Body1"), "{}", said(&s, "H1"));
+    change(&mut s, "hd", "5 mm");
+    assert_eq!(said(&s, "H1"), "");
+}

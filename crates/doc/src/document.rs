@@ -5,7 +5,7 @@ use solidcraft_sketch::Sketch;
 
 use crate::construct::{AxisDef, GeoRef, PointDef};
 use crate::expr::{self, Expr, Kind};
-use crate::names::{BodyName, FeatureName, SketchId};
+use crate::names::{BodyName, FeatureId, FeatureName, SketchId};
 use crate::points::{Dir, FacePick, Position};
 use crate::{DocError, Result};
 
@@ -14,6 +14,21 @@ pub const MAX_PARAMS: usize = 10_000;
 /// Largest feature id a replayed feature may keep (`Document::insert_feature`): exact in JSON
 /// numbers, and far from overflowing the next id.
 pub const MAX_FEATURE_ID: u64 = 1 << 52;
+
+/// Screw direction independent of the cylinder's placement and the picked end.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, solidcraft_derive::Walk)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadHandedness {
+    #[default]
+    Right,
+    Left,
+}
+
+impl ThreadHandedness {
+    pub fn is_right(&self) -> bool {
+        *self == Self::Right
+    }
+}
 
 /// A named parameter. User parameters are created by the user; model parameters (`d1`, `d2`…)
 /// are created by dimensions and features.
@@ -54,10 +69,22 @@ pub enum PlaneRef {
     },
     /// Another plane offset along its normal by an expression.
     Offset { base: Box<PlaneRef>, distance: Expr },
-    /// Another plane rotated about a line (in world coordinates) by an angle expression.
-    AtAngle { base: Box<PlaneRef>, axis_origin: Vec3, axis_dir: Vec3, angle: Expr },
-    /// A construction plane feature (by name).
-    Construction { name: FeatureName },
+    /// Another plane moved along its normal until it goes through a point (a vertex, sketch
+    /// point or construction point), so it follows the point.
+    ThroughPoint { base: Box<PlaneRef>, point: Box<GeoRef> },
+    /// Another plane rotated about a line (in world coordinates) by an angle expression. With
+    /// `line`, an edge or round face of the model ([`crate::construct::model_axis`]), the line is
+    /// found there on each evaluation and `axis_origin`/`axis_dir` are where it was when picked.
+    AtAngle {
+        base: Box<PlaneRef>,
+        axis_origin: Vec3,
+        axis_dir: Vec3,
+        angle: Expr,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<Box<GeoRef>>,
+    },
+    /// A construction plane feature (by id).
+    Construction { feature: FeatureId },
     /// `base` seen from its other side: the normal reversed by a half turn about the base's
     /// own x axis (y reversed), or about its y axis (x reversed) when `about_y`. A sketch
     /// started from behind a plane faces the viewer this way.
@@ -70,10 +97,21 @@ pub enum PlaneRef {
     Midplane { a: Box<GeoRef>, b: Box<GeoRef> },
     /// Through two straight edges (lines) that lie in one plane.
     TwoEdges { a: Box<GeoRef>, b: Box<GeoRef> },
+    /// Through a line (axis) and a point not on that line.
+    AxisPoint { axis: Box<GeoRef>, point: Box<GeoRef> },
     /// Through three points.
     ThreePoints { a: Box<GeoRef>, b: Box<GeoRef>, c: Box<GeoRef> },
-    /// Tangent to a face (cylinder, cone, sphere, torus) where the point `at` lies over it.
-    Tangent { face: Box<GeoRef>, at: Vec3 },
+    /// Tangent to a face (cylinder, cone, sphere, torus) where the point `at` lies over it. With
+    /// a `reference` (a plane or planar face), it touches where the face turns towards the
+    /// reference instead, turned by `angle` about the face's axis, on the side of `at` (#8822).
+    Tangent {
+        face: Box<GeoRef>,
+        at: Vec3,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reference: Option<Box<GeoRef>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        angle: Option<Expr>,
+    },
     /// Square to an edge or sketch curve, a fraction `t` (expression, 0…1) of the way along it.
     AlongPath { path: Box<GeoRef>, t: Expr },
     /// Through a straight edge (or line, axis) and square to a plane (or planar face).
@@ -95,11 +133,34 @@ pub enum PlaneRef {
 
 /// Complete source curves of an outer boundary and each of its holes. Unlike a
 /// span multiset, this identity is independent of adaptive spline subdivision.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// A loop is a set of curves: `outer` is kept sorted, and `holes` sorted by their own ids, as
+/// the sketch's profiles produce them. Any start and either direction of the same loop is
+/// accepted and made canonical on load, so a design written by hand or by another writer still
+/// opens (#6499).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WholeProfileBoundary {
     pub outer: Vec<String>,
     pub holes: Vec<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for WholeProfileBoundary {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        /// The written form, before the loop order is dropped.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Written {
+            outer: Vec<String>,
+            holes: Vec<Vec<String>>,
+        }
+        let Written { mut outer, mut holes } = Written::deserialize(deserializer)?;
+        outer.sort();
+        for hole in &mut holes {
+            hole.sort();
+        }
+        holes.sort();
+        Ok(Self { outer, holes })
+    }
 }
 
 /// Which closed profiles of a sketch a feature uses.
@@ -262,6 +323,11 @@ pub struct Extent {
     /// `start_offset`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<FacePick>,
+    /// A Join To Object leaves the body it runs to as its own body, joining only its targets.
+    /// Designs saved before a Join also took that body (format 39 and older, #8151) open with
+    /// it set, so they keep the bodies they were built with.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub to_body_apart: bool,
 }
 
 /// Thin Extrude: a wall of constant thickness along sketch curves instead of the profiles.
@@ -368,6 +434,11 @@ pub enum AxisRef {
     World { axis: String },
     /// Any line in the sketch plane, in world coordinates.
     Line { origin: Position, dir: Dir },
+    /// An edge or round face of the model (a straight or circular edge, a cylinder, cone or
+    /// torus face), found again on each evaluation: [`crate::construct::model_axis`].
+    Model { geo: GeoRef },
+    /// A construction axis feature, by name, where it is when the revolve is evaluated.
+    Construction { name: FeatureName },
 }
 
 /// Persistent cylindrical Emboss selection, authored in the feature component frame.
@@ -638,6 +709,11 @@ pub enum FeatureKind {
         height: Expr,
         #[serde(default)]
         operation: Operation,
+        /// Up to two straight edges of the face it stands on (#6380), as a Single hole's
+        /// references: the base centre sits at each one's distance from its edge, in the face's
+        /// plane, and follows the edges when the part changes. `base` keeps where it was placed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        references: Vec<HoleReference>,
     },
     Sphere {
         #[serde(with = "point_expr")]
@@ -659,6 +735,23 @@ pub enum FeatureKind {
         #[serde(default)]
         operation: Operation,
     },
+    /// A cone or a truncated cone (#5641): the base circle's centre `base`, its `radius`, the
+    /// radius of the top circle `height` along `axis` (`top_radius`, 0 for a full cone).
+    Cone {
+        #[serde(with = "point_expr")]
+        #[walk(placement)]
+        base: PointExpr,
+        #[serde(default = "z_axis")]
+        axis: Dir,
+        #[walk(length = "Radius")]
+        radius: Expr,
+        #[walk(length = "Top radius")]
+        top_radius: Expr,
+        #[walk(length = "Height")]
+        height: Expr,
+        #[serde(default)]
+        operation: Operation,
+    },
     Combine {
         target: BodyName,
         tools: Vec<BodyName>,
@@ -667,16 +760,18 @@ pub enum FeatureKind {
         keep_tools: bool,
     },
     /// Copies of other features' results, or of bodies (rectangular, circular or along a path).
+    /// The copied features are named by id (#1134).
     Pattern {
-        features: Vec<FeatureName>,
+        features: Vec<FeatureId>,
         pattern: PatternKind,
         /// Copy these bodies (as new bodies) instead of replaying features.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         bodies: Vec<BodyName>,
     },
-    /// Mirror copies of other features' results in a plane.
+    /// Mirror copies of other features' results in a plane. The copied features are named by
+    /// id (#1134).
     Mirror {
-        features: Vec<FeatureName>,
+        features: Vec<FeatureId>,
         plane: PlaneRef,
         /// Mirror these bodies instead of replaying features.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -685,8 +780,10 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         combine: bool,
         /// Where each of `bodies` is mirrored from: the occurrence path of the placement it was
-        /// picked at. The body is mirrored where that placement shows it, as the feature's own
-        /// component sees it. Empty in older designs, which mirror the bodies' own geometry.
+        /// picked at. The body is mirrored where that placement shows it, in the plane of the
+        /// feature's own component, and its copy joins the body's component (or, when that is
+        /// placed more than once, the innermost component around it placed once). Empty in older
+        /// designs, which mirror the bodies' own geometry.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         placements: Vec<Vec<u64>>,
     },
@@ -717,9 +814,22 @@ pub enum FeatureKind {
         /// A cosmetic thread in the holes (e.g. "M6x1").
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread: Option<String>,
+        /// Threaded depth from the cylindrical wall's entry; `None` = its full useful length.
+        /// Independent of the drill depth and excluding the drill point and entry recess.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Thread depth")]
+        thread_depth: Option<Expr>,
+        /// Screw direction of the cosmetic thread; older holes are right-handed.
+        #[serde(default, skip_serializing_if = "ThreadHandedness::is_right")]
+        handedness: ThreadHandedness,
         /// To Object: drill down to the face (or point) here instead of `depth`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<FacePick>,
+        /// Up to two straight edges of the face (#37): the hole's centre sits at each one's
+        /// distance from its edge, measured in the face's plane, and follows the edges when the
+        /// part changes. `position` keeps where it was placed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        references: Vec<HoleReference>,
     },
     /// A thread on a cylindrical face. Cosmetic by default (no geometry change; drawn and
     /// exported as an annotation); `modeled` cuts the real helical ISO profile into the face.
@@ -734,6 +844,8 @@ pub enum FeatureKind {
         length: Option<Expr>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         modeled: bool,
+        #[serde(default, skip_serializing_if = "ThreadHandedness::is_right")]
+        handedness: ThreadHandedness,
     },
     /// Ruled loft through profiles of several sketches, in order.
     Loft {
@@ -894,6 +1006,34 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<BodyName>,
     },
+    /// Structural members (#4003): one body per straight line of a frame sketch (2D sketch lines
+    /// and 3D sketch lines), its cross-section the profile, square to the line from end to end.
+    FrameMember {
+        path_sketch: SketchId,
+        /// The lines, by curve id; none: every straight line drawn in the sketch (not
+        /// construction, not projected or otherwise linked, not of no length).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lines: Vec<String>,
+        profile: crate::frame::MemberProfile,
+        /// The profile point that sits on the line.
+        #[serde(default, skip_serializing_if = "crate::frame::Anchor::is_origin")]
+        anchor: crate::frame::Anchor,
+        /// How far the profile turns about the line (see `frame::member_axes`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Rotation")]
+        angle: Option<Expr>,
+        /// The profile mirrored across its y axis (before it turns).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mirror: bool,
+        /// What members without a name of their own are named after (`Rail`, `Rail (2)`...); none:
+        /// the profile's description (`Rect Tube 40x40x3`) or the profile sketch's name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body_name: Option<String>,
+        /// Each member's body name, by its line's id, so a member keeps its name when other lines
+        /// come and go (`frame::member_names`).
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        names: std::collections::BTreeMap<String, String>,
+    },
     /// Raise or sink profiles on a planar face, or wrap them on a selected cylindrical wall.
     Emboss {
         sketch: SketchId,
@@ -950,6 +1090,20 @@ pub enum FeatureKind {
         /// Normals the same way instead of facing each other.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         flip: bool,
+        /// A plane the bodies move with (an origin or construction plane): its origin and normal
+        /// are the `from` point and normal, worked out again whenever the plane moves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_plane: Option<PlaneRef>,
+        /// A plane the bodies move onto: after turning to meet it (when `from` has a normal) the
+        /// `from` point is brought onto the plane along its normal, so the plane may move and the
+        /// bodies follow. Replaces `to`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_plane: Option<PlaneRef>,
+        /// Point-to-point alignment: the directions the offset moves along (the chosen world
+        /// X/Y/Z axes in the frame of the bodies being moved). `None`: all three axes, the
+        /// offset in full.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axes: Option<Vec<Dir>>,
     },
     /// A helical coil: a circular or square section swept `turns` times about `axis`, rising
     /// `pitch` per turn, on a helix of `diameter` (the section's centre, or its inside or outside).
@@ -959,14 +1113,23 @@ pub enum FeatureKind {
         base: PointExpr,
         #[serde(default = "z_axis")]
         axis: Dir,
+        /// The sketch whose plane and profile the coil sweeps. Its absence means the primitive
+        /// circular or square section below.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch: Option<SketchId>,
+        #[serde(default = "all_profiles", skip_serializing_if = "profiles_are_all")]
+        #[walk(profiles_of = sketch)]
+        profiles: ProfileSel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Diameter")]
-        diameter: Expr,
+        diameter: Option<Expr>,
         #[walk(length = "Pitch")]
         pitch: Expr,
         #[walk(unitless = "Revolutions")]
         turns: Expr,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Section size")]
-        section_size: Expr,
+        section_size: Option<Expr>,
         #[serde(default)]
         section: CoilSection,
         /// -1 inside, 0 on the centre, 1 outside of the diameter.
@@ -1023,7 +1186,7 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Bend radius")]
         radius: Option<Expr>,
-        /// inside | outside | middle.
+        /// inside | outside | middle | material_outside | tangent (`sheet::SheetBody::add_flanges_each`).
         #[serde(default = "inside_str")]
         position: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1039,6 +1202,11 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Corner relief")]
         corner_relief: Option<Expr>,
+        /// Where the heights are measured from: `inner` (the inner virtual sharp) or `tangent`
+        /// (past 90° the line square to the flange touching the bend's outside); none is the outer
+        /// virtual sharp (`sheet::HeightFrom`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height_from: Option<String>,
     },
     /// Flat hems on sheet edges.
     SheetHem {
@@ -1054,9 +1222,10 @@ pub enum FeatureKind {
         body: Option<BodyName>,
     },
     /// A perforation field (#732): round holes of `diameter` on a staggered (60°) or square grid of `pitch` over the
-    /// whole flat sheet, kept `margin` (default: the diameter) clear of its edges, cut-outs and bend zones. Stored like
-    /// a cosmetic thread: the holes go to the flat pattern, the DXF and the measured volume, not into the B-rep, so a
-    /// panel can carry tens of thousands of them.
+    /// whole flat sheet, or inside the closed profiles of `sketch` when it is given, kept `margin` (default: the
+    /// diameter) clear of its edges, cut-outs, bend zones and the outline. Stored like a cosmetic thread: the holes go
+    /// to the flat pattern, the DXF and the measured volume, not into the B-rep, so a panel can carry tens of thousands
+    /// of them.
     SheetPerforate {
         #[walk(length = "Diameter")]
         diameter: Expr,
@@ -1069,6 +1238,13 @@ pub enum FeatureKind {
         pattern: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<BodyName>,
+        /// The field's outline: a sketch on a face of the sheet. None: the whole sheet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch: Option<SketchId>,
+        /// Which of the outline sketch's profiles bound the field. None: all of them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(profiles_of = sketch)]
+        profiles: Option<ProfileSel>,
     },
     /// Fold a sheet along a line on its base face: a sketch line (followed when the sketch
     /// changes), else the points `a`, `b`.
@@ -1091,6 +1267,19 @@ pub enum FeatureKind {
         /// A point on the side that stays put (default: the larger side).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fixed: Option<Position>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<BodyName>,
+    },
+    /// Path flange: a chain of edge flanges on the sheet edge at `edge` that follows an open
+    /// chain of sketch lines drawn across that edge: each line one flange as long as the line,
+    /// each corner one bend.
+    SheetPath {
+        edge: Position,
+        sketch: SketchId,
+        curves: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Bend radius")]
+        radius: Option<Expr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<BodyName>,
     },
@@ -1192,6 +1381,14 @@ pub enum FeatureKind {
         /// The catch's height along the arm.
         #[walk(length = "Catch length")]
         catch_length: Expr,
+        /// The base extends this far below the face (none: the arm starts at the face).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Base height")]
+        base_height: Option<Expr>,
+        /// Make the snap fit its own body instead of joining the target, so it can be
+        /// patterned or moved on its own.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        new_body: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<BodyName>,
     },
@@ -1843,16 +2040,32 @@ fn fair_keep_edges() -> bool {
     true
 }
 
-/// Triangles of one imported mesh body (millimetres).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Triangles of one imported mesh body (millimetres). The arrays are shared by clones: every
+/// edit keeps the design as it was for undo, and a scanned part's triangles (hundreds of
+/// megabytes) are not copied for that.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MeshData {
     pub name: String,
     /// x, y, z per vertex.
-    pub positions: Vec<f64>,
+    pub positions: std::sync::Arc<[f64]>,
     /// Three vertex indices per triangle.
-    pub triangles: Vec<u32>,
+    pub triangles: std::sync::Arc<[u32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<[f32; 3]>,
+}
+
+/// The same mesh: shared arrays are the same without reading them, so the dirty check and
+/// autosave after an edit elsewhere do not walk a scan's millions of coordinates. Arrays that
+/// are not shared compare value by value, as before. Coordinates are finite (a design that
+/// holds others does not load), so the shortcut only skips work.
+impl PartialEq for MeshData {
+    fn eq(&self, other: &Self) -> bool {
+        use std::sync::Arc;
+        self.name == other.name
+            && self.color == other.color
+            && (Arc::ptr_eq(&self.triangles, &other.triangles) || self.triangles == other.triangles)
+            && (Arc::ptr_eq(&self.positions, &other.positions) || self.positions == other.positions)
+    }
 }
 
 /// Points of a sketch, by id.
@@ -1874,6 +2087,12 @@ pub struct SketchPoints {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Component {
     pub id: u64,
+    /// Optional identification colour, separate from normal appearances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identification_color: Option<[u8; 3]>,
+    /// Creation sequence used to select an automatic identification colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identification_color_index: Option<u64>,
     pub name: String,
     /// Parent component (0 = the root).
     #[serde(default)]
@@ -1886,6 +2105,11 @@ pub struct Component {
     /// Free text properties of the definition (material grade, finish, supplier…), by name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub properties: std::collections::BTreeMap<String, String>,
+    /// Keeps this component's features (and its children's) out of the History bar (#10393).
+    /// The features still rebuild and the component still shows in the Browser; imported copies
+    /// whose features only exist to rebuild the copy can carry this flag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub history_hidden: bool,
 }
 
 /// One loft section: profiles of a sketch.
@@ -1967,13 +2191,30 @@ pub enum HoleKind {
         cb_diameter: Expr,
         #[walk(length = "Counterbore depth")]
         cb_depth: Expr,
+        /// Optional drill point below the narrow cylindrical bore; absent stays flat.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Tip angle")]
+        tip_angle: Option<Expr>,
     },
     Countersink {
         #[walk(length = "Countersink diameter")]
         cs_diameter: Expr,
         #[walk(angle = "Countersink angle")]
         cs_angle: Expr,
+        /// Optional drill point, independent of the entry countersink.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Tip angle")]
+        tip_angle: Option<Expr>,
     },
+}
+
+/// A Single hole's reference edge (#37): a point on a straight edge of the hole's face, and the
+/// distance of the hole's centre from that edge's line, in the face's plane.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
+pub struct HoleReference {
+    pub edge: Position,
+    #[walk(length = "Reference distance")]
+    pub distance: Expr,
 }
 
 /// Pattern layouts.
@@ -2004,7 +2245,11 @@ pub enum PatternKind {
         reversed2: bool,
     },
     Circular {
-        origin: Position,
+        /// A point on the axis the copies turn about: numbers, or length expressions it follows
+        /// as the parameters change (#10852).
+        #[serde(with = "point_expr")]
+        #[walk(placement)]
+        origin: PointExpr,
         axis: Dir,
         #[walk(unitless = "Quantity")]
         count: Expr,
@@ -2015,6 +2260,15 @@ pub enum PatternKind {
         alignment: solidcraft_sketch::PatternAlignment,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         reversed: bool,
+        /// The edge or round face of the model the copies turn about, found again on each
+        /// evaluation ([`crate::construct::model_axis`]); `origin` and `axis` are where it was
+        /// when picked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis_ref: Option<GeoRef>,
+        /// A construction axis the copies turn about, by name, followed when it moves;
+        /// `origin` and `axis` are where it was when the pattern was made.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis_feature: Option<FeatureName>,
     },
     /// Copies along a chain of sketch curves: instance k moves by path(k·spacing) − path(0),
     /// measured along the path from its start.
@@ -2116,6 +2370,7 @@ impl FeatureKind {
                 | FeatureKind::SheetHem { .. }
                 | FeatureKind::SheetPerforate { .. }
                 | FeatureKind::SheetFold { .. }
+                | FeatureKind::SheetPath { .. }
                 | FeatureKind::SheetUnfold { .. }
                 | FeatureKind::SheetConvert { .. }
         )
@@ -2134,6 +2389,7 @@ impl FeatureKind {
             FeatureKind::Cylinder { .. } => "CylinderFeature",
             FeatureKind::Sphere { .. } => "SphereFeature",
             FeatureKind::Torus { .. } => "TorusFeature",
+            FeatureKind::Cone { .. } => "ConeFeature",
             FeatureKind::Combine { .. } => "CombineFeature",
             FeatureKind::Pattern { pattern: PatternKind::Rectangular { .. }, .. } => "RectangularPatternFeature",
             FeatureKind::Pattern { pattern: PatternKind::Path { .. }, .. } => "PathPatternFeature",
@@ -2157,6 +2413,7 @@ impl FeatureKind {
             FeatureKind::SurfaceOffset { .. } => "OffsetSurfaceFeature",
             FeatureKind::BoundingSolid { .. } => "BoundingSolidFeature",
             FeatureKind::Pipe { .. } => "PipeFeature",
+            FeatureKind::FrameMember { .. } => "FrameMemberFeature",
             FeatureKind::Emboss { .. } => "EmbossFeature",
             FeatureKind::Boss { .. } => "BossFeature",
             FeatureKind::Lip { groove: false, .. } => "LipFeature",
@@ -2170,6 +2427,7 @@ impl FeatureKind {
             FeatureKind::SheetHem { .. } => "HemFeature",
             FeatureKind::SheetPerforate { .. } => "PerforateFeature",
             FeatureKind::SheetFold { .. } => "FoldFeature",
+            FeatureKind::SheetPath { .. } => "PathFlangeFeature",
             FeatureKind::SheetUnfold { refold: false, .. } => "UnfoldFeature",
             FeatureKind::SheetUnfold { .. } => "RefoldFeature",
             FeatureKind::SheetConvert { .. } => "ConvertToSheetMetalFeature",
@@ -2201,6 +2459,167 @@ impl FeatureKind {
             FeatureKind::MeshConvert { .. } => "MeshConvertFeature",
         }
     }
+
+    /// Design-file variant key (e.g. `"extrude"`, `"box"`, `"sheet_flange"`).
+    pub fn kind_key(&self) -> &'static str {
+        match self {
+            FeatureKind::BodyTransfer { .. } => "body_transfer",
+            FeatureKind::Sketch { .. } => "sketch",
+            FeatureKind::Extrude { .. } => "extrude",
+            FeatureKind::Revolve { .. } => "revolve",
+            FeatureKind::Fillet { .. } => "fillet",
+            FeatureKind::Chamfer { .. } => "chamfer",
+            FeatureKind::Box { .. } => "box",
+            FeatureKind::Cylinder { .. } => "cylinder",
+            FeatureKind::Sphere { .. } => "sphere",
+            FeatureKind::Torus { .. } => "torus",
+            FeatureKind::Cone { .. } => "cone",
+            FeatureKind::Combine { .. } => "combine",
+            FeatureKind::Pattern { .. } => "pattern",
+            FeatureKind::Mirror { .. } => "mirror",
+            FeatureKind::Hole { .. } => "hole",
+            FeatureKind::Thread { .. } => "thread",
+            FeatureKind::Loft { .. } => "loft",
+            FeatureKind::Sweep { .. } => "sweep",
+            FeatureKind::Shell { .. } => "shell",
+            FeatureKind::Draft { .. } => "draft",
+            FeatureKind::ConstructionPlane { .. } => "construction_plane",
+            FeatureKind::Split { .. } => "split",
+            FeatureKind::ConstructionAxis { .. } => "construction_axis",
+            FeatureKind::ConstructionPoint { .. } => "construction_point",
+            FeatureKind::SplitFace { .. } => "split_face",
+            FeatureKind::Scale { .. } => "scale",
+            FeatureKind::OffsetFace { .. } => "offset_face",
+            FeatureKind::DeleteFace { .. } => "delete_face",
+            FeatureKind::BoundingSolid { .. } => "bounding_solid",
+            FeatureKind::Pipe { .. } => "pipe",
+            FeatureKind::FrameMember { .. } => "frame_member",
+            FeatureKind::Emboss { .. } => "emboss",
+            FeatureKind::Rib { .. } => "rib",
+            FeatureKind::ReplaceFace { .. } => "replace_face",
+            FeatureKind::Align { .. } => "align",
+            FeatureKind::Coil { .. } => "coil",
+            FeatureKind::SheetBase { .. } => "sheet_base",
+            FeatureKind::SheetContour { .. } => "sheet_contour",
+            FeatureKind::SheetFlange { .. } => "sheet_flange",
+            FeatureKind::SheetHem { .. } => "sheet_hem",
+            FeatureKind::SheetPerforate { .. } => "sheet_perforate",
+            FeatureKind::SheetFold { .. } => "sheet_fold",
+            FeatureKind::SheetPath { .. } => "sheet_path",
+            FeatureKind::SheetUnfold { .. } => "sheet_unfold",
+            FeatureKind::SheetConvert { .. } => "sheet_convert",
+            FeatureKind::Boss { .. } => "boss",
+            FeatureKind::Lip { .. } => "lip",
+            FeatureKind::SnapFit { .. } => "snap_fit",
+            FeatureKind::Rest { .. } => "rest",
+            FeatureKind::BoundaryFill { .. } => "boundary_fill",
+            FeatureKind::Remove { .. } => "remove",
+            FeatureKind::Patch { .. } => "patch",
+            FeatureKind::Stitch { .. } => "stitch",
+            FeatureKind::Thicken { .. } => "thicken",
+            FeatureKind::SurfaceExtrude { .. } => "surface_extrude",
+            FeatureKind::Unstitch { .. } => "unstitch",
+            FeatureKind::ReverseNormal { .. } => "reverse_normal",
+            FeatureKind::SurfaceUntrim { .. } => "surface_untrim",
+            FeatureKind::SurfaceRevolve { .. } => "surface_revolve",
+            FeatureKind::SurfaceSweep { .. } => "surface_sweep",
+            FeatureKind::SurfaceLoft { .. } => "surface_loft",
+            FeatureKind::SurfaceOffset { .. } => "surface_offset",
+            FeatureKind::SurfaceRuled { .. } => "surface_ruled",
+            FeatureKind::SurfaceExtend { .. } => "surface_extend",
+            FeatureKind::SurfaceBlend { .. } => "surface_blend",
+            FeatureKind::SurfaceBoundary { .. } => "surface_boundary",
+            FeatureKind::SurfaceNetwork { .. } => "surface_network",
+            FeatureKind::SurfaceMatch { .. } => "surface_match",
+            FeatureKind::SurfaceFair { .. } => "surface_fair",
+            FeatureKind::SurfaceTrim { .. } => "surface_trim",
+            FeatureKind::Move { .. } => "move",
+            FeatureKind::Import { .. } => "import",
+            FeatureKind::MeshConvert { .. } => "mesh_convert",
+            FeatureKind::MeshImport { .. } => "mesh_import",
+        }
+    }
+
+    /// Map a display or Rust type name (e.g. `"HoleFeature"`, `"EdgeFlangeFeature"`)
+    /// to the canonical design-file variant key (`"hole"`, `"sheet_flange"`).
+    pub fn type_name_to_kind_key(name: &str) -> Option<&'static str> {
+        Some(match name {
+            "BodyTransferFeature" => "body_transfer",
+            "Sketch" => "sketch",
+            "ExtrudeFeature" => "extrude",
+            "RevolveFeature" => "revolve",
+            "FilletFeature" => "fillet",
+            "ChamferFeature" => "chamfer",
+            "BoxFeature" => "box",
+            "CylinderFeature" => "cylinder",
+            "SphereFeature" => "sphere",
+            "TorusFeature" => "torus",
+            "ConeFeature" => "cone",
+            "CombineFeature" => "combine",
+            "RectangularPatternFeature" | "PathPatternFeature" | "CircularPatternFeature" => "pattern",
+            "MirrorFeature" => "mirror",
+            "ConstructionPlane" => "construction_plane",
+            "HoleFeature" => "hole",
+            "ThreadFeature" => "thread",
+            "LoftFeature" => "loft",
+            "SweepFeature" => "sweep",
+            "ShellFeature" => "shell",
+            "DraftFeature" => "draft",
+            "SplitBodyFeature" => "split",
+            "SplitFaceFeature" => "split_face",
+            "ConstructionAxis" => "construction_axis",
+            "ConstructionPoint" => "construction_point",
+            "MoveFeature" => "move",
+            "ScaleFeature" => "scale",
+            "OffsetFacesFeature" => "offset_face",
+            "DeleteFaceFeature" => "delete_face",
+            "OffsetSurfaceFeature" => "surface_offset",
+            "BoundingSolidFeature" => "bounding_solid",
+            "PipeFeature" => "pipe",
+            "FrameMemberFeature" => "frame_member",
+            "EmbossFeature" => "emboss",
+            "BossFeature" => "boss",
+            "LipFeature" | "GrooveFeature" => "lip",
+            "SnapFitFeature" => "snap_fit",
+            "RestFeature" => "rest",
+            "BoundaryFillFeature" => "boundary_fill",
+            "BaseFlangeFeature" => "sheet_base",
+            "ContourFlangeFeature" => "sheet_contour",
+            "EdgeFlangeFeature" => "sheet_flange",
+            "HemFeature" => "sheet_hem",
+            "PerforateFeature" => "sheet_perforate",
+            "FoldFeature" => "sheet_fold",
+            "PathFlangeFeature" => "sheet_path",
+            "UnfoldFeature" | "RefoldFeature" => "sheet_unfold",
+            "ConvertToSheetMetalFeature" => "sheet_convert",
+            "CoilFeature" => "coil",
+            "RibFeature" | "WebFeature" => "rib",
+            "ReplaceFaceFeature" => "replace_face",
+            "AlignFeature" => "align",
+            "RemoveFeature" => "remove",
+            "PatchFeature" => "patch",
+            "SurfaceExtrudeFeature" => "surface_extrude",
+            "SurfaceRevolveFeature" => "surface_revolve",
+            "SurfaceSweepFeature" => "surface_sweep",
+            "SurfaceLoftFeature" => "surface_loft",
+            "BlendFeature" => "surface_blend",
+            "BoundaryFeature" => "surface_boundary",
+            "MatchFeature" => "surface_match",
+            "FairFeature" => "surface_fair",
+            "StitchFeature" => "stitch",
+            "ThickenFeature" => "thicken",
+            "TrimFeature" => "surface_trim",
+            "ExtendFeature" => "surface_extend",
+            "RuledSurfaceFeature" => "surface_ruled",
+            "UnstitchFeature" => "unstitch",
+            "ReverseNormalFeature" => "reverse_normal",
+            "UntrimFeature" => "surface_untrim",
+            "BaseFeature" => "import",
+            "MeshFeature" => "mesh_import",
+            "MeshConvertFeature" => "mesh_convert",
+            _ => return None,
+        })
+    }
     /// Default name prefix (`Extrude` → `Extrude1`).
     pub fn base_name(&self) -> &'static str {
         match self {
@@ -2214,6 +2633,7 @@ impl FeatureKind {
             FeatureKind::Cylinder { .. } => "Cylinder",
             FeatureKind::Sphere { .. } => "Sphere",
             FeatureKind::Torus { .. } => "Torus",
+            FeatureKind::Cone { .. } => "Cone",
             FeatureKind::Combine { .. } => "Combine",
             FeatureKind::Pattern { pattern: PatternKind::Rectangular { .. }, .. } => "RectangularPattern",
             FeatureKind::Pattern { pattern: PatternKind::Path { .. }, .. } => "PathPattern",
@@ -2237,6 +2657,7 @@ impl FeatureKind {
             FeatureKind::SurfaceOffset { .. } => "OffsetSurface",
             FeatureKind::BoundingSolid { .. } => "BoundingSolid",
             FeatureKind::Pipe { .. } => "Pipe",
+            FeatureKind::FrameMember { .. } => "Member",
             FeatureKind::Emboss { .. } => "Emboss",
             FeatureKind::Boss { .. } => "Boss",
             FeatureKind::Lip { groove: false, .. } => "Lip",
@@ -2250,6 +2671,7 @@ impl FeatureKind {
             FeatureKind::SheetHem { .. } => "Hem",
             FeatureKind::SheetPerforate { .. } => "Perforate",
             FeatureKind::SheetFold { .. } => "Fold",
+            FeatureKind::SheetPath { .. } => "PathFlange",
             FeatureKind::SheetUnfold { refold: false, .. } => "Unfold",
             FeatureKind::SheetUnfold { .. } => "Refold",
             FeatureKind::SheetConvert { .. } => "ConvertToSheetMetal",
@@ -2320,16 +2742,64 @@ pub struct Feature {
     /// where newer ones number them after the first name (`Ribs (4)`, #373).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell_piece_order: bool,
+    /// The pieces of a face this feature splits are numbered in the kernel's order and by the
+    /// index of the face they came from, as builds before #3902 numbered them, instead of by
+    /// place. Set on the features of designs saved before then, whose stored `#k` face names
+    /// mean that numbering.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kernel_piece_order: bool,
+    /// Made by inserting a file (STEP, IGES or a mesh file) into the design: the feature built
+    /// the component tree its component is the top of, and deleting it removes that tree
+    /// ([`Document::remove_component_tree`]). Not set on other imported bodies, such as the
+    /// independent base of a copied component.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inserted: bool,
+    /// The Import feature of a linked design (Insert Design): the names that design gave the
+    /// faces of its bodies (by body, then face, in the file's order; empty where not known), so
+    /// its faces are named after them and references follow them through Update Links (#3330).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub link_faces: Vec<Vec<String>>,
     #[serde(flatten)]
     pub kind: FeatureKind,
+}
+
+impl Feature {
+    /// Where in `body_names` the names of the first `count` bodies the feature builds are kept,
+    /// in the order it builds them. The same index for most features. An Import keeps its names
+    /// by the file's body index, and builds no body for the file bodies it skips, so its built
+    /// bodies pass their slots by (#2175).
+    pub fn body_name_slots(&self, count: usize) -> Vec<usize> {
+        let skip: std::collections::HashSet<u64> = match &self.kind {
+            FeatureKind::Import { skip, .. } => skip.iter().copied().collect(),
+            _ => Default::default(),
+        };
+        (0..count.saturating_add(skip.len())).filter(|k| !skip.contains(&(*k as u64))).take(count).collect()
+    }
+
+    /// Keep `made`, the names the feature's bodies have now (in the order it builds them), as
+    /// its stored names, so they stay as they are whatever comes and goes before it. An Import's
+    /// skipped file bodies keep the names stored for them.
+    pub fn pin_body_names(&mut self, made: &[String]) {
+        let slots = self.body_name_slots(made.len());
+        self.body_names.resize(slots.last().map_or(0, |s| s + 1), String::new());
+        for (slot, name) in slots.iter().zip(made) {
+            if let Some(stored) = self.body_names.get_mut(*slot) {
+                stored.clone_from(name);
+            }
+        }
+    }
 }
 
 fn inside_str() -> String {
     "inside".into()
 }
 
-fn all_profiles() -> ProfileSel {
+pub(crate) fn all_profiles() -> ProfileSel {
     ProfileSel::All
+}
+
+fn profiles_are_all(p: &ProfileSel) -> bool {
+    matches!(p, ProfileSel::All)
 }
 
 fn yes() -> bool {
@@ -2360,19 +2830,66 @@ pub struct StandardPart {
 /// A component whose contents come from another design file (Insert Design): where that file
 /// is, and the Import feature in the component that holds its bodies (Update Links replaces
 /// them; Break Link keeps them and forgets the file).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DesignLink {
     /// The design file: relative to this design's folder once this design is saved, else as
     /// given (`/` separates folders).
     pub path: String,
     /// The Import feature holding the linked design's bodies.
     pub feature: u64,
+    /// Last inherited values, by Import body slot. Differing assembly assignments are
+    /// local overrides and survive a source update. Older links start with no baseline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited: Vec<LinkedBodyProperties>,
+    /// SHA-256 of the design file's bytes as this design last read them ([`Self::file_digest`]):
+    /// opened again, this design tells which linked files changed meanwhile (#9739). Links made
+    /// before it was kept have none and are taken as up to date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_sha256: Option<String>,
+}
+
+impl DesignLink {
+    /// What [`Self::file_sha256`] keeps for a design file's `bytes`.
+    pub fn file_digest(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(bytes))
+    }
+}
+
+/// The values last inherited by a linked body, not another editable material library.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinkedBodyProperties {
+    pub material: String,
+    /// SHA-256 of the inherited custom definition, for equality only. The complete
+    /// engineering card stays in user_materials, not duplicated once per linked body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_fingerprint: Option<String>,
+    /// Explicit body/component look only: material fallback must remain a fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<crate::appearance::Look>,
+    /// Last inherited authored face overrides. None marks links saved before face
+    /// inheritance; Some(empty) records that the source has no authored face overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<Vec<crate::appearance::FaceLook>>,
+}
+
+impl LinkedBodyProperties {
+    pub fn fingerprint(material: &UserMaterial) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(material).map_err(|e| DocError::Invalid(e.to_string()))?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+}
+
+/// A name the design's counter hands out (`Body1`).
+pub fn is_counted_body_name(name: &str) -> bool {
+    name.strip_prefix("Body").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<usize>().is_ok())
 }
 
 /// The document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
-    /// Named, renderer-independent setups. Device/job state is never saved here.
+    /// Named image intent and immutable embedded HDR sources. Active jobs and device state are not saved.
     #[serde(default, skip_serializing_if = "crate::render_settings::RenderSettings::is_empty")]
     pub render: std::sync::Arc<crate::render_settings::RenderSettings>,
     #[serde(default = "default_format")]
@@ -2388,15 +2905,27 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "crate::Metadata::is_empty")]
     pub metadata: crate::Metadata,
     pub params: Vec<Param>,
+    /// Named texts the words of sketch texts can be built from ([`crate::text_params`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_params: Vec<crate::text_params::TextParam>,
     pub features: Vec<Feature>,
     /// Timeline marker: features at or after this index are rolled back (not evaluated).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker: Option<usize>,
     #[serde(default)]
     pub next_id: u64,
+    /// Body names the design used and must not use again: a name a `body.rename` freed (#4957).
+    /// The design's own counter starts over at every evaluation, so without these a design that
+    /// is evaluated again after a rename hands the freed name to the next body, and a script
+    /// that names a body finds another one.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub reserved_body_names: std::collections::BTreeSet<String>,
     /// Components below the root, as a tree (by parent).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<Component>,
+    /// Next automatic colour sequence number; deletions never rewind it.
+    #[serde(default)]
+    pub next_component_color_index: u64,
     /// Placements of components in their parents (each non-root component has at least one).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub occurrences: Vec<crate::Occurrence>,
@@ -2424,12 +2953,18 @@ pub struct Document {
     /// Reference images on planes (Insert Canvas).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub canvases: Vec<crate::canvas::Canvas>,
+    /// Scanned points kept as a reference (Insert Point Cloud).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub point_clouds: Vec<crate::point_cloud::PointCloud>,
     /// Comments of feature-input parameters (by name).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub param_comments: std::collections::BTreeMap<String, String>,
     /// Physical material per body (by body name); others use the default.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub materials: std::collections::BTreeMap<String, String>,
+    /// The flat face per body (by body name) that a slicer export lays on the print bed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub print_faces: std::collections::BTreeMap<String, crate::config::ConfigFaceTarget>,
     /// Physical materials defined in this design (`material.create`), next to the built-in ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_materials: Vec<UserMaterial>,
@@ -2450,15 +2985,18 @@ pub struct Document {
     /// order; feature ids remain the source of truth when features are renamed or reordered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline_groups: Vec<TimelineGroup>,
-    /// Browser item order per component folder (`"<component>/<folder>"` → item keys).
+    /// Browser order per component folder (`"<component>/<folder>"` → groups and item keys).
+    /// The `components` folder orders a component's sub-components (by placement id); it is not
+    /// drawn as a folder.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub browser_order: std::collections::BTreeMap<String, Vec<String>>,
+    pub browser_order: std::collections::BTreeMap<String, Vec<BrowserEntry>>,
     /// Named views: saved cameras.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub named_views: Vec<NamedView>,
     /// What was hidden when the design was saved. A session takes it from here when the design
-    /// opens and keeps the live state itself (`browser.visibility`: saved, not an undo step), so
-    /// a document in a session leaves this empty; the session puts it back when it saves.
+    /// opens and keeps the live state itself (`browser.visibility`: saved, and undone like any
+    /// other change), so a document in a session leaves this empty; the session puts it back when
+    /// it saves.
     #[serde(default, skip_serializing_if = "Visibility::is_empty")]
     pub visibility: Visibility,
     /// Manufacturing: the tool library, setups and their operations (`cam.*` commands).
@@ -2466,7 +3004,8 @@ pub struct Document {
     pub manufacture: solidcraft_cam::Manufacture,
 }
 
-/// Items hidden or shown one by one. Saved with the design, but not an undo step.
+/// The browser's view of a design: items and folders hidden or shown, sketch profiles and
+/// dimensions shown, bodies locked. Saved with the design and an undo step of its own.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Visibility {
@@ -2483,6 +3022,18 @@ pub struct Visibility {
     /// Assembly joints by id: their glyphs are not drawn (they still constrain and move).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_joints: Vec<u64>,
+    /// The browser's Origin folder is hidden (`None`: the app's preference decides).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_hidden: Option<bool>,
+    /// Finished sketches whose closed profiles are not shaded, by feature id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_profiles: Vec<u64>,
+    /// Finished sketches whose dimensions are shown, by feature id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shown_dimensions: Vec<u64>,
+    /// Bodies locked in the browser (no move or delete), by name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub locked_bodies: Vec<String>,
     /// Browser folders and groups hidden themselves, by tree key: `<scope>/<folder>` or
     /// `<scope>/g<group id>`, where the scope is `c0` (the design) or `o:<placement path>`
     /// (`o:4/9/bodies`). Their items keep their own state: they are drawn again, as they were,
@@ -2500,6 +3051,10 @@ impl Visibility {
             && self.hidden_sketches.is_empty()
             && self.shown_sketches.is_empty()
             && self.hidden_joints.is_empty()
+            && self.origin_hidden.is_none()
+            && self.hidden_profiles.is_empty()
+            && self.shown_dimensions.is_empty()
+            && self.locked_bodies.is_empty()
             && self.hidden_folders.is_empty()
     }
 }
@@ -2526,11 +3081,72 @@ pub struct BrowserGroup {
     #[serde(default)]
     pub component: u64,
     pub folder: String,
+    /// The group that holds this one; `None` is the top level of its folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u64>,
+    /// The group's items and child groups in display order. A child group missing here still
+    /// belongs to it (its `parent` says so) and is listed after the ones that are here.
     #[serde(default)]
-    pub items: Vec<String>,
+    pub items: Vec<BrowserEntry>,
 }
 
-/// A saved feature-history folder. Folders may nest, and a feature can belong to at most one folder.
+/// One line of a browser order list: a group (a number in a saved design) or an item (a string:
+/// an item key or body name, so a body named `"1"` never clashes with group 1).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BrowserEntry {
+    Group(u64),
+    Item(String),
+}
+
+impl From<&str> for BrowserEntry {
+    fn from(key: &str) -> Self {
+        BrowserEntry::Item(key.to_string())
+    }
+}
+
+impl From<String> for BrowserEntry {
+    fn from(key: String) -> Self {
+        BrowserEntry::Item(key)
+    }
+}
+
+impl BrowserEntry {
+    pub fn item(key: &str) -> Self {
+        BrowserEntry::Item(key.to_string())
+    }
+
+    pub fn as_item(&self) -> Option<&str> {
+        match self {
+            BrowserEntry::Item(k) => Some(k),
+            BrowserEntry::Group(_) => None,
+        }
+    }
+
+    pub fn is_item(&self, key: &str) -> bool {
+        self.as_item() == Some(key)
+    }
+}
+
+/// How many groups may sit inside one another (a top-level group is level 1).
+pub const MAX_GROUP_NESTING: usize = 8;
+
+/// The folders a browser group or order list can be for. `components` only orders sub-components.
+pub const BROWSER_FOLDERS: [&str; 4] = ["bodies", "sketches", "construction", "components"];
+
+impl BrowserGroup {
+    /// The keys of the items directly in this group, in order.
+    pub fn item_keys(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().filter_map(BrowserEntry::as_item)
+    }
+
+    /// Whether this group holds the item directly.
+    pub fn has_item(&self, key: &str) -> bool {
+        self.items.iter().any(|e| e.is_item(key))
+    }
+}
+
+/// A saved history folder. Folders may nest; each feature or joint belongs to at most one folder.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TimelineGroup {
     pub id: u64,
@@ -2540,6 +3156,9 @@ pub struct TimelineGroup {
     pub parent: Option<u64>,
     #[serde(default)]
     pub features: Vec<u64>,
+    /// Joints stored in this timeline folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<u64>,
 }
 
 /// The first feature-history folder whose own and nested features do not form one
@@ -2604,6 +3223,34 @@ impl Default for Document {
 }
 
 impl Document {
+    /// The next shared identity, including auxiliary lists written by older versions or
+    /// populated programmatically. Reading it does not reserve an id (used by joint previews).
+    pub fn next_item_id(&self) -> Result<u64> {
+        let a = &self.assembly;
+        let largest = self
+            .browser_groups
+            .iter()
+            .map(|g| g.id)
+            .chain(self.timeline_groups.iter().map(|g| g.id))
+            .chain(self.canvases.iter().map(|c| c.id))
+            .chain(self.point_clouds.iter().map(|c| c.id))
+            .chain(a.joints.iter().map(|j| j.id))
+            .chain(a.contact_sets.iter().map(|c| c.id))
+            .chain(a.studies.iter().map(|s| s.id))
+            .chain(a.exploded.iter().map(|v| v.id))
+            .max()
+            .unwrap_or(0);
+        let floor = largest.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
+        Ok(self.next_id.max(floor).max(1))
+    }
+
+    /// Reserve an identity in the saved counter. Removing an item never rewinds this counter.
+    pub fn allocate_id(&mut self) -> Result<u64> {
+        let id = self.next_item_id()?;
+        self.next_id = id.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
+        Ok(id)
+    }
+
     pub fn new(name: &str) -> Self {
         Document {
             render: Default::default(),
@@ -2613,10 +3260,13 @@ impl Document {
             units: default_units(),
             metadata: Default::default(),
             params: Vec::new(),
+            text_params: Vec::new(),
             features: Vec::new(),
             marker: None,
             next_id: 1,
+            reserved_body_names: Default::default(),
             components: Vec::new(),
+            next_component_color_index: 0,
             occurrences: Vec::new(),
             assembly: Default::default(),
             sheet: Default::default(),
@@ -2627,10 +3277,12 @@ impl Document {
             body_components: Default::default(),
             body_offsets: Default::default(),
             materials: Default::default(),
+            print_faces: Default::default(),
             user_materials: Vec::new(),
             appearances: Default::default(),
             favorites: Default::default(),
             canvases: Vec::new(),
+            point_clouds: Vec::new(),
             param_comments: Default::default(),
             browser_groups: Vec::new(),
             timeline_groups: Vec::new(),
@@ -2642,11 +3294,28 @@ impl Document {
     }
 
     /// Rename body `old` to `new` where the design keeps things by body name outside its
-    /// features: materials, appearances, configuration columns, offsets, components and the
+    /// features: materials, print faces, appearances, plastic rules, configuration columns, offsets, components and the
     /// browser's groups and order. (The features are the rename command's to change.)
+    ///
+    /// A name the design numbered (`Body1`) is not used again after the rename: the design's
+    /// counter starts over at every evaluation, so without this a design that is evaluated
+    /// again hands the freed name to the next body (#4957). Every counted name is reserved as
+    /// soon as a body has it (`Session::pin_body_names`), so this only matters for a design
+    /// that has not been through a command since then. `new` may be a reserved name: a rename
+    /// is deliberate, and the body then has what the design keeps under it.
     pub fn rename_body_keys(&mut self, old: &str, new: &str) {
+        if is_counted_body_name(old) {
+            self.reserved_body_names.insert(old.to_string());
+        }
         if let Some(m) = self.materials.remove(old) {
             self.materials.insert(new.to_string(), m);
+        }
+        if let Some(mut face) = self.print_faces.remove(old) {
+            face.body = new.to_string();
+            self.print_faces.insert(new.to_string(), face);
+        }
+        if let Some(rule) = self.plastic.assigned.remove(old) {
+            self.plastic.assigned.insert(new.to_string(), rule);
         }
         if let Some(c) = self.appearances.bodies.remove(old) {
             self.appearances.bodies.insert(new.to_string(), c);
@@ -2671,22 +3340,23 @@ impl Document {
         if let Some(c) = self.body_components.remove(old) {
             self.body_components.insert(new.to_string(), c);
         }
-        for g in self.browser_groups.iter_mut().filter(|g| g.folder == "bodies") {
-            for k in g.items.iter_mut().filter(|k| *k == old) {
-                *k = new.to_string();
+        let rename = |e: &mut BrowserEntry| {
+            if e.is_item(old) {
+                *e = BrowserEntry::item(new);
             }
+        };
+        for g in self.browser_groups.iter_mut().filter(|g| g.folder == "bodies") {
+            g.items.iter_mut().for_each(rename);
         }
         for (_, v) in self.browser_order.iter_mut().filter(|(k, _)| k.ends_with("/bodies")) {
-            for k in v.iter_mut().filter(|k| *k == old) {
-                *k = new.to_string();
-            }
+            v.iter_mut().for_each(rename);
         }
     }
 
     /// The single body rename (old name, new name) that turns `previous` into this design,
     /// when that is all that changed: the features' stored body names (`made` gives the names
-    /// each feature's bodies have now, by feature id) and what [`Document::rename_body_keys`]
-    /// renames. `None` for any other change.
+    /// each feature's bodies have now, by feature id), typed body references, participants and
+    /// what [`Document::rename_body_keys`] renames. `None` for any other change.
     pub fn body_rename_from(&self, previous: &Document, made: impl Fn(u64) -> Vec<String>) -> Option<(String, String)> {
         if self.features.len() != previous.features.len() {
             return None;
@@ -2700,8 +3370,10 @@ impl Document {
                 continue;
             }
             let now = made(a.id);
+            // The stored slot of each body built now (an Import's pass its skipped bodies by).
+            let at: std::collections::HashMap<usize, &String> = b.body_name_slots(now.len()).into_iter().zip(&now).collect();
             for (k, name) in b.body_names.iter().enumerate() {
-                let current = now.get(k);
+                let current = at.get(&k).copied();
                 // Slots the rename left alone, and the ones it set to the names they have now.
                 if a.body_names.get(k) == Some(name) || name.trim().is_empty() || current == Some(name) {
                     continue;
@@ -2715,8 +3387,16 @@ impl Document {
         }
         let (old, new) = rename?;
         let mut expected = previous.clone();
+        let bodies = std::collections::BTreeMap::from([(old.clone(), new.clone())]);
         for (f, g) in expected.features.iter_mut().zip(&self.features) {
             f.body_names.clone_from(&g.body_names);
+            // Updating references to the renamed body changes no feature input other than its
+            // name (#6287). Keep the full comparison below: geometry, expressions, sketch links
+            // and face anchors must still agree before the model may reuse its geometry.
+            f.kind.remap_bodies(&bodies);
+            for body in f.participants.iter_mut().filter(|body| **body == old) {
+                body.clone_from(&new);
+            }
         }
         expected.rename_body_keys(&old, &new);
         (expected == *self).then_some((old, new))
@@ -2761,20 +3441,41 @@ impl Document {
         *self == normalized
     }
 
-    /// Only components' part properties (metadata and free properties) changed: nothing to
+    /// Only part properties changed (the fields `with_part_properties_of` names): nothing to
     /// evaluate. The same whole-Document proof as [`Document::differs_only_in_render`].
     pub fn differs_only_in_part_properties(&self, previous: &Document) -> bool {
-        if self.components.len() != previous.components.len()
-            || self.components.iter().zip(&previous.components).any(|(a, b)| a.id != b.id)
-            || self.components == previous.components
-        {
+        previous.with_part_properties_of(self).is_some_and(|normalized| normalized == *self)
+    }
+
+    /// This design with `other`'s part properties, or `None` when they are this design's
+    /// already (then nothing is copied). The part properties are the fields that change no
+    /// geometry: the design's metadata, and each component's metadata and free properties. A
+    /// field that joins them is compared and copied here, and nowhere else.
+    fn with_part_properties_of(&self, other: &Document) -> Option<Document> {
+        let same = self.metadata == other.metadata
+            && self.components.iter().zip(&other.components).all(|(c, o)| c.metadata == o.metadata && c.properties == o.properties);
+        if same {
+            return None;
+        }
+        let mut out = self.clone();
+        out.metadata.clone_from(&other.metadata);
+        // Paired by position: if the components themselves differ, so do the designs.
+        for (c, o) in out.components.iter_mut().zip(&other.components) {
+            c.metadata.clone_from(&o.metadata);
+            c.properties.clone_from(&o.properties);
+        }
+        Some(out)
+    }
+
+    /// Only appearances (body, face and component looks) changed: evaluation never reads them, so
+    /// the model and its placed world stay valid. The same whole-Document proof as
+    /// [`Document::differs_only_in_render`].
+    pub fn differs_only_in_appearance(&self, previous: &Document) -> bool {
+        if self.appearances == previous.appearances {
             return false;
         }
         let mut normalized = previous.clone();
-        for (n, c) in normalized.components.iter_mut().zip(&self.components) {
-            n.metadata = c.metadata.clone();
-            n.properties = c.properties.clone();
-        }
+        normalized.appearances = self.appearances.clone();
         *self == normalized
     }
 
@@ -2788,14 +3489,22 @@ impl Document {
     /// The model with each body carrying the colour, opacity and face colours it is shown with
     /// (for export).
     pub fn painted(&self, state: &crate::ModelState) -> crate::ModelState {
+        self.painted_with_faces(state, true)
+    }
+
+    /// Linked designs carry authored face overrides as editable properties. Their STEP
+    /// geometry keeps imported paint, without baking a second copy of those overrides.
+    pub fn painted_for_link(&self, state: &crate::ModelState) -> crate::ModelState {
+        self.painted_with_faces(state, false)
+    }
+
+    fn painted_with_faces(&self, state: &crate::ModelState, authored_faces: bool) -> crate::ModelState {
         let mut st = state.clone();
         for b in &mut st.bodies {
             let c = self.body_color(b);
-            let faces: Vec<solidcraft_kernel::FacePaint> = self
-                .face_colors(b)
-                .into_iter()
-                .map(|(face, l)| solidcraft_kernel::FacePaint { face, color: l.rgb(), opacity: l.opacity as f32 })
-                .collect();
+            let face_colors = if authored_faces { self.face_colors(b) } else { self.imported_face_colors(b) };
+            let faces: Vec<solidcraft_kernel::FacePaint> =
+                face_colors.into_iter().map(|(face, l)| solidcraft_kernel::FacePaint { face, color: l.rgb(), opacity: l.opacity as f32 }).collect();
             let opacity = self.model_body_opacity(b) as f32;
             let paint = solidcraft_kernel::Paint { opacity, faces };
             if c != b.body.color() || b.body.paint() != Some(&paint) {
@@ -2805,9 +3514,21 @@ impl Document {
         st
     }
 
-    /// Density of a body's material (g/cm³).
+    /// The material a body's mass is computed with, as the library or this design spells it:
+    /// its assigned material when that is known and has a usable density, else
+    /// [`DEFAULT_MATERIAL`]. The assignment as stored (`materials`) is left as it is.
+    pub fn body_material(&self, body: &str) -> String {
+        self.materials
+            .get(body)
+            .and_then(|m| self.material_name(m))
+            .filter(|m| self.material_density(m).is_some())
+            .unwrap_or_else(|| DEFAULT_MATERIAL.into())
+    }
+
+    /// Density of a body's material (g/cm³): its [`Document::body_material`]'s, so the name a
+    /// body reads and the mass it has never disagree.
     pub fn density(&self, body: &str) -> f64 {
-        self.materials.get(body).and_then(|m| self.material_density(m)).unwrap_or(DEFAULT_DENSITY)
+        self.material_density(&self.body_material(body)).unwrap_or(DEFAULT_DENSITY)
     }
 
     /// A material defined in this design, by name (case-insensitive).
@@ -2876,6 +3597,24 @@ impl Document {
         if body.transferred || body.source_name.is_some() { body.component } else { self.legacy_body_component(&body.name, body.feature) }
     }
 
+    /// [`Document::model_body_component`] of every body of `state`, in its order, with the
+    /// timeline looked up once: placing a large assembly asked it of every body for every
+    /// placement, each time searching the features.
+    pub fn model_body_components(&self, state: &crate::ModelState) -> Vec<u64> {
+        let features: std::collections::HashMap<u64, u64> = self.features.iter().rev().map(|f| (f.id, f.component)).collect();
+        state
+            .bodies
+            .iter()
+            .map(|b| {
+                if b.transferred || b.source_name.is_some() {
+                    b.component
+                } else {
+                    self.body_components.get(&b.name).copied().unwrap_or_else(|| features.get(&b.feature).copied().unwrap_or(0))
+                }
+            })
+            .collect()
+    }
+
     /// The components that own a body in `state` ([`Document::model_body_component`] of each),
     /// in one pass: the timeline is looked up once, not once per body.
     pub fn body_owners(&self, state: &crate::ModelState) -> std::collections::HashSet<u64> {
@@ -2906,6 +3645,9 @@ impl Document {
         if self.components.len() >= 10_000 {
             return Err(DocError::Invalid("too many components".into()));
         }
+        self.normalise_component_color_indices()?;
+        let color_index = self.next_component_color_index;
+        let next_color_index = color_index.checked_add(1).ok_or_else(|| DocError::Invalid("component colour sequence exhausted".into()))?;
         let id = self.next_id.max(1);
         self.next_id = id.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
         let name = match name.map(str::trim) {
@@ -2918,24 +3660,40 @@ impl Document {
                 format!("Component{k}")
             }
         };
-        self.components.push(Component { id, name, parent, ..Default::default() });
-        self.add_occurrence(id, parent, crate::IDENTITY)?;
+        self.components.push(Component { id, name, parent, identification_color_index: Some(color_index), ..Default::default() });
+        self.next_component_color_index = next_color_index;
+        let occurrence = self.add_occurrence(id, parent, crate::IDENTITY)?;
+        // The design's first part is grounded, so joints and drags have something fixed to work
+        // from (#2804); later parts and copies start free. Only creation decides this: opening a
+        // design never grounds anything.
+        if parent == 0
+            && !self.occurrences.iter().any(|o| o.parent == 0 && o.id != occurrence)
+            && let Some(o) = self.occurrences.iter_mut().find(|o| o.id == occurrence)
+        {
+            o.grounded = true;
+        }
         Ok(id)
     }
 
-    /// A component by id or name (0 / "root" is the design itself).
+    /// A component by id or name (0 / "root" is the design itself). A component that carries the
+    /// design's own name is found by that name: the design is still named by 0 / "root".
     pub fn find_component(&self, key: &str) -> Option<u64> {
-        if key == "0" || key.eq_ignore_ascii_case("root") || key == self.name {
+        if key == "0" || key.eq_ignore_ascii_case("root") {
             return Some(0);
         }
-        self.components.iter().find(|c| c.id.to_string() == key || c.name == key).map(|c| c.id)
+        self.components.iter().find(|c| c.id.to_string() == key || c.name == key).map(|c| c.id).or_else(|| (key == self.name).then_some(0))
     }
 
     /// Read a design file's JSON (any format this build knows; older ones are upgraded).
     pub fn from_json(s: &str) -> Result<Document> {
-        let d = crate::format::read(s)?;
+        crate::render_resources::check_json_budget(s)?;
+        let mut d = crate::format::read(s)?;
         if d.features.len() > MAX_FEATURES || d.params.len() > MAX_PARAMS {
             return Err(DocError::Invalid("document too large".into()));
+        }
+        // A design from elsewhere may nest groups too deep, loop, or name things that are gone.
+        if let Some((groups, order)) = d.browser_pruned() {
+            (d.browser_groups, d.browser_order) = (groups, order);
         }
         Ok(d)
     }
@@ -2944,6 +3702,8 @@ impl Document {
     }
 
     pub fn feature(&self, id: u64) -> Option<&Feature> {
+        #[cfg(test)]
+        crate::eval::cost_tests::count_feature_search();
         self.features.iter().find(|f| f.id == id)
     }
     pub fn feature_mut(&mut self, id: u64) -> Option<&mut Feature> {
@@ -2962,15 +3722,43 @@ impl Document {
         self.features.iter().find(|f| f.name.eq_ignore_ascii_case(r))
     }
 
-    fn unique_name(&self, base: &str) -> String {
-        let mut n = 1;
-        loop {
-            let name = format!("{base}{n}");
-            if !self.features.iter().any(|f| f.name == name) {
-                return name;
-            }
-            n += 1;
+    /// Resolve a textual timeline reference. An exact name wins even when it looks like an id.
+    /// Older scripts also pass ids as strings or use a different case for a unique name.
+    pub fn resolve_feature_name(&self, name: &str) -> Result<&Feature> {
+        if let Some(feature) = self.features.iter().find(|f| f.name == name) {
+            return Ok(feature);
         }
+        if let Ok(id) = name.parse::<u64>()
+            && let Some(feature) = self.feature(id)
+        {
+            return Ok(feature);
+        }
+        let mut matches = self.features.iter().filter(|f| f.name.eq_ignore_ascii_case(name));
+        let feature = matches.next().ok_or_else(|| DocError::Invalid(format!("no feature `{name}`")))?;
+        if matches.next().is_some() {
+            return Err(DocError::Invalid(format!("ambiguous feature `{name}`. Use its exact name or numeric id")));
+        }
+        Ok(feature)
+    }
+
+    /// The feature a pattern or mirror seed names, resolved the way `replay()` resolved seed
+    /// names before seeds were keyed by id (#1134): an exact name match on a feature that is
+    /// not a sketch or a construction plane wins — a sketch and its extrude often share a
+    /// name, and the feature that makes geometry is the one to copy. Other references use
+    /// the timeline lookup.
+    pub fn seed_feature(&self, name: &str) -> Option<&Feature> {
+        self.features
+            .iter()
+            .find(|x| x.name == name && !matches!(x.kind, FeatureKind::Sketch { .. } | FeatureKind::ConstructionPlane { .. }))
+            .or_else(|| self.resolve_feature_name(name).ok())
+    }
+
+    fn unique_name(&self, base: &str) -> String {
+        // The numbers taken after `base`, gathered once: the thousandth cylinder of a design
+        // tried Cylinder1, Cylinder2 … each against every feature's name.
+        let taken = crate::params::numbers_after(base, self.features.iter().map(|f| f.name.as_str()));
+        let n = (1..).find(|n| !taken.contains(n)).unwrap_or(1);
+        format!("{base}{n}")
     }
 
     /// The deepest timeline folder spanning the insertion slot between `marker - 1` and
@@ -3018,12 +3806,18 @@ impl Document {
         } else {
             0
         };
-        let id = self.next_id.max(1);
-        self.next_id = id.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
         let name = match name {
             Some(n) if !n.trim().is_empty() => n.trim().to_string(),
             _ => self.unique_name(kind.base_name()),
         };
+        // Plane references share the feature namespace. A duplicate would silently select
+        // the first feature. Other shared names (a sketch and its extrude) remain supported.
+        let is_plane = matches!(kind, FeatureKind::ConstructionPlane { .. });
+        if self.features.iter().any(|f| f.name == name && (is_plane || matches!(f.kind, FeatureKind::ConstructionPlane { .. }))) {
+            return Err(DocError::Invalid(format!("another feature is called `{name}`")));
+        }
+        let id = self.next_id.max(1);
+        self.next_id = id.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
         let f = Feature {
             id,
             name,
@@ -3036,6 +3830,9 @@ impl Document {
             face_names: Vec::new(),
             participants: Vec::new(),
             shell_piece_order: false,
+            kernel_piece_order: false,
+            inserted: false,
+            link_faces: Vec::new(),
             kind,
         };
         self.place_feature(f);
@@ -3112,11 +3909,14 @@ impl Document {
         let id = f.id;
         let insertion_group = self.marker.and_then(|marker| self.timeline_group_at_insertion(marker));
         match self.marker {
-            Some(m) if m < self.features.len() => {
-                self.features.insert(m, f);
-                self.marker = Some(m + 1);
+            // A marker right after the last feature moves on past a feature added there, or the
+            // new feature would be added rolled back (#7741).
+            Some(marker) => {
+                let position = marker.min(self.features.len());
+                self.features.insert(position, f);
+                self.marker = Some(position + 1);
             }
-            _ => self.features.push(f),
+            None => self.features.push(f),
         }
         if let Some(group_id) = insertion_group {
             let positions: std::collections::BTreeMap<u64, usize> =
@@ -3129,11 +3929,39 @@ impl Document {
         self.name_feature_inputs(id);
     }
 
-    /// Delete a feature (and, for a sketch, the features that use it).
+    /// Delete a feature (and, for a sketch, the features that use it). The feature of an inserted
+    /// file or a linked design takes the component tree it made with it: everything in that tree
+    /// and every assembly record that refers to it ([`Document::remove_component_tree`]). Other
+    /// imported bodies (a copied component's independent base) go alone.
     pub fn delete_feature(&mut self, id: u64) -> Result<Vec<u64>> {
-        let idx = self.feature_index(id).ok_or_else(|| DocError::Unknown(format!("feature {id}")))?;
-        let mut gone = vec![id];
-        gone.extend(self.features.iter().filter(|f| f.kind.input_sketches().contains(&id)).map(|f| f.id));
+        let owned = self.feature(id).filter(|f| self.feature_owns_component(f)).map(|f| f.component);
+        match owned {
+            Some(root) => Ok(self.remove_component_tree(root)?.deleted),
+            None => self.delete_features(&[id]),
+        }
+    }
+
+    /// Delete features `ids` and the features whose sketches they are. Returns every deleted id,
+    /// `ids` first.
+    pub(crate) fn delete_features(&mut self, ids: &[u64]) -> Result<Vec<u64>> {
+        let mut gone: Vec<u64> = Vec::with_capacity(ids.len());
+        for id in ids {
+            if self.feature_index(*id).is_none() {
+                return Err(DocError::Unknown(format!("feature {id}")));
+            }
+            if !gone.contains(id) {
+                gone.push(*id);
+            }
+        }
+        let dependants: Vec<u64> = self
+            .features
+            .iter()
+            .filter(|f| !gone.contains(&f.id) && f.kind.input_sketches().iter().any(|sketch| gone.contains(sketch)))
+            .map(|f| f.id)
+            .collect();
+        gone.extend(dependants);
+        // How many of them come before the rollback marker: it keeps its place among the rest.
+        let before_marker = self.marker.map(|m| self.features.iter().take(m).filter(|f| gone.contains(&f.id)).count());
         let gone_params: Vec<String> = self.features.iter().filter(|f| gone.contains(&f.id)).flat_map(|f| f.param_names.clone()).collect();
         self.configs
             .rules
@@ -3154,9 +3982,9 @@ impl Document {
                 _ => true,
             })
             .collect();
-        self.appearances
-            .faces
-            .retain(|face| !face.strict_name || !face.name.as_ref().is_some_and(|name| gone.iter().any(|id| name.starts_with(&format!("F{id}:")))));
+        self.appearances.faces.retain(|face| {
+            !face.strict_name || !face.name.as_ref().and_then(|name| crate::persistent_name::made_by(name)).is_some_and(|made| gone.contains(&made))
+        });
         if keep.contains(&false) {
             let mut k = keep.iter();
             self.configs.columns.retain(|_| k.next().copied().unwrap_or(true));
@@ -3165,10 +3993,8 @@ impl Document {
                 r.cells.retain(|_| k.next().copied().unwrap_or(true));
             }
         }
-        if let Some(m) = self.marker
-            && m > idx
-        {
-            self.marker = Some(m.saturating_sub(gone.len()).max(idx));
+        if let (Some(m), Some(n)) = (self.marker, before_marker) {
+            self.marker = Some(m.saturating_sub(n));
         }
         // Drop model parameters nobody references any more.
         self.prune_model_params();
@@ -3224,15 +4050,22 @@ impl Document {
         if name.len() > 64 {
             return Some("parameter names are at most 64 characters".into());
         }
-        if expr::is_reserved(name) {
-            return Some(format!("`{name}` is a unit, constant or function name"));
+        match expr::reserved_kind(name) {
+            Some("constant") => Some(format!("`{name}` is a constant, so it cannot be a parameter name")),
+            Some(kind) => Some(format!("`{name}` is a {kind} name, so it cannot be a parameter name")),
+            None => None,
         }
-        None
     }
 
     /// Add or change a parameter. Fails if the result would not evaluate. A new parameter
-    /// without a unit takes the unit of its value (mm, deg or none).
+    /// without a unit takes the unit of its value (a length in the design's units, deg or none).
     pub fn set_param(&mut self, name: &str, expr_s: &str, unit: Option<&str>, comment: Option<&str>) -> Result<()> {
+        // A text parameter: one with the text unit, or an existing one when no unit is given.
+        match (unit.map(crate::text_params::is_text_unit), self.text_param(name).is_some()) {
+            (Some(true), _) | (None, true) => return self.set_text_param(name, expr_s, comment),
+            (Some(false), true) => return Err(DocError::Invalid(format!("`{name}` is a text parameter"))),
+            _ => {}
+        }
         if let Some(p) = Self::param_name_problem(name) {
             return Err(DocError::Invalid(p));
         }
@@ -3347,33 +4180,47 @@ impl Document {
                 let b = self.resolve_plane_in(vals, base, depth + 1, st)?;
                 Ok(b.offset(Self::eval_in(vals, distance, Kind::Length)?))
             }
-            PlaneRef::AtAngle { base, axis_origin, axis_dir, angle } => {
+            PlaneRef::AtAngle { base, axis_origin, axis_dir, angle, line } => {
                 let b = self.resolve_plane_in(vals, base, depth + 1, st)?;
                 let a = Self::eval_in(vals, angle, Kind::Angle)?;
+                let (axis_origin, axis_dir) = match line {
+                    Some(g) => {
+                        let st = st.ok_or_else(|| DocError::Invalid("this plane is built from the model: evaluate first".into()))?;
+                        crate::construct::model_axis(st, g)?
+                    }
+                    None => (*axis_origin, *axis_dir),
+                };
                 let d = axis_dir.normalized().ok_or_else(|| DocError::Invalid("rotation axis".into()))?;
                 let rot = |v: Vec3| v * a.cos() + d.cross(v) * a.sin() + d * (d.dot(v) * (1.0 - a.cos()));
-                let o = *axis_origin + rot(b.origin - *axis_origin);
+                let o = axis_origin + rot(b.origin - axis_origin);
                 Plane::new(o, rot(b.x), rot(b.y)).ok_or_else(|| DocError::Invalid("degenerate plane".into()))
             }
             PlaneRef::Flipped { base, about_y } => Ok(self.resolve_plane_in(vals, base, depth + 1, st)?.flipped(*about_y)),
-            PlaneRef::Construction { name } => {
+            PlaneRef::Construction { feature } => {
                 // Evaluated already: as it came out.
-                if let Some(c) = st.and_then(|st| st.construct.iter().find(|c| &c.name == name))
+                if let Some(c) = st.and_then(|st| st.construct.iter().find(|c| c.feature == feature.0))
                     && let crate::construct::ConstructGeom::Plane(pl) = &c.geom
                 {
                     return Ok(*pl);
                 }
-                match self.find_feature(name).map(|f| &f.kind) {
+                match self.feature(feature.0).map(|f| &f.kind) {
                     Some(FeatureKind::ConstructionPlane { plane }) => self.resolve_plane_in(vals, plane, depth + 1, st),
-                    _ => Err(DocError::Unknown(format!("construction plane `{name}`"))),
+                    // A name that could not be resolved when an older design opened keeps id 0,
+                    // which no feature has (#1134): the reference dangles, as it always did.
+                    _ => {
+                        let shown = self.feature(feature.0).map(|f| f.name.clone()).unwrap_or_else(|| feature.to_string());
+                        Err(DocError::Unknown(format!("construction plane `{shown}`")))
+                    }
                 }
             }
             PlaneRef::Midplane { .. }
             | PlaneRef::TwoEdges { .. }
+            | PlaneRef::AxisPoint { .. }
             | PlaneRef::ThreePoints { .. }
             | PlaneRef::Tangent { .. }
             | PlaneRef::AlongPath { .. }
-            | PlaneRef::Perpendicular { .. } => {
+            | PlaneRef::Perpendicular { .. }
+            | PlaneRef::ThroughPoint { .. } => {
                 let st = st.ok_or_else(|| DocError::Invalid("this plane is built from the model: evaluate first".into()))?;
                 crate::construct::resolve_geo_plane(&crate::construct::Ctx { doc: self, vals, st, depth }, p)
             }
@@ -3396,10 +4243,12 @@ impl Document {
         }
     }
 
-    /// Apply parameter values to every dimension in a sketch, and to its points placed by
-    /// parameters (in place).
+    /// Apply parameter values to every dimension in a sketch, to its points placed by parameters
+    /// and to its equation curves (in place).
     pub fn apply_dimension_values(&self, vals: &std::collections::BTreeMap<String, expr::Value>, sk: &mut Sketch) -> Result<()> {
         self.apply_point_values(vals, sk)?;
+        self.apply_equation_values(vals, sk)?;
+        self.apply_pattern_values(vals, sk)?;
         for c in &mut sk.constraints {
             if let Some(p) = &c.param {
                 let kind = if c.kind.is_angle() { Kind::Angle } else { Kind::Length };
@@ -3409,6 +4258,61 @@ impl Document {
         }
         for c in &sk.constraints {
             sk.validate(&c.kind)?;
+        }
+        Ok(())
+    }
+
+    /// Resolve circular Quantity expressions before solving. Rebuilding the copies here also
+    /// covers cold document evaluation and configuration changes, without an engine dependency.
+    pub fn apply_pattern_quantities(&self, vals: &std::collections::BTreeMap<String, expr::Value>, sk: &mut Sketch) -> Result<()> {
+        let counts: Vec<_> = sk
+            .patterns
+            .iter()
+            .filter_map(|p| p.count_expression.as_ref().map(|e| (p.id.clone(), e)))
+            .map(|(id, e)| {
+                let n = crate::eval::val(vals, e, Kind::Unitless)?;
+                Ok((id, solidcraft_sketch::SketchPattern::circular_quantity(n)?))
+            })
+            .collect::<Result<_>>()?;
+        for (id, count) in counts {
+            sk.resize_circular_pattern(&id, count)?;
+        }
+        Ok(())
+    }
+
+    /// Evaluate the retained pattern inputs before solving its associative relations.
+    pub fn apply_pattern_values(&self, vals: &std::collections::BTreeMap<String, expr::Value>, sk: &mut Sketch) -> Result<()> {
+        use solidcraft_sketch::SketchPatternKind;
+        self.apply_pattern_quantities(vals, sk)?;
+        for index in 0..sk.patterns.len() {
+            let Some(pattern) = sk.patterns.get(index) else { continue };
+            let mut kind = pattern.kind.clone();
+            for (key, expression) in &pattern.expressions {
+                let unit = match key.as_str() {
+                    "count" | "count2" => Kind::Unitless,
+                    "spacing" | "spacing2" => Kind::Length,
+                    "angle" => Kind::Angle,
+                    _ => return Err(DocError::Invalid(format!("unknown sketch pattern input `{key}`"))),
+                };
+                let value = crate::eval::val(vals, expression, unit).map_err(|e| DocError::Expr(format!("pattern {} `{key}`: {e}", pattern.id)))?;
+                let count = || -> Result<usize> {
+                    if !(1.0..=500.0).contains(&value) || value.fract() != 0.0 {
+                        return Err(DocError::Invalid(format!("pattern `{key}` must be a positive integer from 1 to 500")));
+                    }
+                    Ok(value as usize)
+                };
+                match (&mut kind, key.as_str()) {
+                    (SketchPatternKind::Circular { count: n, .. } | SketchPatternKind::Rectangular { count: n, .. }, "count") => *n = count()?,
+                    (SketchPatternKind::Rectangular { count2, .. }, "count2") => *count2 = count()?,
+                    (SketchPatternKind::Rectangular { spacing, .. }, "spacing") => *spacing = value,
+                    (SketchPatternKind::Rectangular { spacing2, .. }, "spacing2") => *spacing2 = value,
+                    (SketchPatternKind::Circular { angle, .. }, "angle") => *angle = value.to_degrees(),
+                    _ => return Err(DocError::Invalid(format!("invalid sketch pattern input `{key}`"))),
+                }
+            }
+            if kind != pattern.kind {
+                sk.update_pattern(index, kind)?;
+            }
         }
         Ok(())
     }
@@ -3434,14 +4338,14 @@ impl Document {
         Ok(())
     }
 
-    /// Give the texts of a sketch the numbers their expressions come to (in place): a text's
-    /// height, place and angle that were typed as expressions. A text's outlines are rebuilt from
-    /// its numbers when the sketch's links are refreshed, so this comes before that. A number
-    /// typed as a number is left as it is.
+    /// Give the texts of a sketch the numbers and words their expressions come to (in place): a
+    /// text's height, place and angle that were typed as expressions, and its words built from
+    /// text parameters. A text's outlines are rebuilt from them when the sketch's links are
+    /// refreshed, so this comes before that. What was typed as such is left as it is.
     pub fn apply_text_values(&self, vals: &std::collections::BTreeMap<String, expr::Value>, sk: &mut Sketch) -> Result<()> {
         use crate::eval::val;
         for link in &mut sk.links {
-            let solidcraft_sketch::LinkSource::Text { at, height, angle, exprs, .. } = &mut link.source else { continue };
+            let solidcraft_sketch::LinkSource::Text { text, at, height, angle, exprs, .. } = &mut link.source else { continue };
             let number = |e: &Option<String>, kind: Kind, what: &str| -> Result<Option<f64>> {
                 match e {
                     None => Ok(None),
@@ -3463,6 +4367,13 @@ impl Document {
             if exprs.height.is_some() && !(*height > 1e-6 && *height < 1e5) {
                 return Err(DocError::Invalid("a text's height must be positive".into()));
             }
+            if let Some(e) = &exprs.text {
+                let words = self.eval_words(e, vals).map_err(|error| DocError::Expr(format!("text: {error}")))?;
+                if words.trim().is_empty() || words.chars().count() > solidcraft_sketch::MAX_TEXT_CHARS {
+                    return Err(DocError::Invalid(format!("text: `{e}` gives no words, or too many")));
+                }
+                *text = words;
+            }
         }
         Ok(())
     }
@@ -3477,7 +4388,9 @@ impl Document {
     /// `moved_from`: the stored sketch, when `sk` is that sketch with its links refreshed. A
     /// link's points are where their source is now; the sides and turns the solve keeps are
     /// those of the stored state ([`Sketch::positions_in`]), not the ones read beside a line
-    /// that has moved past a point.
+    /// that has moved past a point. Where the links moved so far that the solve fails or turns
+    /// part of the sketch over, they are walked there in steps
+    /// ([`solidcraft_sketch::solve_after_link_move`]).
     pub fn solve_sketch(
         &self,
         vals: &std::collections::BTreeMap<String, expr::Value>,
@@ -3500,12 +4413,41 @@ impl Document {
         analysis: solidcraft_sketch::Analysis,
     ) -> Result<solidcraft_sketch::SolveReport> {
         self.apply_dimension_values(vals, sk)?;
+        // A text built anew since it was stored (an expression gave it other words) has other
+        // outline entities: the stored sketch is taken with this sketch's, so the points still
+        // pair up for the side checks and the walk below.
+        let paired = moved_from.and_then(|from| sk.stored_with_rebuilt_texts(from));
+        let moved_from = paired.as_ref().or(moved_from);
         let was = |sk: &Sketch| moved_from.and_then(|from| sk.positions_in(from));
         let offsets = !sk.offsets.is_empty() || !sk.freeform_offsets.is_empty();
         // Offsets always require another solve after refresh. Only that last report is
         // published; the first report only decides which state the second solve starts from.
         let first_analysis = if offsets { solidcraft_sketch::Analysis::StatusOnly } else { analysis };
+        // A linked or fixed point is not where the stored sketch has it.
+        let given_moved = moved_from
+            .is_some_and(|from| sk.points.iter().zip(&from.points).any(|(p, q)| (p.fixed || p.link.is_some()) && p.id == q.id && p.pos != q.pos));
         let mut report = solidcraft_sketch::solve_after_edit_with_analysis(sk, stored, was(sk).as_deref(), first_analysis);
+        // Links that moved far (a large change of a size upstream): when the jump fails, or
+        // lands on the mirror image of a side or turn the stored sketch has, walked there in
+        // steps; a turn the walk cannot avoid either is reported as one.
+        if let Some(from) = moved_from.filter(|_| given_moved) {
+            let flips = if report.ok() { solidcraft_sketch::flips_from_stored(sk, from) } else { Vec::new() };
+            if !report.keeps_orientation() || !flips.is_empty() {
+                match solidcraft_sketch::solve_after_link_move(sk, from, stored, first_analysis) {
+                    Some(walked) => report = walked,
+                    None => {
+                        for id in flips {
+                            if !report.failing.contains(&id) {
+                                report.failing.push(id.clone());
+                            }
+                            if !report.folded.contains(&id) {
+                                report.folded.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if offsets {
             // Source dimensions may have moved curves during the solve.
             sk.refresh_offsets()?;
@@ -3514,15 +4456,23 @@ impl Document {
             } else {
                 solidcraft_sketch::solve_after_edit_with_analysis(sk, stored, was(sk).as_deref(), analysis)
             };
+            // An attachment to the old offset can prevent the source from moving at all.
+            // Retry from a source-only seed, adopting it only if every constraint still holds.
+            if !report.ok()
+                && report.oversized.is_none()
+                && let Some(retried) = sk.solve_after_offset_edit(stored, was(sk).as_deref(), analysis)
+            {
+                report = retried;
+            }
         }
         Ok(report)
     }
 }
 
-/// Density of the default material (g/cm³), as the default.
+/// The built-in material library: (name, density), and each material's colour.
 #[path = "../../../assets/materials/library.rs"]
 mod materials;
-pub use materials::{DEFAULT_DENSITY, MATERIALS, material_color};
+pub use materials::{DEFAULT_DENSITY, DEFAULT_MATERIAL, MATERIALS, material_color};
 
 /// A physical material defined in a design (`material.create`): its name, its density and,
 /// optionally, the look it gives bodies without an appearance of their own.
@@ -3533,7 +4483,13 @@ pub struct UserMaterial {
     pub density: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<crate::appearance::Look>,
+    /// Candidate engineering data; independent of assigned mass density and optics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_card: Option<crate::physical_material::ValidatedCard>,
 }
+
+/// Bound design-owned definitions consistently in commands and normal file loading.
+pub const MAX_USER_MATERIALS: usize = 1000;
 
 /// Largest density a material may have (g/cm³); the densest elements are about 22.6.
 pub const MAX_DENSITY: f64 = 1000.0;

@@ -16,7 +16,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("canvas.decal", "Decal", add_decal)
         .at("SKETCH", "INSERT")
         .icon("decal")
-        .params("path | data; face: [x,y,z] on a planar face (the image is centred there); width?: mm; angle?: deg; opacity?: (default 1)"),
+        .params("path | data; face: [x,y,z] on a planar face (the image is centred there), or the picked face as sketch.create's plane takes it ({face, body, index, path?}); width?: mm; angle?: deg; opacity?: (default 1)"),
     CommandSpec::new("canvas.edit", "Edit Canvas", edit_canvas).at("SKETCH", "INSERT").icon("canvas").params("canvas: id or name; center?, width?, angle?: deg, opacity?, flip?, visible?, name?"),
     CommandSpec::new("canvas.calibrate", "Calibrate Canvas", calibrate).icon("measure")
         .params("canvas: id or name; a, b: two points on the canvas plane [x,y]; distance: their true distance (mm): scales the image about a"),
@@ -56,14 +56,18 @@ fn make(s: &mut Session, p: &Value, cmd: &str, decal: bool) -> Result<Value> {
     // It belongs to the active component (its plane is in that frame) and moves with it.
     let component = s.active_component;
     let doc = s.doc_mut();
-    let id = super::next_free_id(cmd, doc.canvases.iter().map(|c| c.id))?;
+    let id = doc.allocate_id()?;
     let base = if decal { "Decal" } else { "Canvas" };
-    let name = str_(p, "name").map(str::to_string).unwrap_or_else(|| format!("{base}{id}"));
+    let name = str_(p, "name").map(str::to_string).unwrap_or_else(|| {
+        let names: std::collections::BTreeSet<_> = doc.canvases.iter().map(|c| c.name.as_str()).collect();
+        let number = (1..=doc.canvases.len().saturating_add(1)).find(|n| !names.contains(format!("{base}{n}").as_str())).unwrap_or(1);
+        format!("{base}{number}")
+    });
     doc.canvases.push(Canvas {
         id,
         name: name.clone(),
         format: format.into(),
-        data: base64_encode(&bytes),
+        data: base64_encode(&bytes).into(),
         pixels,
         plane,
         center,
@@ -84,9 +88,11 @@ fn add_canvas(s: &mut Session, p: &Value) -> Result<Value> {
 fn add_decal(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "canvas.decal";
     let face = p.get("face").cloned().ok_or_else(|| bad(cmd, "`face` must be a point [x,y,z] on a planar face"))?;
+    // A picked face as `sketch.create` takes it ({face, body, index, path?}) is used as it is.
+    let plane = if face.get("face").is_some() { face } else { json!({"face": face}) };
     let mut q = p.clone();
     if let Some(o) = q.as_object_mut() {
-        o.insert("plane".into(), json!({"face": face}));
+        o.insert("plane".into(), plane);
     }
     make(s, &q, cmd, true)
 }
@@ -168,6 +174,19 @@ mod tests {
         b.extend(h.to_be_bytes());
         b.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
         base64_encode(&b)
+    }
+
+    #[test]
+    fn deleted_canvas_ids_are_not_reused_after_reopening() {
+        let mut s = Session::default();
+        let params = json!({"data": png(10, 10)});
+        let first = s.execute("canvas.insert", &params).unwrap()["canvas"].as_u64().unwrap();
+        s.execute("canvas.delete", &json!({"canvas": first})).unwrap();
+        let doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+        *s.doc_mut() = doc;
+        let second = s.execute("canvas.insert", &params).unwrap()["canvas"].as_u64().unwrap();
+        assert!(second > first, "deleted canvas {first} was reused as {second}");
+        assert!(s.execute("canvas.edit", &json!({"canvas": first, "width": 500})).is_err());
     }
 
     #[test]

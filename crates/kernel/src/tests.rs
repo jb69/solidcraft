@@ -1434,6 +1434,17 @@ fn mesh_bodies_move_measure_and_refuse_solid_ops() {
     assert!((measure(&moved).unwrap().volume - 1000.0).abs() < 1e-9);
     let mirrored = crate::transform_matrix(&b, [[-1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]).unwrap();
     assert!((measure(&mirrored).unwrap().volume - 1000.0).abs() < 1e-9);
+    // Their size (the diagonal of the box around them) is measured once, when made: a large
+    // scan's size is asked for every frame.
+    for body in [&b, &moved, &mirrored] {
+        assert!(body.size > 0.0, "measured when made");
+        let walked = body.mesh.as_ref().unwrap().positions.iter().fold(solidcraft_geom::Aabb3::EMPTY, |mut a, p| {
+            a.add(*p);
+            a
+        });
+        assert!((body.size() - walked.diagonal()).abs() < 1e-9, "{} vs {}", body.size(), walked.diagonal());
+    }
+    assert!((b.size() - 300.0f64.sqrt()).abs() < 1e-9);
     let solid = box_solid(Vec3::ZERO, Vec3::new(5.0, 5.0, 5.0)).unwrap();
     assert!(fillet(&b, &[Vec3::new(5.0, 0.0, 0.0)], 1.0).unwrap_err().to_string().contains("mesh"));
     assert!(boolean(&solid, &b, BoolOp::Union).is_err());
@@ -3131,4 +3142,24 @@ fn a_box_cut_round_a_small_hole_of_a_long_plate_keeps_the_hole() {
             assert!(measure(&piece).unwrap().volume > 0.0, "r {r}, tilt {tilt}, hole at {q:?}");
         }
     }
+}
+
+/// A transform with a perspective term or a singular linear part is refused: placed into the
+/// body, it built a revolved ring whose mesh measured hundreds of millions of mm³, and cutting
+/// a pocket into it ran for over half an hour before failing. A translation still places it.
+#[test]
+fn transform_refuses_a_matrix_that_is_not_an_affine_placement() {
+    let rect = Loop2::polygon(&[Vec2::new(20.0, 0.0), Vec2::new(60.0, 0.0), Vec2::new(60.0, 10.0), Vec2::new(20.0, 10.0)]);
+    let ring = revolve(&Plane::XZ, &[Region2 { outer: rect, holes: vec![] }], Vec2::ZERO, Vec2::Y, std::f64::consts::TAU).unwrap().remove(0);
+    // Column-major: the last entry of the third column is a perspective term.
+    let perspective = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 10.0], [0.0, 0.0, 0.0, 1.0]];
+    let flat = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    for m in [perspective, flat] {
+        assert!(matches!(crate::transform_matrix(&ring, m), Err(KernelError::Invalid(_))), "{m:?}");
+    }
+    let lifted = crate::transform_matrix(&ring, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 10.0, 1.0]]).unwrap();
+    let pocket = box_solid(Vec3::new(37.0, -3.0, 7.0), Vec3::new(43.0, 3.0, 12.0)).unwrap();
+    let cut = boolean(&lifted, &pocket, BoolOp::Cut).unwrap().unwrap();
+    let removed = measure(&lifted).unwrap().volume - measure(&cut).unwrap().volume;
+    assert!((removed - 6.0 * 6.0 * 3.0).abs() < 1.0, "{removed}");
 }

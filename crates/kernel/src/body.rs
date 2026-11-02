@@ -23,6 +23,16 @@ pub struct Body {
     /// Bounding-box diagonal, measured by [`Body::new`] while it read the vertices anyway; 0
     /// means "not measured, walk the geometry". Every kernel tolerance is a fraction of it.
     pub(crate) size: f64,
+    /// How far this body's face boundaries may lie off their surfaces (mm) and still be taken as
+    /// lying on them. `Some` for a body read from a file that declares its own numeric
+    /// uncertainty (a STEP file's `GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT`, see
+    /// `crate::step_in::Units::tol`); `None` for a body this kernel built, which has no such
+    /// declaration.
+    ///
+    /// A band face's ring edges are held to it when the importer splits the band (see
+    /// `crate::step_in::split`). The display planner takes it only where it is more than its own
+    /// bound, a hundredth of the body (see `accept` in [`crate::tess::plan_face`]).
+    pub(crate) boundary_tol: Option<f64>,
     /// The last volume measured for this solid and the tolerance it was measured at, shared by
     /// clones because they share the solid. A boolean measures its operands, and a later boolean
     /// takes the result as an operand again, so the same body is measured twice otherwise.
@@ -552,6 +562,36 @@ pub(crate) fn shell_volume(shell: &mt::Shell) -> Option<f64> {
     v.is_finite().then_some(v)
 }
 
+/// A solid's volume off a mesh at `tol`, negative when it faces inwards, and how many faces that
+/// mesh left out.
+fn signed_volume(solid: &Solid, tol: f64) -> Result<(f64, usize)> {
+    let orient = |tol: f64| {
+        guard("orient", || {
+            let shells = mesh_shells(solid, tol);
+            let volume = shells.iter().map(|s| s.to_polygon().volume()).sum::<f64>();
+            let missing =
+                shells.iter().flat_map(|s| s.face_iter()).filter(|f| f.surface().is_none_or(|m| m.faces().triangle_iter().next().is_none())).count();
+            Ok((volume, missing))
+        })
+    };
+    let (mut v, missing) = orient(tol)?;
+    // A long thin round part (a through hole's tool: a cylinder whose vertices all lie on
+    // its seam, so they span its length only) meshed that coarsely can come out with a
+    // negative volume when it is outward already: check finely before turning it inside out.
+    let fine = (tol * 0.02).max(1e-4);
+    if v < 0.0 && fine < tol {
+        (v, _) = orient(fine)?;
+    }
+    Ok((v, missing))
+}
+
+/// Whether a closed shell faces inwards (a void), by the check [`Body::new`] orients a solid by.
+/// Unlike [`shell_volume`], a negative coarse volume is checked again on a finer mesh.
+pub(crate) fn faces_inward(shell: &mt::Shell) -> Result<bool> {
+    let solid = guard("shell", || Solid::try_new(vec![shell.clone()]).map_err(|e| KernelError::Failed(format!("shell: {e}"))))?;
+    Ok(signed_volume(&solid, orientation_tolerance(span_of(&solid)))?.0 < 0.0)
+}
+
 /// Deflection the orientation mesh uses: coarse enough for a large solid, fine enough that a
 /// small one still tessellates. `unmeshed_faces` counts at the same value, so the count the
 /// orientation mesh produced is reused instead of meshing the body again.
@@ -606,36 +646,18 @@ impl Body {
         // every face comes out: a face missing from a coarse mesh can flip the sign).
         let span = span_of(&solid);
         let tol = orientation_tolerance(span);
-        let orient = |tol: f64| {
-            guard("orient", || {
-                let shells = mesh_shells(&solid, tol);
-                let volume = shells.iter().map(|s| s.to_polygon().volume()).sum::<f64>();
-                let missing = shells
-                    .iter()
-                    .flat_map(|s| s.face_iter())
-                    .filter(|f| f.surface().is_none_or(|m| m.faces().triangle_iter().next().is_none()))
-                    .count();
-                Ok((volume, missing))
-            })
-        };
         #[cfg(test)]
         ORIENTED.with(|n| n.set(n.get() + 1));
         // The faces missing from the coarse mesh are the same whichever way the solid turns out
         // to face, so the count is kept for `unmeshed_faces` either way.
-        let (mut v, missing) = orient(tol)?;
-        // A long thin round part (a through hole's tool: a cylinder whose vertices all lie on
-        // its seam, so they span its length only) meshed that coarsely can come out with a
-        // negative volume when it is outward already: check finely before turning it inside out.
-        let fine = (tol * 0.02).max(1e-4);
-        if v < 0.0 && fine < tol {
-            (v, _) = orient(fine)?;
-        }
+        let (v, missing) = signed_volume(&solid, tol)?;
         if v < 0.0 {
             solid.not();
         }
         Ok(Body {
             solid: std::sync::Arc::new(solid),
             size: if span.is_finite() && span > 0.0 { span } else { 0.0 },
+            boundary_tol: None,
             volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
             coarse_missing: Some((tol, missing)),
             mesh: None,
@@ -677,6 +699,7 @@ impl Body {
         Ok(Body {
             solid: std::sync::Arc::new(solid),
             size: if span.is_finite() && span > 0.0 { span } else { 0.0 },
+            boundary_tol: None,
             volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
             coarse_missing: coarse,
             mesh: None,
@@ -706,7 +729,12 @@ impl Body {
             return Err(KernelError::Invalid("degenerate placement".into()));
         }
         let rigid = crate::ops::rigid_placement(&a);
-        Body::placed_as_is(mt::builder::transformed(&*self.solid, *m), det < 0.0, rigid.then_some(self.coarse_missing).flatten())
+        let out = Body::placed_as_is(mt::builder::transformed(&*self.solid, *m), det < 0.0, rigid.then_some(self.coarse_missing).flatten())?;
+        // A placement that does not change distances leaves the boundaries exactly as far off
+        // their surfaces as they were, so the file's own figure still describes them (see
+        // [`Body::boundary_tol`]); one that scales the part does not, and the copy declares
+        // nothing. The same rule as the mesh count above.
+        Ok(if rigid { out.with_boundary_tol(self.boundary_tol) } else { out })
     }
 
     pub(crate) fn inherit_regularization_protection(mut self, input: &Body) -> Self {
@@ -992,6 +1020,14 @@ impl Body {
         self.color
     }
 
+    /// The same body, with how far its boundaries may lie off their surfaces (mm) as the file it
+    /// was read from declares (see [`Body::boundary_tol`]). A value that is not finite and above
+    /// zero clears the declaration, which puts the body back on the kernel's own bound.
+    pub(crate) fn with_boundary_tol(mut self, tol: Option<f64>) -> Body {
+        self.boundary_tol = tol.filter(|t| t.is_finite() && *t > 0.0);
+        self
+    }
+
     /// The same body with a display colour.
     pub fn with_color(mut self, c: Option<[f32; 3]>) -> Body {
         self.color = c.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0)));
@@ -1069,10 +1105,10 @@ impl Body {
     }
 
     /// Characteristic size (bounding box diagonal) for tolerances. [`Body::new`] measured it
-    /// while it read the vertices anyway, so the answer is cached; a body built by hand carries
-    /// 0 and is walked here once, and mesh bodies always measure their triangles.
+    /// while it read the vertices anyway, and a mesh body when it was made, so the answer is
+    /// cached; a body built by hand carries 0 and is walked here.
     pub fn size(&self) -> f64 {
-        if self.mesh.is_none() && self.size > 0.0 {
+        if self.size > 0.0 {
             return self.size;
         }
         let mut b = solidcraft_geom::Aabb3::EMPTY;
@@ -1241,15 +1277,19 @@ impl Body {
         if let Some(m) = &self.mesh {
             return Ok(m.to_mesh());
         }
-        // A face trimmed by a helix (a modelled thread from another CAD system) turns more than
-        // once around its cylinder; truck meshes it with triangles across the solid (#1289).
-        // Such a body is meshed from its display plan, which cuts the face along a seam.
-        if guard("tessellate", || Ok(crate::tess::seam::turns_more_than_once(&self.solid))).unwrap_or(false) {
+        // Two kinds of face truck cannot mesh in its surface's parameters: one trimmed by a
+        // helix, which turns more than once around its cylinder and comes out with triangles
+        // across the solid (#1289), and one that runs across the join of a B-spline surface that
+        // closes on itself, which comes out folded over itself or with a hole in it.
+        // Such a body is meshed from its display plan, which cuts and unwraps those faces.
+        let planned =
+            guard("tessellate", || Ok(crate::tess::seam::turns_more_than_once(&self.solid) || crate::tess::seam::closes_on_itself(&self.solid)));
+        if planned.unwrap_or(false) {
             let turn = (angle.is_finite() && angle > 0.0)
                 .then(|| crate::tess::size::Turn { angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR });
-            match guard("tessellate", || crate::tess::plan(&self.solid, tol, turn)) {
+            match guard("tessellate", || crate::tess::plan(&self.solid, tol, turn, self.boundary_tol)) {
                 Ok((plan, _)) => return Ok(plan.evaluate()),
-                Err(e) => log::debug!("helical faces: no display plan ({e}); meshing the reference way"),
+                Err(e) => log::debug!("no display plan ({e}); meshing the reference way"),
             }
         }
         let deflection = if angle.is_finite() && angle > 0.0 {
@@ -1358,7 +1398,7 @@ impl Body {
         // The same angle and floor as the reference mesher's angular display mesh.
         let turn =
             angle.filter(|a| a.is_finite()).map(|a| crate::tess::size::Turn { angle: a.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR });
-        guard("tessellate", || crate::tess::plan(&self.solid, tol, turn).map(|(plan, _)| plan))
+        guard("tessellate", || crate::tess::plan(&self.solid, tol, turn, self.boundary_tol).map(|(plan, _)| plan))
     }
 
     /// Planar faces whose boundary crosses itself: two of its loops crossing each other, or a
@@ -1443,25 +1483,49 @@ impl Body {
         Ok(crossed)
     }
 
-    /// Faces with no triangles in a coarse tessellation (the mesher failed or gave up).
+    /// Faces with no triangles of their own, and so not shown: none in a coarse tessellation,
+    /// and none in the display plan either (the plan is what the viewport draws, and it meshes
+    /// faces the reference mesher gives up on). Only faces the coarse tessellation misses are
+    /// looked for in the plan, so a sound body costs no planning.
     pub fn unmeshed_faces(&self) -> usize {
         if self.is_mesh() {
             return 0;
         }
         let tol = orientation_tolerance(self.size());
-        if let Some((cached_tol, missing)) = self.coarse_missing
-            && cached_tol == tol
-        {
-            return missing;
+        // The count [`Body::new`] already took at this tolerance, else the same count made now.
+        let missing = match self.coarse_missing {
+            Some((cached_tol, missing)) if cached_tol == tol => missing,
+            _ => {
+                let Ok(m) = self.tessellate(tol) else { return self.face_count() };
+                let mut has = vec![false; self.face_count()];
+                for f in &m.tri_face {
+                    if let Some(h) = has.get_mut(*f as usize) {
+                        *h = true;
+                    }
+                }
+                has.iter().filter(|h| !**h).count()
+            }
+        };
+        // A body the coarse mesh covers whole is shown whole: no plan is made for it, whether the
+        // count came from the cache or from the mesh above.
+        if missing == 0 {
+            return 0;
         }
-        let Ok(m) = self.tessellate(tol) else { return self.face_count() };
+        self.unmeshed_in_plan(tol).unwrap_or(missing)
+    }
+
+    /// Faces the display plan leaves without triangles; `None` when the body has no plan.
+    fn unmeshed_in_plan(&self, tol: f64) -> Option<usize> {
+        let plan = self.display_plan(tol).ok()?;
         let mut has = vec![false; self.face_count()];
-        for f in &m.tri_face {
-            if let Some(h) = has.get_mut(*f as usize) {
+        for f in &plan.faces {
+            if !f.triangles.is_empty()
+                && let Some(h) = has.get_mut(f.face as usize)
+            {
                 *h = true;
             }
         }
-        has.iter().filter(|h| !**h).count()
+        Some(has.iter().filter(|h| !**h).count())
     }
 
     /// Display mesh: like [`Body::tessellate`], with seam edges flagged. Meshed from the

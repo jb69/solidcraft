@@ -801,3 +801,94 @@ fn hole_matrix() {
         report.join(" | ")
     );
 }
+
+/// #5041: a countersink cuts nothing outside its diameter above the face, so a wall standing
+/// just past its rim keeps its face.
+#[test]
+fn a_countersink_next_to_a_wall_leaves_the_wall_whole() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 40, "height": 8, "corner": [0, 0, 0], "name": "Plate"})).unwrap();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 10, "height": 30, "corner": [0, 30, 8], "operation": "join", "name": "Wall"})).unwrap();
+    let (before, _) = measure(&mut s).unwrap();
+    // A Ø13.7 countersink whose rim ends 0.15 mm short of the wall.
+    let p = json!({"position": [20, 23, 8], "direction": [0, 0, -1], "diameter": 6.4, "depth": 8, "type": "countersink", "cs_diameter": 13.7, "cs_angle": 90});
+    run(&mut s, "solid.hole", p).unwrap();
+    assert!(solid_at(&s, Vec3::new(20.0, 30.05, 8.3)), "the wall above the plate is notched");
+    assert!(solid_at(&s, Vec3::new(20.0, 30.05, 8.02)));
+    assert!(!solid_at(&s, Vec3::new(20.0, 29.0, 7.9)), "the countersink reaches its rim");
+    // Exactly the countersink and the clearance hole are taken: the frustum from Ø13.7 to the
+    // hole, and the rest of the hole down through the plate.
+    let r = 3.2;
+    let (cs, h) = csink(13.7 / 2.0, r);
+    let (after, _) = measure(&mut s).unwrap();
+    assert!(close(before - after, cs + cyl(r, 8.0 - h), cs), "{} taken, want {}", before - after, cs + cyl(r, 8.0 - h));
+}
+
+#[test]
+fn recessed_drill_point_geometry_roundtrip_preview_and_undo() {
+    for kind in ["counterbore", "countersink"] {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+        let mut p = json!({"position":[20,15,20],"direction":[0,0,-1],"diameter":6,"depth":8,"type":kind,"cb_diameter":12,"cb_depth":3,"cs_diameter":12,"cs_angle":"90 deg"});
+        let hole = run(&mut s, "solid.hole", p.clone()).unwrap()["feature"].as_u64().unwrap();
+        let probe = Vec3::new(20.0, 15.0, 11.5);
+        assert!(solid_at(&s, probe), "legacy absent tip is flat");
+        let mut legacy: Value = serde_json::from_str(&s.doc.to_json()).unwrap();
+        legacy["format"] = json!("solidcraft/30");
+        legacy.as_object_mut().unwrap().remove("format_pending");
+        let old = Session::new(solidcraft_doc::Document::from_json(&legacy.to_string()).unwrap());
+        assert!(solid_at(&old, probe), "format-30 recessed holes keep their flat bottom");
+        p["tip_angle"] = json!("118 deg");
+        run(&mut s, "timeline.redefine", json!({"feature":hole,"command":"solid.hole","params":p})).unwrap();
+        assert!(!solid_at(&s, probe), "{kind}: drill point must remove the axis below the shoulder");
+        assert!(solid_at(&s, Vec3::new(23.1, 15.0, 11.5)), "point must not widen the cylindrical bore");
+        let saved = s.doc.to_json();
+        let loaded = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+        assert!(!solid_at(&loaded, probe), "chosen bottom must survive reopen");
+        p.as_object_mut().unwrap().remove("tip_angle");
+        let redefine = json!({"feature":hole,"command":"solid.hole","params":p});
+        let preview = s.preview(&[("timeline.redefine".into(), redefine.clone())]).unwrap();
+        assert!(preview.after.bodies.iter().any(|b| b.body.contains(probe)));
+        assert_eq!(s.doc.to_json(), saved, "preview cannot accept the bottom change");
+        run(&mut s, "timeline.redefine", redefine).unwrap();
+        assert!(solid_at(&s, probe));
+        run(&mut s, "edit.undo", json!({})).unwrap();
+        assert!(!solid_at(&s, probe));
+        run(&mut s, "edit.redo", json!({})).unwrap();
+        assert!(solid_at(&s, probe));
+    }
+}
+
+#[test]
+fn recessed_drill_point_through_and_exact_shoulder_keep_the_existing_exit() {
+    for kind in ["counterbore", "countersink"] {
+        for exact in [false, true] {
+            let mut s = Session::default();
+            run(&mut s, "solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+            let mut p = json!({"position":[20,15,20],"direction":[0,0,-1],"diameter":6,"type":kind,"cb_diameter":12,"cb_depth":3,"cs_diameter":12,"cs_angle":"90 deg"});
+            if exact {
+                p["depth"] = json!(20);
+            }
+            let hole = run(&mut s, "solid.hole", p.clone()).unwrap()["feature"].as_u64().unwrap();
+            let flat = measure(&mut s).unwrap().0;
+            p["tip_angle"] = json!("118 deg");
+            run(&mut s, "timeline.redefine", json!({"feature":hole,"command":"solid.hole","params":p})).unwrap();
+            assert!((measure(&mut s).unwrap().0 - flat).abs() < 1e-6, "point beyond the exit must not change the part");
+            assert!(!solid_at(&s, Vec3::new(20.0, 15.0, 0.01)));
+        }
+    }
+}
+
+/// A hole on the side of a cone, given no direction, drills along the cone's normal there, not
+/// the nearest mesh facet's, which leaned it up to 2.6° sideways (#10698).
+#[test]
+fn a_hole_on_a_cones_side_drills_along_its_normal() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cone", json!({"radius": 15, "height": 20, "body_name": "Cone"})).unwrap();
+    // The side is r = 15 (1 - z / 20): at (7.5, 0, 10) the outward normal is (0.8, 0, 0.6).
+    run(&mut s, "solid.hole", json!({"position": [7.5, 0, 10], "diameter": 4, "depth": 4, "name": "H"})).unwrap();
+    let f = s.doc.find_feature("H").unwrap();
+    let solidcraft_doc::FeatureKind::Hole { direction, .. } = &f.kind else { panic!("not a hole") };
+    let d = direction.0;
+    assert!((d.x + 0.8).abs() < 1e-6 && d.y.abs() < 1e-6 && (d.z + 0.6).abs() < 1e-6, "{d:?}");
+}

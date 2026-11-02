@@ -6,6 +6,7 @@ use solidcraft_geom::Vec3;
 
 use super::solve_counts;
 use crate::Session;
+use crate::cmd::sketch_project::refresh_count;
 
 #[test]
 fn determined_pattern_geometry_does_not_attempt_conflicting_held_solves() {
@@ -123,6 +124,23 @@ fn a_live_frame_solves_once_and_leaves_the_features_after_the_sketch_stale() {
     let result = s.model.result(extrude).expect("the extrude's result");
     assert!(result.stale);
     assert!(s.model.state().bodies.first().expect("a body").body.same(&body), "the body is not rebuilt");
+}
+
+/// A frame copies the design once, to edit it: its undo step holds the design as it was, and a
+/// second copy for storing the edited one would double the work on a large design.
+#[test]
+fn a_live_frame_copies_the_design_once_and_its_undo_step_keeps_the_design_before() {
+    let (mut s, _) = extruded();
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    crate::tests::doc_copies::take();
+    frames(&mut s, 1, true);
+    assert_eq!(crate::tests::doc_copies::take(), 0, "the edited design is stored, not copied again");
+    assert!(corner(&s).dist(solidcraft_geom::Vec2::new(4.0, 5.0)) < 1e-9);
+    assert_eq!(s.undo.len(), undo + 1);
+    assert!(s.undo.last().is_some_and(|u| std::sync::Arc::ptr_eq(&u.doc, &before)), "undo goes back to the design before");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(std::sync::Arc::ptr_eq(&s.doc, &before));
 }
 
 #[test]
@@ -365,4 +383,57 @@ fn a_drag_with_the_rest_of_a_selection_moves_it_as_one() {
     for with in [json!("l2"), json!([7]), json!(["nope"])] {
         assert!(s.execute("sketch.drag", &json!({"entity": "l1", "with": with, "from": [10, 30], "to": [20, 20]})).is_err(), "{with}");
     }
+}
+
+/// A 5 x 5 square drawn on the top face of a 30 x 20 x 10 box, the face's edges projected into
+/// its sketch; returns the session and a corner of the square (its id and where it is).
+fn on_a_face() -> (Session, String, solidcraft_geom::Vec2) {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 30, "width": 20, "height": 10}));
+    run(&mut s, "sketch.create", json!({"plane": {"face": [15, 10, 10]}}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [5, 5], "p1": [10, 10]}));
+    let sk = sketch_of(&s);
+    assert!(!sk.links.is_empty(), "the face's edges are projected");
+    let corner = sk.curves.iter().find_map(|c| match c.kind {
+        solidcraft_sketch::CurveKind::Line { a, .. } if c.link.is_none() => sk.points.get(a).map(|p| (p.id.clone(), p.pos)),
+        _ => None,
+    });
+    let (id, at) = corner.expect("a drawn line");
+    (s, id, at)
+}
+
+/// One live frame moving `point` from `at` by `dx`; returns where it went.
+fn live_frame(s: &mut Session, point: &str, at: solidcraft_geom::Vec2, dx: f64) -> solidcraft_geom::Vec2 {
+    let to = [at.x + dx, at.y];
+    run(s, "sketch.drag", json!({"entity": point, "from": [at.x, at.y], "to": to, "live": true}));
+    solidcraft_geom::Vec2::new(to[0], to[1])
+}
+
+#[test]
+fn a_live_gesture_projects_a_face_sketchs_links_once() {
+    // Every frame projected the face's edges again and solved the sketch once more for them,
+    // which on a face with many edges made each frame take a large fraction of a second (#3222).
+    let (mut s, point, mut at) = on_a_face();
+    refresh_count::take();
+    for _ in 0..5 {
+        at = live_frame(&mut s, &point, at, 0.5);
+    }
+    assert_eq!(refresh_count::take(), 1, "the gesture's first frame projects the links, the rest reuse them");
+    assert_eq!(pt(&s, &point), at, "the corner follows the drag");
+    assert!(sketch_of(&s).links.iter().all(|l| !l.lost), "the links are kept");
+    run(&mut s, "sketch.drag_end", json!({}));
+    assert_eq!(pt(&s, &point), at);
+
+    // Anything run between two frames (another command, an undo) may have changed the model the
+    // links come from: the next frame projects them again.
+    refresh_count::take();
+    at = live_frame(&mut s, &point, at, 0.5);
+    run(&mut s, "sketch.solve", json!({}));
+    live_frame(&mut s, &point, at, 0.5);
+    assert_eq!(refresh_count::take(), 2);
+    run(&mut s, "edit.undo", json!({}));
+    let at = pt(&s, &point);
+    refresh_count::take();
+    live_frame(&mut s, &point, at, 0.5);
+    assert_eq!(refresh_count::take(), 1);
 }

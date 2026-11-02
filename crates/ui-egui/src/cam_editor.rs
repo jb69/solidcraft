@@ -114,8 +114,13 @@ pub struct OriginForm {
     z: usize,
     point: usize,
     pub picking: bool,
+    /// The stock is drawn while a setup is edited, unless this is set.
+    pub hide_stock: bool,
     before: Option<Vec<solidcraft_engine::Sel>>,
     hover: Option<(solidcraft_engine::Sel, Option<crate::dialogs_assembly::SnapPt>)>,
+    /// The snap under the pointer (of the model or the stock), and the one a click chose.
+    current: Option<solidcraft_engine::geom::Vec3>,
+    chosen: Option<solidcraft_engine::geom::Vec3>,
 }
 
 /// The text typed in each field (by the parameter's path), so a value half typed survives the
@@ -459,20 +464,29 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     // Picking the origin on the model: the click that changes the selection places it, at the
     // snap of what it picked (a coordinate).
+    // A click on a point of the stock (or away from the model) chooses the snap shown.
     if ed.origin.picking {
         let sel = &app.session.selection;
-        match &ed.origin.before {
-            None => ed.origin.before = Some(sel.clone()),
+        let picked = match &ed.origin.before {
+            _ if ed.origin.chosen.is_some() => ed.origin.chosen.take(),
+            None => {
+                ed.origin.before = Some(sel.clone());
+                None
+            }
             Some(before) if before != sel => {
-                if let Some(snap) = sel.last().and_then(|x| crate::dialogs_assembly::snap_of(&app.session, x)) {
-                    ed.place = Some(json!({"origin": [snap.at.x, snap.at.y, snap.at.z]}));
-                    ed.origin.picking = false;
-                    apply_now = true;
-                } else {
+                let at = ed.origin.current.or_else(|| sel.last().and_then(|x| crate::dialogs_assembly::snap_of(&app.session, x)).map(|s| s.at));
+                if at.is_none() {
                     ed.origin.before = Some(sel.clone());
                 }
+                at
             }
-            Some(_) => {}
+            Some(_) => None,
+        };
+        if let Some(at) = picked {
+            ed.place = Some(json!({"origin": [at.x, at.y, at.z]}));
+            ed.origin.picking = false;
+            ed.origin.current = None;
+            apply_now = true;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ed.origin.picking = false;
@@ -1225,43 +1239,167 @@ fn origin_rows(ui: &mut egui::Ui, of: &mut OriginForm, points: &[String]) -> Opt
             out = Some(json!({"origin": {"point": name}}));
         }
     }
-    // Picked on the model: it snaps to vertices, edge midpoints, circle and face centres.
-    let label = if of.picking { "Stop Picking" } else { "Pick on Model" };
+    // Picked on the model or the stock: it snaps to vertices, edge midpoints, circle and face
+    // centres, and the stock's corners, edge midpoints, face centres and centre.
+    let mut show = !of.hide_stock;
+    crate::ui_kit::checkbox(ui, "Show Stock", &mut show).on_hover_text("Draws the setup's stock, so its points can be picked");
+    of.hide_stock = !show;
+    let label = if of.picking { "Stop Picking" } else { "Pick on Model or Stock" };
     if crate::ui_kit::button(ui, label, crate::ui_kit::Button::Normal).clicked() {
         of.picking = !of.picking;
         of.before = None;
         of.hover = None;
+        of.current = None;
+        of.chosen = None;
     }
     if of.picking {
+        let stock = if of.hide_stock { "" } else { ", and to the stock's corners, edge midpoints, face centres and centre" };
         ui.label(
-            RichText::new("Move over the model: the origin snaps to vertices, edge midpoints and circle and face centres. Click to place it; Esc stops.")
-                .color(t.warning),
+            RichText::new(format!(
+                "Move over the model: the origin snaps to vertices, edge midpoints and circle and face centres{stock}. Click to place it; Esc stops."
+            ))
+            .color(t.warning),
         );
     }
     out
 }
 
-/// While a setup's origin is being picked: the snap under the pointer, drawn over the model
-/// (called by the viewport after the model is drawn).
+/// While a setup is edited: its stock, drawn over the model; while its origin is being picked,
+/// the snap under the pointer (of the model or the stock, the nearer on screen), and a click on
+/// it (called by the viewport after the model is drawn).
 pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, proj: &crate::viewport::Proj) {
+    use crate::dialogs_assembly::{SnapPt, glyph, snap_name};
     let Some(mut ed) = app.cam_editor.take() else { return };
+    let t = Tokens::get();
+    let stock = match ed.target {
+        Target::Setup(id) if !ed.origin.hide_stock => solidcraft_engine::cmd::cam::setup_stock(&app.session, id),
+        _ => None,
+    };
+    if let Some((shape, wcs)) = &stock {
+        draw_stock(painter, proj, shape, wcs, t.accent);
+    }
     if ed.origin.picking {
+        let ctx = painter.ctx().clone();
+        let pointer = ctx
+            .input(|i| i.pointer.hover_pos())
+            .filter(|p| proj.rect.contains(*p) && !crate::shell::covered(app, *p) && ctx.layer_id_at(*p).is_none_or(|l| l == painter.layer_id()));
         let under = app.viewport.hover.as_ref().and_then(crate::viewport::hit_sel);
-        match under {
+        match &under {
             Some(sel) => {
-                let fresh = !matches!(&ed.origin.hover, Some((s, _)) if *s == sel);
-                if fresh {
-                    ed.origin.hover = Some((sel.clone(), crate::dialogs_assembly::snap_of(&app.session, &sel)));
-                }
-                if let Some((_, Some(s))) = ed.origin.hover.as_ref() {
-                    let t = Tokens::get();
-                    crate::dialogs_assembly::glyph(painter, proj, s, t.accent, app.cam.half_height(), Some(crate::dialogs_assembly::snap_name(s.kind)));
+                if !matches!(&ed.origin.hover, Some((s, _)) if s == sel) {
+                    ed.origin.hover = Some((sel.clone(), crate::dialogs_assembly::snap_of(&app.session, sel)));
                 }
             }
             None => ed.origin.hover = None,
         }
+        let model = ed.origin.hover.as_ref().and_then(|h| h.1.clone());
+        let on_stock = pointer.zip(stock.as_ref()).and_then(|(p, (shape, wcs))| nearest_stock_point(proj, shape, wcs, p, 14.0));
+        let dist = |a: solidcraft_engine::geom::Vec3| pointer.zip(proj.to_screen(a)).map_or(f32::INFINITY, |(p, q)| p.distance(q));
+        let pick: Option<(SnapPt, &str)> = match (model, on_stock) {
+            (Some(m), Some(s)) if dist(s.0.at) < dist(m.at) => Some(s),
+            (Some(m), _) => {
+                let name = snap_name(m.kind);
+                Some((m, name))
+            }
+            (None, s) => s,
+        };
+        ed.origin.current = pick.as_ref().map(|p| p.0.at);
+        if let Some((s, name)) = &pick {
+            glyph(painter, proj, s, t.accent, app.cam.half_height(), Some(name));
+        }
+        if pointer.is_some() && ctx.input(|i| i.pointer.primary_clicked()) && ed.origin.current.is_some() {
+            ed.origin.chosen = ed.origin.current;
+        }
     }
     app.cam_editor = Some(ed);
+}
+
+/// The stock's outline: a box's twelve edges, or a cylinder's end circles and four lines.
+fn draw_stock(painter: &egui::Painter, proj: &crate::viewport::Proj, shape: &cam::setup::StockShape, wcs: &cam::frame::Frame, col: egui::Color32) {
+    use solidcraft_engine::geom::Vec3;
+    let stroke = egui::Stroke::new(1.5, col.gamma_multiply(0.85));
+    let line = |a: Vec3, b: Vec3| {
+        if let (Some(p), Some(q)) = (proj.to_screen(wcs.to_world(a)), proj.to_screen(wcs.to_world(b))) {
+            painter.line_segment([p, q], stroke);
+        }
+    };
+    match *shape {
+        cam::setup::StockShape::Box { min, max } => {
+            let c = |i: usize| Vec3::new(if i & 1 == 0 { min.x } else { max.x }, if i & 2 == 0 { min.y } else { max.y }, if i & 4 == 0 { min.z } else { max.z });
+            for (a, b) in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)] {
+                line(c(a), c(b));
+            }
+        }
+        cam::setup::StockShape::Cylinder { axis, radius, start, end } => {
+            let d = axis.dir();
+            let (u, v) = match axis {
+                cam::setup::Axis::X => (Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+                cam::setup::Axis::Y => (Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0)),
+                cam::setup::Axis::Z => (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)),
+            };
+            let at = |along: f64, a: f64| d * along + (u * a.cos() + v * a.sin()) * radius;
+            let n = 48;
+            for k in 0..n {
+                let (a, b) = (k as f64 / n as f64 * std::f64::consts::TAU, (k + 1) as f64 / n as f64 * std::f64::consts::TAU);
+                line(at(start, a), at(start, b));
+                line(at(end, a), at(end, b));
+            }
+            for k in 0..4 {
+                let a = k as f64 * std::f64::consts::FRAC_PI_2;
+                line(at(start, a), at(end, a));
+            }
+        }
+    }
+}
+
+/// The stock's point nearest the pointer on screen, within `reach` pixels: its corners, edge
+/// midpoints, face centres and centre (of its box; a cylinder's end centres and centre).
+fn nearest_stock_point(
+    proj: &crate::viewport::Proj,
+    shape: &cam::setup::StockShape,
+    wcs: &cam::frame::Frame,
+    pointer: egui::Pos2,
+    reach: f32,
+) -> Option<(crate::dialogs_assembly::SnapPt, &'static str)> {
+    use crate::dialogs_assembly::{SnapKind, SnapPt};
+    use solidcraft_engine::geom::Vec3;
+    let mut pts: Vec<(Vec3, SnapKind, &'static str)> = Vec::new();
+    match *shape {
+        cam::setup::StockShape::Box { min, max } => {
+            let f = |lo: f64, hi: f64, i: usize| lo + (hi - lo) * i as f64 * 0.5;
+            for i in 0..3 {
+                for j in 0..3 {
+                    for k in 0..3 {
+                        // How many of the three are at a middle: 0 a corner, 1 an edge midpoint,
+                        // 2 a face centre, 3 the centre.
+                        let mid = [i, j, k].iter().filter(|x| **x == 1).count();
+                        let (kind, name) = match mid {
+                            0 => (SnapKind::Vertex, "Stock corner"),
+                            1 => (SnapKind::EdgeMid, "Stock edge midpoint"),
+                            2 => (SnapKind::FaceCenter, "Stock face center"),
+                            _ => (SnapKind::FaceCenter, "Stock center"),
+                        };
+                        pts.push((Vec3::new(f(min.x, max.x, i), f(min.y, max.y, j), f(min.z, max.z, k)), kind, name));
+                    }
+                }
+            }
+        }
+        cam::setup::StockShape::Cylinder { axis, start, end, .. } => {
+            let d = axis.dir();
+            pts.push((d * start, SnapKind::CircleCenter, "Stock end center"));
+            pts.push((d * end, SnapKind::CircleCenter, "Stock end center"));
+            pts.push((d * ((start + end) * 0.5), SnapKind::FaceCenter, "Stock center"));
+        }
+    }
+    let z = wcs.dir_to_world(Vec3::new(0.0, 0.0, 1.0));
+    pts.into_iter()
+        .filter_map(|(p, kind, name)| {
+            let w = wcs.to_world(p);
+            let d = proj.to_screen(w)?.distance(pointer);
+            (d.is_finite() && d <= reach).then_some((d, SnapPt { at: w, z, kind, param: Value::Null }, name))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, s, name)| (s, name))
 }
 
 /// The parameters a ramp kind or geometry source starts with.

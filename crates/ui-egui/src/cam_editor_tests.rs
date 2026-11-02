@@ -369,7 +369,7 @@ fn a_setups_origin_is_placed_on_the_stock_a_design_point_or_picked_on_the_model(
     h.settle();
     crate::browser::cam::edit_setup(&mut h.app, id);
     h.frames(20);
-    for w in ["Place the origin", "Place Origin", "Design point", "Use Point", "Pick on Model"] {
+    for w in ["Place the origin", "Place Origin", "Design point", "Use Point", "Show Stock", "Pick on Model or Stock"] {
         assert!(h.widget(w).is_some(), "{w} is drawn");
     }
     // The stock's top front-left corner (the form's first choices).
@@ -382,7 +382,7 @@ fn a_setups_origin_is_placed_on_the_stock_a_design_point_or_picked_on_the_model(
     h.frames(2);
     assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(40.0, 30.0, 10.0)).len() < 1e-6, "{:?}", origin(&h));
     // Picked on the model: the click that picks the top face puts the origin at its centre.
-    h.step(&json!({"widget": "Pick on Model"})).unwrap();
+    h.step(&json!({"widget": "Pick on Model or Stock"})).unwrap();
     h.frames(2);
     assert!(h.app.cam_editor.as_ref().unwrap().origin.picking);
     let top = {
@@ -394,4 +394,31 @@ fn a_setups_origin_is_placed_on_the_stock_a_design_point_or_picked_on_the_model(
     h.frames(3);
     assert!(!h.app.cam_editor.as_ref().unwrap().origin.picking, "a pick ends picking");
     assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(20.0, 15.0, 10.0)).len() < 1e-3, "the face's centre: {:?}", origin(&h));
+    // The stock is drawn while the setup is edited, and its points snap: a click at its top
+    // back-right corner (away from the model) puts the origin there.
+    h.step(&json!({"widget": "Pick on Model or Stock"})).unwrap();
+    h.frames(2);
+    let (shape, wcs) = solidcraft_engine::cmd::cam::setup_stock(&h.app.session, id).unwrap();
+    let b = shape.bounds();
+    let corner = wcs.to_world(b.max);
+    let rect = h.app.viewport.rect.unwrap();
+    let at = crate::viewport::projection(&h.app, rect).to_screen(corner).unwrap();
+    h.step(&json!({"move": [at.x, at.y]})).unwrap();
+    h.frames(3);
+    let current = h.app.cam_editor.as_ref().unwrap().origin.current;
+    assert!(current.is_some_and(|c| (c - corner).len() < 1e-6), "the corner snaps: {current:?} {corner:?}");
+    h.step(&json!({"click": [at.x, at.y]})).unwrap();
+    h.frames(3);
+    assert!((origin(&h) - corner).len() < 1e-6, "the stock's corner: {:?} {corner:?}", origin(&h));
+    // Hidden, the stock does not snap.
+    h.app.cam_editor.as_mut().unwrap().origin.hide_stock = true;
+    h.step(&json!({"widget": "Pick on Model or Stock"})).unwrap();
+    h.frames(2);
+    let (shape, wcs) = solidcraft_engine::cmd::cam::setup_stock(&h.app.session, id).unwrap();
+    let far = wcs.to_world(shape.bounds().max);
+    let at = crate::viewport::projection(&h.app, rect).to_screen(far).unwrap();
+    h.step(&json!({"move": [at.x, at.y]})).unwrap();
+    h.frames(3);
+    let current = h.app.cam_editor.as_ref().unwrap().origin.current;
+    assert!(current.is_none_or(|c| (c - far).len() > 1e-3), "{current:?}");
 }

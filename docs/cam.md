@@ -72,9 +72,11 @@ any of three ways, all through `cam.setup.set` (or `cam.setup.create`):
 
 A fixed stock (box or cylinder, given from the origin) stays where it is when the origin
 moves, unless the same call gives the stock. In the setup editor, **Place the origin** offers the
-stock and model points and the design's construction points, and **Pick on Model** places it
-interactively: as the pointer moves over the model it snaps to vertices, edge midpoints, circle
-centres and face centres, labelled under the pointer, and the click puts the origin there.
+stock and model points and the design's construction points, and **Pick on Model or Stock**
+places it interactively. While a setup is edited its stock is drawn as an outline (**Show Stock**
+turns it off). As the pointer moves it snaps to the model's vertices, edge midpoints, circle
+centres and face centres, and to the stock's corners, edge midpoints, face centres and centre
+(the nearer one on screen wins), labelled under the pointer; the click puts the origin there.
 
 ## Machining boundaries
 
@@ -218,8 +220,11 @@ definition, its tool, the setup (bodies, fixtures, WCS, stock, machine), the mod
 the signature of the operation before it and the generation id of that operation's toolpath
 (a fresh id each time a toolpath is generated). Editing an operation (anything but its name)
 or suppressing it clears its toolpath: nothing of it is drawn and it shows as not generated
-until it is generated again. Moving an operation, changing its tool or the setup, or changing
-the model makes it and every operation after it stale; regenerating an operation on its own (`cam.generate {operation}`, the row's
+until it is generated again. Changing a parent clears its children the same way: changing a
+setup or its machine (anything but its name) clears the toolpaths of all its operations, and
+of the setups that carry its stock over; changing a tool (anything but its name) clears those
+of the operations that use it; moving an operation into another setup clears its own. Moving
+an operation within its setup, or changing the model, makes it and every operation after it stale; regenerating an operation on its own (`cam.generate {operation}`, the row's
 Regenerate) makes every operation below it stale, since their rest machining read its old
 toolpath; and the ones before it stay as they are. Regenerate Chain (`cam.generate {operation,
 chain: true}`) brings the whole chain current through it: the stale operations above it (its

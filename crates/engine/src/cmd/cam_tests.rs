@@ -707,6 +707,25 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     // A tool change reaches only the operations from the first that uses it.
     run(&mut s, "cam.tool.set", json!({"tool": small, "feeds": {"cutting": 500}}));
     assert_eq!(stale(&mut s), vec![false, false, true]);
+    // Changing a parent invalidates its children: the operations that use a changed tool lose
+    // their toolpaths, and so does every operation of a changed setup or machine. New names keep
+    // them.
+    let generated = |s: &mut Session| -> Vec<bool> {
+        run(s, "cam.operation.list", json!({}))["operations"].as_array().unwrap().iter().map(|o| o["generated"].as_bool() != Some(false)).collect()
+    };
+    assert_eq!(generated(&mut s), vec![true, true, false]);
+    run(&mut s, "cam.generate", json!({}));
+    run(&mut s, "cam.tool.set", json!({"tool": small, "name": "Small flat"}));
+    run(&mut s, "cam.setup.set", json!({"setup": setup, "name": "Top side"}));
+    assert_eq!(generated(&mut s), vec![true, true, true]);
+    assert_eq!(stale(&mut s), vec![false, false, false]);
+    run(&mut s, "cam.setup.set", json!({"setup": setup, "origin": [0, 0, 1]}));
+    assert_eq!(generated(&mut s), vec![false, false, false]);
+    assert!(super::cam::shown_toolpaths(&s).is_empty(), "nothing of the setup is drawn");
+    run(&mut s, "cam.generate", json!({}));
+    run(&mut s, "cam.machine.set", json!({"setup": setup, "rapid_feed": 4000}));
+    assert_eq!(generated(&mut s), vec![false, false, false]);
+    run(&mut s, "cam.generate", json!({}));
     // Suppressing the first operation changes everything after it.
     run(&mut s, "cam.generate", json!({}));
     run(&mut s, "cam.operation.set", json!({"operation": face, "enabled": false}));

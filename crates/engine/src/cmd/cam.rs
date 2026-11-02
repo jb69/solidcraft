@@ -457,6 +457,15 @@ fn tool_set(s: &mut Session, p: &Value) -> Result<Value> {
     tool.validate().map_err(|e| engine_err(cmd, e))?;
     let uses = s.doc.manufacture.tool_uses(id);
     let out = tool_json(&tool, uses);
+    // The operations that use a changed tool lose their toolpaths (they show as not generated);
+    // a new name keeps them.
+    if (Tool { name: String::new(), ..tool.clone() }) != (Tool { name: String::new(), ..current.clone() }) {
+        let users: Vec<u64> =
+            s.doc.manufacture.setups.iter().flat_map(|st| &st.operations).filter(|o| o.tool == id).map(|o| o.id).collect();
+        for o in users {
+            s.cam.operations.remove(&o);
+        }
+    }
     if let Some(t) = s.doc_mut().manufacture.tools.get_mut(id) {
         *t = tool;
     }
@@ -646,11 +655,11 @@ fn setup_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     place_origin(s, &mut st, p, cmd)?;
     let out = setup_json(s, &st);
+    let before = setup_signatures(s);
     if let Some(slot) = s.doc_mut().manufacture.setup_mut(id) {
         *slot = st;
     }
-    // The toolpaths stay until the next generate: the setup's signature changed, so they (and
-    // those of setups that carry its stock over) show as stale.
+    clear_changed_setups(s, &before);
     Ok(out)
 }
 
@@ -817,9 +826,11 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     m.validate().map_err(|e| engine_err(cmd, e))?;
     let out = serde_json::to_value(&m).unwrap_or(Value::Null);
+    let before = setup_signatures(s);
     if let Some(slot) = s.doc_mut().manufacture.setup_mut(id) {
         slot.machine = m;
     }
+    clear_changed_setups(s, &before);
     Ok(out)
 }
 
@@ -1169,7 +1180,12 @@ fn operation_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// geometry revision and the signature of the operation before it. Changing an operation,
 /// its tool, the setup or the model, or reordering, changes its signature and every one after.
 pub fn signatures(s: &Session, st: &Setup) -> Vec<(u64, u64)> {
-    let mut prev = setup_signature(s, st);
+    signatures_from(s, st, setup_signature(s, st))
+}
+
+/// [`signatures`], from the setup's own signature (`start`) already worked out.
+fn signatures_from(s: &Session, st: &Setup, start: u64) -> Vec<(u64, u64)> {
+    let mut prev = start;
     let mut prev_generation = 0;
     let mut out = Vec::with_capacity(st.operations.len());
     for op in &st.operations {
@@ -1178,6 +1194,41 @@ pub fn signatures(s: &Session, st: &Setup) -> Vec<(u64, u64)> {
         out.push((op.id, prev));
     }
     out
+}
+
+/// Each setup's part of the chain, before a change to setups or machines.
+fn setup_signatures(s: &Session) -> Vec<(u64, u64)> {
+    let mut ends = BTreeMap::new();
+    let mut out = Vec::with_capacity(s.doc.manufacture.setups.len());
+    for st in &s.doc.manufacture.setups {
+        let sig = setup_signature_with(s, st, &ends);
+        ends.insert(st.id, chain_end_from(s, st, sig));
+        out.push((st.id, sig));
+    }
+    out
+}
+
+/// A change to a setup (its bodies, WCS, stock, machine…) invalidates its operations: their
+/// toolpaths go and they show as not generated. So do those of setups that carry its stock
+/// over (in order, so a setup sees the ones before it already cleared). A rename keeps them.
+fn clear_changed_setups(s: &mut Session, before: &[(u64, u64)]) {
+    // Each setup's chain end is worked out once (setups carrying stock over each other in a long
+    // line would otherwise repeat the work for every one before them).
+    let ids: Vec<u64> = s.doc.manufacture.setups.iter().map(|st| st.id).collect();
+    let mut ends = BTreeMap::new();
+    for id in ids {
+        let Some(st) = s.doc.manufacture.setup(id) else { continue };
+        let now = setup_signature_with(s, st, &ends);
+        if before.iter().find(|b| b.0 == id).is_none_or(|b| b.1 != now) {
+            let ops: Vec<u64> = st.operations.iter().map(|o| o.id).collect();
+            for o in ops {
+                s.cam.operations.remove(&o);
+            }
+        }
+        if let Some(st) = s.doc.manufacture.setup(id) {
+            ends.insert(id, chain_end_from(s, st, now));
+        }
+    }
 }
 
 /// The setup's part of the chain: the model's geometry, the bodies, fixtures, WCS, stock and
@@ -1211,7 +1262,12 @@ fn setup_signature_with(s: &Session, st: &Setup, ends: &BTreeMap<u64, (u64, u64)
 
 /// The end of a setup's chain: the last operation's signature and its toolpath's generation.
 fn chain_end(s: &Session, st: &Setup) -> (u64, u64) {
-    let sig = signatures(s, st).last().map_or_else(|| setup_signature(s, st), |x| x.1);
+    chain_end_from(s, st, setup_signature(s, st))
+}
+
+/// [`chain_end`], from the setup's own signature (`start`) already worked out.
+fn chain_end_from(s: &Session, st: &Setup, start: u64) -> (u64, u64) {
+    let sig = signatures_from(s, st, start).last().map_or(start, |x| x.1);
     let generation = st.operations.last().and_then(|o| s.cam.operations.get(&o.id)).map_or(0, |g| g.generation);
     (sig, generation)
 }
@@ -1235,7 +1291,13 @@ fn previous_setup<'a>(s: &'a Session, st: &Setup) -> Result<Option<&'a Setup>> {
 /// The stock of setup `id`, as generation sees it (for tests).
 #[cfg(test)]
 pub(crate) fn stock_shape_for_tests(s: &Session, id: u64) -> cam::setup::StockShape {
-    s.doc.manufacture.setup(id).and_then(|st| stock_shape(s, st).ok()).unwrap_or(cam::setup::StockShape::Box { min: Vec3::ZERO, max: Vec3::ZERO })
+    setup_stock(s, id).map_or(cam::setup::StockShape::Box { min: Vec3::ZERO, max: Vec3::ZERO }, |x| x.0)
+}
+
+/// The stock of setup `id` in its WCS, and the WCS (to show it, or snap to it).
+pub fn setup_stock(s: &Session, id: u64) -> Option<(cam::setup::StockShape, Frame)> {
+    let st = s.doc.manufacture.setup(id)?;
+    Some((stock_shape(s, st).ok()?, st.wcs))
 }
 
 fn stock_shape(s: &Session, st: &Setup) -> Result<cam::setup::StockShape> {
@@ -1357,7 +1419,8 @@ fn chain_signature(s: &Session, prev: u64, op: &Operation, prev_generation: u64)
     // Its name is not what it cuts: a rename keeps it (and the ones after it) current.
     let unnamed = Operation { name: String::new(), ..op.clone() };
     serde_json::to_string(&unnamed).unwrap_or_default().hash(&mut h);
-    serde_json::to_string(&s.doc.manufacture.tools.get(op.tool)).unwrap_or_default().hash(&mut h);
+    let tool = s.doc.manufacture.tools.get(op.tool).map(|t| Tool { name: String::new(), ..t.clone() });
+    serde_json::to_string(&tool).unwrap_or_default().hash(&mut h);
     h.finish()
 }
 
@@ -1414,6 +1477,11 @@ fn operation_move(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let order: Vec<u64> = s.doc.manufacture.setup(to_setup).map(|st| st.operations.iter().map(|o| o.id).collect()).unwrap_or_default();
+    // Moved into another setup, it is measured from that setup's origin and stock: its toolpath
+    // goes (it shows as not generated).
+    if to_setup != from_setup {
+        s.cam.operations.remove(&id);
+    }
     let stale_from = if to_setup == from_setup { from.min(to) } else { to };
     Ok(json!({
         "operation": id, "setup": to_setup, "from_setup": from_setup, "index": to, "order": order, "stale_from_index": stale_from,

@@ -67,7 +67,9 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
   measured from it; put it where the machine will be zeroed (a Makera probes the stock's top
   front-left corner, the default of `origin_at`).
 - **Editing clears the toolpath**: after `cam.operation.set` (other than a rename) the
-  operation is not generated until `cam.generate`. `cam.operation.move {operation, setup}`
+  operation is not generated until `cam.generate`. A parent's change clears its children:
+  `cam.setup.set` / `cam.machine.set` clear all the setup's operations, `cam.tool.set` those
+  using the tool (renames keep them). `cam.operation.move {operation, setup}`
   moves it to another setup.
 - **Check for gouges**: `cam.simulate` reports `gouge_cells` per operation; the visual
   simulation draws them red on the stock. Any gouge is a wrong cut: fix it before posting.

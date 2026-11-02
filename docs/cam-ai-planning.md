@@ -17,12 +17,16 @@ they approve.
 
 ## The loop
 
-```
- 1 Understand  →  2 Evaluate the part  →  3 Plan  →  4 Build  →  5 Check the job
-                                             ↑                        │
-                                             └──── 6 Refine ←─────────┘
-                                                                      │ every safety check passes
-                                                       7 Approve and post  →  8 Learn
+```mermaid
+flowchart LR
+    U[1 Understand] --> E[2 Evaluate the part]
+    E --> P[3 Plan]
+    P --> B[4 Build]
+    B --> C[5 Check the job]
+    C -- issues left --> R[6 Refine]
+    R --> P
+    C -- every safety check passes --> A[7 Approve and post]
+    A --> L[8 Learn]
 ```
 
 Every step has a command whose result is a notice (`info`, `values`, `issues` with stable

@@ -801,9 +801,9 @@ fn toolpaths_show_and_hide_on_the_workpiece() {
     all_ops.extend(ops_in(&preview.path_todo));
     assert_eq!(all_ops, [a, b].into_iter().collect(), "both operations have simulation paths");
     let cam = solidcraft_render::Camera::default();
-    let lines_with_all = crate::view::scene(&s, &cam).lines.len();
+    let lines_with_all = crate::view::scene(&s, &cam).unwrap().lines.len();
     run(&mut s, "cam.toolpath.visibility", json!({"operation": a, "visible": false}));
-    let lines_without_a = crate::view::scene(&s, &cam).lines.len();
+    let lines_without_a = crate::view::scene(&s, &cam).unwrap().lines.len();
     let a_lines = preview.path_done.iter().chain(&preview.path_todo).filter(|(op, _)| *op == a).count();
     assert_eq!(lines_with_all - lines_without_a, a_lines, "hiding the face drops exactly its simulation lines");
     run(&mut s, "cam.toolpath.visibility", json!({"operation": a, "visible": true}));

@@ -1633,7 +1633,7 @@ fn setup_meshes(s: &Session, st: &Setup, tol: f64, fixtures: bool) -> Result<Vec
         if !wanted {
             continue;
         }
-        let mesh = match b.body.tessellate(tol.max(0.002)) {
+        let mesh = match b.body.mesh(&solidcraft_kernel::MeshTolerance::chord(tol.max(0.002))) {
             Ok(m) => Arc::new(m),
             Err(_) => b.mesh(),
         };

@@ -272,7 +272,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.machine.set", "Set Machine", machine_set).at("MANUFACTURE", "SETUP")
         .icon("cam")
         .params("setup: id; machine: a preset (cam.machine.list: three_axis … carvera, carvera_air, z1, each with a _4axis variant) or a full machine object; tcp?: bool (the control has tool-centre-point control); rapid_feed?; linearisation_tolerance?; max_rotary_step_deg?; limits?: {A: [min,max], C: [min,max]}: sets the setup's machine"),
-    CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists the machine presets").noundo(),
+    CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists every known machine: the ones SolidCraft ships and the design's own, each with its numbers, aliases, options, tool kit, sources and notes").noundo(),
+    CommandSpec::new("cam.machine.define", "Define Machine", machine_define)
+        .icon("cam")
+        .params("machine_file: a machine file's content ({format: \"solidcraft-machine/1\", id, aliases?, summary?, machine: {…the cam.machine.list machine fields…}, options?: [{id, aliases?, summary?, machine: {the fields that change}}], kit?, sources?: [{fields, from, checked?}], notes?}; docs/cam-machines.md): checks it and adds the machine and its options to the design, so a setup can name them; one with a shipped machine's id stands in for it in this design"),
     CommandSpec::new("cam.operation.add", "Add Operation", operation_add)
         .icon("cam")
         .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; boundary?: where an area operation (3D roughing and finishing) may machine: a source name or {source: auto | stock | part | bounding_box | selection | rest, containment: auto | inside | center | outside, offset, clip_to_stock, avoid_fixtures, fixture_clearance} (auto: roughing clears a ring a tool wide around the part's outline, wall finishing runs outside it, surface finishing keeps the tool's centre on the part, a selection bounds it; each notice says which and why); heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
@@ -311,6 +314,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.simulate.hide", "Hide Simulation", simulate_hide).icon("play").params("ends the simulation preview").noundo(),
     CommandSpec::new("cam.post.list", "Post Processors", post_list).icon("export").params("lists the post processors").noundo(),
     CommandSpec::new("cam.notices", "CAM Notices", notices).at("MANUFACTURE", "INSPECT").icon("cam").params("setup?: id: every operation's notice from the last cam.generate, with stale: true when the design changed since").noundo(),
+    CommandSpec::new("cam.analyze", "Analyse Part", analyze)
+        .at("MANUFACTURE", "INSPECT")
+        .icon("cam")
+        .params("setup?: id (default the first; its WCS, bodies, stock and machine); bodies?: body names; machine?: a machine id (cam.machine.list) to judge against instead of the setup's; material?: aluminium | wood | plastic (default aluminium: the cutting speed small tools should reach); tolerance? (0.02); faces?: true to list every face with its role and the directions that reach it. Returns the part's features (pockets, steps, holes, bosses, islands, free-form regions, undercuts, each with its faces and numbers: depths, the largest roughing and finishing tools, inside radii), the share each of ±x, ±y, ±z reaches, the fewest directions that reach everything, the limits the features put on the tools, the fit against the machine, and a notice with issues (undercut, sharp_inside_corner, deep_narrow, needs_second_side, exceeds_work_area, gantry_room…). Facts only: nothing is changed")
+        .noundo(),
     CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect).at("MANUFACTURE", "INSPECT").icon("cam").params("the manufacturing model in brief: tools, setups, operations, what is generated and what needs attention").noundo(),
 ];
 
@@ -407,7 +415,7 @@ fn tool_kit(s: &mut Session, p: &Value) -> Result<Value> {
         None => cam::kits::Material::Aluminium,
     };
     let machine = match p.get("machine") {
-        Some(v) if !v.is_null() => machine_param(v, cmd, None)?,
+        Some(v) if !v.is_null() => machine_param(s, v, cmd, None)?,
         _ => {
             let setup =
                 p.get("setup").and_then(Value::as_u64).and_then(|id| s.doc.manufacture.setup(id)).or_else(|| s.doc.manufacture.setups.first());
@@ -500,14 +508,28 @@ fn frame_param(p: &Value, k: &str, cmd: &str, default: Frame) -> Result<Frame> {
     Frame::new(origin, z, x).map_err(|e| engine_err(cmd, e))
 }
 
-fn machine_param(v: &Value, cmd: &str, current: Option<&cam::machine::Machine>) -> Result<cam::machine::Machine> {
+/// Every machine this design knows: the machine files it brings (`cam.machine.define`), then
+/// the ones SolidCraft ships that those don't stand in for.
+pub fn known_machines(s: &Session) -> Vec<cam::catalog::Entry> {
+    let mut out: Vec<cam::catalog::Entry> = s.doc.manufacture.machines.iter().filter_map(|f| f.entries().ok()).flatten().collect();
+    let own: Vec<String> = out.iter().map(|e| e.id.clone()).collect();
+    out.extend(cam::catalog::builtin().iter().filter(|e| !own.contains(&e.id)).cloned());
+    out
+}
+
+fn machine_param(s: &Session, v: &Value, cmd: &str, current: Option<&cam::machine::Machine>) -> Result<cam::machine::Machine> {
     let mut m = match v {
-        Value::String(name) => cam::machine::Machine::preset(name)
-            .ok_or_else(|| bad(cmd, format!("unknown machine preset `{name}`: {}", cam::machine::Machine::PRESETS.join(" | "))))?,
+        Value::String(name) => {
+            let known = known_machines(s);
+            cam::catalog::find(&known, name).map(|e| e.machine.clone()).ok_or_else(|| {
+                let ids: Vec<&str> = known.iter().map(|e| e.id.as_str()).collect();
+                bad(cmd, format!("unknown machine `{name}`: {} (cam.machine.list describes each; cam.machine.define adds one)", ids.join(" | ")))
+            })?
+        }
         Value::Object(_) => {
             let mut base = serde_json::to_value(current.cloned().unwrap_or_default()).unwrap_or(Value::Null);
             if let Some(Value::String(preset)) = v.get("preset").or_else(|| v.get("kind_preset")) {
-                base = serde_json::to_value(machine_param(&Value::String(preset.clone()), cmd, None)?).unwrap_or(Value::Null);
+                base = serde_json::to_value(machine_param(s, &Value::String(preset.clone()), cmd, None)?).unwrap_or(Value::Null);
             }
             merge_json(&mut base, v, &["preset", "kind_preset", "limits"]);
             serde_json::from_value(base).map_err(|e| bad(cmd, format!("machine: {e}")))?
@@ -558,7 +580,10 @@ fn setup_json(s: &Session, st: &Setup) -> Value {
         Ok(None) => Value::Null,
         Err(e) => json!({"error": e.to_string()}),
     };
+    // A setup whose machine nobody named says so, with the fix.
+    let notice = if st.machine.is_known() { Value::Null } else { Notice { info: None, values: Default::default(), issues: vec![st.machine.unknown_issue().suggest(json!({"command": "cam.machine.set", "setup": st.id, "machine": "<id from cam.machine.list>"}))] }.to_json() };
     json!({
+        "notice": notice,
         "stock_from": from,
         "id": st.id,
         "name": st.name,
@@ -568,7 +593,7 @@ fn setup_json(s: &Session, st: &Setup) -> Value {
         "stock": st.stock,
         "stock_resolved": stock,
         "model_bounds_wcs": bounds.map(|b| json!({"min": b.min, "max": b.max})),
-        "machine": {"name": st.machine.name, "axes": st.machine.axis_count(), "tcp": st.machine.tcp},
+        "machine": {"name": st.machine.name, "axes": st.machine.axis_count(), "tcp": st.machine.tcp, "known": st.machine.is_known()},
         "program": st.program,
         "operations": ops,
     })
@@ -599,7 +624,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
     let default_stock = if before.is_some() { Stock::FromSetup { setup: 0 } } else { Stock::default() };
     let stock = stock_param(p.get("stock"), cmd, default_stock)?;
     let machine = match p.get("machine") {
-        Some(v) => machine_param(v, cmd, None)?,
+        Some(v) => machine_param(s, v, cmd, None)?,
         None => cam::machine::Machine::three_axis(),
     };
     let mut setup = Setup {
@@ -644,7 +669,7 @@ fn setup_set(s: &mut Session, p: &Value) -> Result<Value> {
     st.wcs = frame_param(p, "wcs", cmd, st.wcs)?;
     st.stock = stock_param(p.get("stock"), cmd, st.stock.clone())?;
     if let Some(m) = p.get("machine") {
-        st.machine = machine_param(m, cmd, Some(&st.machine))?;
+        st.machine = machine_param(s, m, cmd, Some(&st.machine))?;
     }
     if let Some(prog) = str_(p, "program") {
         st.program = prog.to_string();
@@ -804,7 +829,7 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
     let id = id_param(p, "setup", cmd)?;
     let st = s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
     let mut m = match p.get("machine") {
-        Some(v) => machine_param(v, cmd, Some(&st.machine))?,
+        Some(v) => machine_param(s, v, cmd, Some(&st.machine))?,
         None => st.machine.clone(),
     };
     if let Some(t) = bool_(p, "tcp") {
@@ -822,7 +847,7 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("limits").is_some() {
         let mut v = serde_json::to_value(&m).unwrap_or(Value::Null);
         v["limits"] = p["limits"].clone();
-        m = machine_param(&v, cmd, Some(&m))?;
+        m = machine_param(s, &v, cmd, Some(&m))?;
     }
     m.validate().map_err(|e| engine_err(cmd, e))?;
     let out = serde_json::to_value(&m).unwrap_or(Value::Null);
@@ -834,12 +859,41 @@ fn machine_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-fn machine_list(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let presets: Vec<(&str, cam::machine::Machine)> =
-        cam::machine::Machine::PRESETS.iter().filter_map(|id| cam::machine::Machine::preset(id).map(|m| (*id, m))).collect();
+fn machine_list(s: &mut Session, _p: &Value) -> Result<Value> {
+    let own: Vec<String> = s.doc.manufacture.machines.iter().filter_map(|f| f.entries().ok()).flatten().map(|e| e.id).collect();
+    let known = known_machines(s);
     Ok(
-        json!({"machines": presets.iter().map(|(id, m)| json!({"preset": id, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "laser": m.laser, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS}),
+        json!({"machines": known.iter().map(|e| (e, &e.machine)).map(|(e, m)| json!({"preset": e.id, "aliases": e.aliases, "summary": e.summary, "option_of": e.base, "kit": e.kit, "from": if own.contains(&e.id) { "design" } else { "shipped" }, "sources": e.sources, "notes": e.notes, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "laser": m.laser, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS, "format": "docs/cam-machines.md"}),
     )
+}
+
+/// Adds a machine file to the design (`cam.machine.define`): checked, then kept with the
+/// design; one with an id already defined in the design replaces it.
+fn machine_define(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.machine.define";
+    let v = p.get("machine_file").or_else(|| p.get("file")).filter(|v| v.is_object()).ok_or_else(|| {
+        bad(cmd, "`machine_file` is the machine file's content as an object ({format: \"solidcraft-machine/1\", id, machine, …}; docs/cam-machines.md)")
+    })?;
+    let file = cam::catalog::MachineFile::from_value(v).map_err(|e| engine_err(cmd, e))?;
+    let entries = file.entries().map_err(|e| engine_err(cmd, e))?;
+    let shipped: Vec<&str> = entries.iter().filter(|e| cam::catalog::find(cam::catalog::builtin(), &e.id).is_some()).map(|e| e.id.as_str()).collect();
+    let mut issues = Vec::new();
+    if !shipped.is_empty() {
+        issues.push(Issue::info("replaces_shipped", format!("in this design, {} stand(s) in for the shipped machine(s) of the same id", shipped.join(", "))));
+    }
+    if file.sources.is_empty() {
+        issues.push(Issue::warning("no_sources", "the file says nowhere where its numbers came from: add `sources` so they can be checked"));
+    }
+    let id = file.id.clone();
+    let ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
+    let m = &mut s.doc_mut().manufacture;
+    if m.machines.len() >= 64 && !m.machines.iter().any(|f| f.id == id) {
+        return Err(bad(cmd, "a design holds at most 64 machine files"));
+    }
+    m.machines.retain(|f| f.id != id);
+    m.machines.push(file);
+    let notice = Notice { info: Some(format!("machine `{id}` defined: {}", ids.join(", "))), values: Default::default(), issues };
+    Ok(json!({"machine": id, "machines": ids, "notice": notice.to_json()}))
 }
 
 /// The common operation fields (not kind parameters).
@@ -2529,6 +2583,16 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.post";
     let id = setup_param(s, p, cmd)?;
     let st = s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?;
+    // A program for a machine nobody named was checked against nothing: refused unless asked for.
+    if !st.machine.is_known() && !bool_(p, "allow_unknown_machine").unwrap_or(false) {
+        return Err(bad(
+            cmd,
+            format!(
+                "machine_unknown: setup `{}` uses `{}`, which has no limits, so this program was checked against nothing; name the machine with cam.machine.set (cam.machine.list, or cam.machine.define a new one), or pass allow_unknown_machine: true",
+                st.name, st.machine.name
+            ),
+        ));
+    }
     let default_post = if !st.machine.post.is_empty() {
         st.machine.post.as_str()
     } else if st.machine.axis_count() > 3 {
@@ -2867,10 +2931,113 @@ fn notices(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"notices": out}))
 }
 
+/// What a part asks of the machining (`cam.analyze`): its features, which directions reach each
+/// face, the limits the features put on the tools, and the fit, against the setup's machine
+/// (or one named). Facts only; docs/cam-ai-planning.md step 2.
+fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.analyze";
+    let tol = num(p, "tolerance").filter(|t| t.is_finite() && *t > 0.0).unwrap_or(0.02).clamp(0.002, 1.0);
+    // The setup gives the frame, the bodies, the stock and the machine; without one, the
+    // design's bodies in its own axes.
+    let setup = match p.get("setup").and_then(Value::as_u64) {
+        Some(id) => Some(s.doc.manufacture.setup(id).cloned().ok_or_else(|| bad(cmd, format!("no setup {id}")))?),
+        None => s.doc.manufacture.setups.first().cloned(),
+    };
+    let mut st = setup.clone().unwrap_or_else(|| Setup {
+        id: 0,
+        name: String::new(),
+        bodies: Vec::new(),
+        fixtures: Vec::new(),
+        wcs: Frame::IDENTITY,
+        stock: Stock::default(),
+        machine: cam::machine::Machine::three_axis(),
+        operations: Vec::new(),
+        program: String::new(),
+    });
+    if p.get("bodies").is_some() {
+        st.bodies = crate::params::string_list(cmd, p, "bodies")?;
+    }
+    let machine = match p.get("machine") {
+        Some(v) if !v.is_null() => machine_param(s, v, cmd, Some(&st.machine))?,
+        _ => st.machine.clone(),
+    };
+    let material = match str_(p, "material") {
+        Some(m) => cam::kits::Material::parse(m).ok_or_else(|| bad(cmd, format!("unknown material `{m}`: aluminium | wood | plastic")))?,
+        None => cam::kits::Material::Aluminium,
+    };
+    // Cutting speeds (m/min) the smallest tools should reach.
+    let speed = match material {
+        cam::kits::Material::Aluminium => 150.0,
+        cam::kits::Material::Wood => 300.0,
+        cam::kits::Material::Plastic => 200.0,
+    };
+    let meshes = setup_meshes(s, &st, tol, false)?;
+    let state = s.model.state();
+    let wcs = st.wcs;
+    let mut locals: Vec<(String, Mesh, Vec<cam::analyze::Surface>)> = Vec::new();
+    for (name, m) in &meshes {
+        let Some(body) = state.body(name) else { continue };
+        let faces = m.tri_face.iter().copied().max().map_or(0, |f| f as usize + 1).min(50_000);
+        let surfaces: Vec<cam::analyze::Surface> = (0..faces)
+            .map(|f| match solidcraft_kernel::face_surface(&body.body, f) {
+                Some(solidcraft_kernel::FaceSurface::Plane { normal, .. }) => cam::analyze::Surface::Plane { normal: wcs.dir_to_local(*normal) },
+                Some(solidcraft_kernel::FaceSurface::Cylinder { origin, axis, radius }) => {
+                    cam::analyze::Surface::Cylinder { origin: wcs.to_local(origin), axis: wcs.dir_to_local(*axis), radius }
+                }
+                Some(solidcraft_kernel::FaceSurface::Cone { apex, axis, half_angle }) => {
+                    cam::analyze::Surface::Cone { apex: wcs.to_local(apex), axis: wcs.dir_to_local(*axis), half_angle }
+                }
+                Some(solidcraft_kernel::FaceSurface::Sphere { center, radius }) => cam::analyze::Surface::Sphere { center: wcs.to_local(center), radius },
+                Some(solidcraft_kernel::FaceSurface::Torus { center, axis, major, minor }) => {
+                    cam::analyze::Surface::Torus { center: wcs.to_local(center), axis: wcs.dir_to_local(*axis), major, minor }
+                }
+                None => cam::analyze::Surface::Other,
+            })
+            .collect();
+        let local = Mesh {
+            positions: m.positions.iter().map(|q| wcs.to_local(*q)).collect(),
+            normals: m.normals.iter().map(|n| wcs.dir_to_local(*n)).collect(),
+            triangles: m.triangles.clone(),
+            tri_face: m.tri_face.clone(),
+            edges: m.edges.iter().map(|e| e.iter().map(|q| wcs.to_local(*q)).collect()).collect(),
+            edge_faces: m.edge_faces.clone(),
+            ..Default::default()
+        };
+        locals.push((name.clone(), local, surfaces));
+    }
+    if locals.is_empty() {
+        return Err(bad(cmd, "there is no body to analyse: the setup's bodies are empty or hidden"));
+    }
+    let inputs: Vec<cam::analyze::BodyInput> = locals.iter().map(|(n, m, f)| cam::analyze::BodyInput { name: n, mesh: m, surfaces: f }).collect();
+    let stock = setup.as_ref().and_then(|st| stock_shape(s, st).ok()).map(|sh| {
+        let b = sh.bounds();
+        (b.min, b.max)
+    });
+    let mut a = cam::analyze::analyze(&inputs, &machine, stock, speed, tol).map_err(|e| engine_err(cmd, e))?;
+    if !machine.is_known() {
+        a.notice.issue(machine.unknown_issue());
+    }
+    let mut out = serde_json::to_value(&a).map_err(|e| EngineError::Other(e.to_string()))?;
+    out["notice"] = a.notice.to_json();
+    out["machine"] = json!(machine.name);
+    out["setup"] = json!(setup.as_ref().map(|st| st.id));
+    out["frame"] = json!("the setup's WCS: +z is the tool axis");
+    // Faces only on request: the features list theirs.
+    if !p.get("faces").and_then(Value::as_bool).unwrap_or(false)
+        && let Some(o) = out.as_object_mut()
+    {
+        o.remove("faces");
+    }
+    Ok(out)
+}
+
 fn inspect(s: &mut Session, _p: &Value) -> Result<Value> {
     let m = &s.doc.manufacture;
     let mut attention = Vec::new();
     for st in &m.setups {
+        if !st.machine.is_known() {
+            attention.push(json!({"setup": st.id, "name": st.name, "why": "machine_unknown: nothing is checked against the machine, and cam.post refuses", "command": "cam.machine.set"}));
+        }
         for op in &st.operations {
             match s.cam.operations.get(&op.id) {
                 None if op.enabled => attention.push(json!({"operation": op.id, "name": op.name, "why": "not generated", "command": "cam.generate"})),
@@ -2886,6 +3053,6 @@ fn inspect(s: &mut Session, _p: &Value) -> Result<Value> {
         "setups": m.setups.iter().map(|st| setup_json(s, st)).collect::<Vec<_>>(),
         "bodies": bodies,
         "attention": attention,
-        "workflow": ["cam.tool.add", "cam.setup.create", "cam.operation.add (cam.operation.kinds lists the kinds)", "cam.generate", "cam.simulate", "cam.post"],
+        "workflow": ["cam.machine.list (name the machine first)", "cam.tool.add", "cam.setup.create {machine}", "cam.operation.add (cam.operation.kinds lists the kinds)", "cam.generate", "cam.simulate", "cam.post"],
     }))
 }

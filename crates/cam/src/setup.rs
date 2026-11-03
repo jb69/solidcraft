@@ -356,11 +356,15 @@ pub struct Manufacture {
     pub tools: ToolLibrary,
     pub setups: Vec<Setup>,
     pub next_id: u64,
+    /// Machine files the design brings with it (`cam.machine.define`), besides the ones
+    /// SolidCraft ships; one with a shipped machine's id stands in for it in this design.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<crate::catalog::MachineFile>,
 }
 
 impl Manufacture {
     pub fn is_empty(&self) -> bool {
-        self.tools.tools.is_empty() && self.setups.is_empty()
+        self.tools.tools.is_empty() && self.setups.is_empty() && self.machines.is_empty()
     }
     pub fn next_id(&mut self) -> u64 {
         self.next_id = self.next_id.max(1);

@@ -188,173 +188,54 @@ impl Machine {
     }
     /// A 4-axis mill with a continuous A rotary along X.
     pub fn four_axis_a() -> Machine {
-        Machine {
-            name: "4-axis mill (A)".into(),
-            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
-            ..Default::default()
-        }
+        Machine::preset("four_axis_a").unwrap_or_default()
     }
     /// A trunnion machine: A tilts about X, carrying a C rotary table.
     pub fn trunnion_ac() -> Machine {
-        Machine {
-            name: "5-axis trunnion (A/C)".into(),
-            kinematics: Kinematics::FiveAxis { primary: RotaryAxis::a_table(), secondary: RotaryAxis::c_table() },
-            ..Default::default()
-        }
+        Machine::preset("trunnion_ac").unwrap_or_default()
     }
     /// A trunnion machine: B tilts about Y, carrying a C rotary table.
     pub fn trunnion_bc() -> Machine {
-        Machine {
-            name: "5-axis trunnion (B/C)".into(),
-            kinematics: Kinematics::FiveAxis { primary: RotaryAxis::b_table(), secondary: RotaryAxis::c_table() },
-            ..Default::default()
-        }
+        Machine::preset("trunnion_bc").unwrap_or_default()
     }
     /// A head-head machine: the spindle swivels about B then C (both on the head).
     pub fn head_head_bc() -> Machine {
-        let mut b = RotaryAxis::b_table();
-        b.on_table = false;
-        let mut c = RotaryAxis::c_table();
-        c.on_table = false;
-        Machine {
-            name: "5-axis head-head (B/C)".into(),
-            kinematics: Kinematics::FiveAxis { primary: c, secondary: b },
-            tcp: true,
-            ..Default::default()
-        }
+        Machine::preset("head_head_bc").unwrap_or_default()
     }
-
-    /// Makera Carvera: 360 × 240 × 140 mm, 200 W spindle to 15 000 rev/min, 6-slot automatic
-    /// tool changer, 1/8" collet (1/4", 6, 4 and 3 mm optional), 6 000 mm/min, 120 mm under the
-    /// gantry (Makera's published specifications).
+    /// Makera Carvera (`machines/makera-carvera.json`).
     pub fn makera_carvera() -> Machine {
-        Machine {
-            name: "Makera Carvera".into(),
-            vendor: "Makera".into(),
-            model: "Carvera".into(),
-            post: "makera".into(),
-            rapid_feed: 6000.0,
-            max_feed: 6000.0,
-            work_area: Vec3::new(360.0, 240.0, 140.0),
-            gantry_clearance: 120.0,
-            spindle_rpm_min: 0.0,
-            spindle_rpm_max: 15000.0,
-            spindle_power_w: 200.0,
-            tool_changer: ToolChanger::Automatic { slots: 6 },
-            collets: vec![3.175, 6.35, 6.0, 4.0, 3.0],
-            laser: Some(LaserModule { power_w: 2.5, wavelength_nm: 445.0, builtin: true, spot_mm: 0.1 }),
-            ..Default::default()
-        }
+        Machine::preset("carvera").unwrap_or_default()
     }
-
-    /// The Carvera with its 4th-axis module: a continuous A rotary along X taking stock up to
-    /// Ø92 × 240 mm.
+    /// The Carvera with its 4th-axis module.
     pub fn makera_carvera_4axis() -> Machine {
-        Machine {
-            name: "Makera Carvera + 4th axis".into(),
-            rotary_rapid_deg_min: 2300.0,
-            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
-            rotary_capacity: Some((92.0, 240.0)),
-            ..Machine::makera_carvera()
-        }
+        Machine::preset("carvera_4axis").unwrap_or_default()
     }
-
-    /// Makera Carvera Air: 300 × 200 × 130 mm, 200 W spindle to 13 000 rev/min, lever quick
-    /// tool changer (by hand), 1/8" collet (1/4", 6 and 4 mm optional), 4 000 mm/min, 120 mm under
-    /// the gantry.
+    /// Makera Carvera Air (`machines/makera-carvera-air.json`).
     pub fn makera_carvera_air() -> Machine {
-        Machine {
-            name: "Makera Carvera Air".into(),
-            vendor: "Makera".into(),
-            model: "Carvera Air".into(),
-            post: "makera".into(),
-            rapid_feed: 4000.0,
-            max_feed: 4000.0,
-            work_area: Vec3::new(300.0, 200.0, 130.0),
-            gantry_clearance: 120.0,
-            spindle_rpm_max: 13000.0,
-            spindle_power_w: 200.0,
-            tool_changer: ToolChanger::Manual,
-            collets: vec![3.175, 6.35, 6.0, 4.0],
-            laser: Some(LaserModule { power_w: 5.0, wavelength_nm: 445.0, builtin: false, spot_mm: 0.1 }),
-            ..Default::default()
-        }
+        Machine::preset("carvera_air").unwrap_or_default()
     }
-
-    /// The Carvera Air with its 4th-axis module (Ø92 × 200 mm).
+    /// The Carvera Air with its 4th-axis module.
     pub fn makera_carvera_air_4axis() -> Machine {
-        Machine {
-            name: "Makera Carvera Air + 4th axis".into(),
-            rotary_rapid_deg_min: 2300.0,
-            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
-            rotary_capacity: Some((92.0, 200.0)),
-            ..Machine::makera_carvera_air()
-        }
+        Machine::preset("carvera_air_4axis").unwrap_or_default()
     }
-
-    /// Makera Z1: 200 × 200 × 100 mm, 150 W spindle to 13 000 rev/min, quick tool change by
-    /// hand, 1/8" collet (1/4", 6, 4 and 3 mm optional), 1 200 mm/min, 115 mm under the gantry.
+    /// Makera Z1 (`machines/makera-z1.json`).
     pub fn makera_z1() -> Machine {
-        Machine {
-            name: "Makera Z1".into(),
-            vendor: "Makera".into(),
-            model: "Z1".into(),
-            post: "makera".into(),
-            rapid_feed: 1200.0,
-            max_feed: 1200.0,
-            work_area: Vec3::new(200.0, 200.0, 100.0),
-            gantry_clearance: 115.0,
-            spindle_rpm_max: 13000.0,
-            spindle_power_w: 150.0,
-            tool_changer: ToolChanger::Manual,
-            collets: vec![3.175, 6.35, 6.0, 4.0, 3.0],
-            laser: Some(LaserModule { power_w: 5.0, wavelength_nm: 445.0, builtin: false, spot_mm: 0.1 }),
-            ..Default::default()
-        }
+        Machine::preset("z1").unwrap_or_default()
     }
-
-    /// The Z1 with its 4th-axis module (Ø80 × 150 mm).
+    /// The Z1 with its 4th-axis module.
     pub fn makera_z1_4axis() -> Machine {
-        Machine {
-            name: "Makera Z1 + 4th axis".into(),
-            rotary_rapid_deg_min: 2300.0,
-            kinematics: Kinematics::FourAxis { rotary: RotaryAxis::a_rotary_continuous() },
-            rotary_capacity: Some((80.0, 150.0)),
-            ..Machine::makera_z1()
-        }
+        Machine::preset("z1_4axis").unwrap_or_default()
     }
 
-    /// Every preset by id, in the order shown to people.
-    pub const PRESETS: &'static [&'static str] = &[
-        "three_axis",
-        "four_axis_a",
-        "trunnion_ac",
-        "trunnion_bc",
-        "head_head_bc",
-        "carvera",
-        "carvera_4axis",
-        "carvera_air",
-        "carvera_air_4axis",
-        "z1",
-        "z1_4axis",
-    ];
+    /// Every known machine's id, in the order shown to people: the machine files
+    /// (`crate::catalog`), each base followed by its options.
+    pub fn presets() -> Vec<&'static str> {
+        crate::catalog::builtin().iter().map(|e| e.id.as_str()).collect()
+    }
 
-    /// A preset by id or alias.
+    /// A known machine by id or alias, from the machine files.
     pub fn preset(id: &str) -> Option<Machine> {
-        Some(match id.trim().to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
-            "three_axis" | "3axis" | "3_axis" | "mill3" => Machine::three_axis(),
-            "four_axis_a" | "4axis" | "4_axis" | "rotary_a" => Machine::four_axis_a(),
-            "trunnion_ac" | "5axis" | "5_axis" | "table_table_ac" => Machine::trunnion_ac(),
-            "trunnion_bc" | "table_table_bc" => Machine::trunnion_bc(),
-            "head_head_bc" | "head_head" => Machine::head_head_bc(),
-            "carvera" | "makera_carvera" => Machine::makera_carvera(),
-            "carvera_4axis" | "makera_carvera_4axis" | "carvera_4th_axis" => Machine::makera_carvera_4axis(),
-            "carvera_air" | "makera_carvera_air" => Machine::makera_carvera_air(),
-            "carvera_air_4axis" | "makera_carvera_air_4axis" | "carvera_air_4th_axis" => Machine::makera_carvera_air_4axis(),
-            "z1" | "makera_z1" => Machine::makera_z1(),
-            "z1_4axis" | "makera_z1_4axis" | "z1_4th_axis" => Machine::makera_z1_4axis(),
-            _ => return None,
-        })
+        crate::catalog::find(crate::catalog::builtin(), id).map(|e| e.machine.clone())
     }
 
     /// The spindle speed the machine can give for `rpm`, and whether it had to be changed.
@@ -374,11 +255,34 @@ impl Machine {
         if self.max_feed > 0.0 && feed > self.max_feed { (self.max_feed, true) } else { (feed, false) }
     }
 
+    /// Whether the machine's limits are known: its work area and top spindle speed are set (a
+    /// machine file of a real machine). A generic machine is not: nothing can be checked
+    /// against it.
+    pub fn is_known(&self) -> bool {
+        self.work_area.x > 0.0 && self.work_area.y > 0.0 && (self.spindle_rpm_max > 0.0 || self.laser.is_some())
+    }
+
+    /// The issue every result carries while the machine is not known.
+    pub fn unknown_issue(&self) -> crate::notice::Issue {
+        crate::notice::Issue::warning(
+            "machine_unknown",
+            format!(
+                "the setup's machine ({}) has no limits, so nothing was checked against travel, spindle speed, feeds, collets or the gantry; name the machine",
+                self.name
+            ),
+        )
+        .suggest(serde_json::json!({"command": "cam.machine.set", "machine": "<id from cam.machine.list, or cam.machine.define a new one>"}))
+    }
+
     /// What the machine would object to in a tool and its toolpath: a spindle speed or feed
-    /// past the machine's, a shank no collet takes, a toolpath wider than the work area.
+    /// past the machine's, a shank no collet takes, a toolpath wider than the work area, and
+    /// that its limits are not known at all.
     pub fn check(&self, tool: &crate::tool::Tool, toolpath: &Toolpath) -> Vec<crate::notice::Issue> {
         use crate::notice::Issue;
         let mut out = Vec::new();
+        if !self.is_known() {
+            out.push(self.unknown_issue());
+        }
         let who = if self.model.is_empty() { self.name.clone() } else { self.model.clone() };
         if toolpath.laser {
             if self.laser.is_none() {

@@ -3343,7 +3343,7 @@ mod cam_job_tests {
         let mut h = Harness::new();
         h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 10, "body_name": "Block"})).unwrap();
         let tool = h.app.run("cam.tool.add", json!({"name": "6 mm flat", "kind": "flat", "diameter": 6})).unwrap()["id"].clone();
-        h.app.run("cam.setup.create", json!({})).unwrap();
+        h.app.run("cam.setup.create", json!({"machine": "carvera"})).unwrap();
         let a =
             h.app.run("cam.operation.face", json!({"tool": tool, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}})).unwrap()
                 ["id"]

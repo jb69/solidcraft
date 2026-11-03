@@ -1,0 +1,117 @@
+{
+  "format": "solidcraft-machine/1",
+  "id": "carvera_air",
+  "aliases": [
+    "makera_carvera_air"
+  ],
+  "summary": "Makera Carvera Air desktop CNC mill: 300 × 200 × 130 mm, 200 W spindle to 13 000 rev/min, quick tool change by hand, optional laser module.",
+  "machine": {
+    "name": "Makera Carvera Air",
+    "vendor": "Makera",
+    "model": "Carvera Air",
+    "post": "makera",
+    "kinematics": {
+      "kind": "three_axis"
+    },
+    "rapid_feed": 4000.0,
+    "rotary_rapid_deg_min": 3600.0,
+    "travel_min": null,
+    "travel_max": null,
+    "work_area": [
+      300.0,
+      200.0,
+      130.0
+    ],
+    "gantry_clearance": 120.0,
+    "spindle_rpm_min": 0.0,
+    "spindle_rpm_max": 13000.0,
+    "spindle_power_w": 200.0,
+    "max_feed": 4000.0,
+    "tool_changer": {
+      "kind": "manual"
+    },
+    "collets": [
+      3.175,
+      6.35,
+      6.0,
+      4.0
+    ],
+    "rotary_capacity": null,
+    "laser": {
+      "power_w": 5.0,
+      "wavelength_nm": 445.0,
+      "builtin": false,
+      "spot_mm": 0.1
+    },
+    "tcp": false,
+    "linearisation_tolerance": 0.01,
+    "max_rotary_step_deg": 5.0
+  },
+  "options": [
+    {
+      "id": "carvera_air_4axis",
+      "aliases": [
+        "makera_carvera_air_4axis",
+        "carvera_air_4th_axis"
+      ],
+      "summary": "With Makera's 4th-axis module: Ø92 × 200 mm.",
+      "machine": {
+        "name": "Makera Carvera Air + 4th axis",
+        "kinematics": {
+          "kind": "four_axis",
+          "rotary": {
+            "name": "A",
+            "direction": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "min_deg": -99999.0,
+            "max_deg": 99999.0,
+            "on_table": true
+          }
+        },
+        "rotary_rapid_deg_min": 2300.0,
+        "rotary_capacity": [
+          92.0,
+          200.0
+        ]
+      }
+    }
+  ],
+  "kit": "makera_essential",
+  "sources": [
+    {
+      "fields": [
+        "work_area",
+        "gantry_clearance",
+        "spindle_rpm_max",
+        "spindle_power_w",
+        "max_feed",
+        "rapid_feed",
+        "tool_changer",
+        "collets",
+        "laser"
+      ],
+      "from": "Makera's published specifications for the Carvera Air (makera.com product and specification pages, retailer specification sheets) and the Carvera community documentation",
+      "checked": null
+    },
+    {
+      "fields": [
+        "kinematics",
+        "rotary_capacity",
+        "rotary_rapid_deg_min"
+      ],
+      "from": "Makera's published specifications for the Carvera Air 4th-axis module",
+      "checked": null
+    }
+  ],
+  "notes": [
+    "Tools are changed by hand with the lever; the control pauses at each change."
+  ]
+}

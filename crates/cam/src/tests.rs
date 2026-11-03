@@ -804,7 +804,7 @@ fn makera_post_writes_the_carvera_dialect_and_holds_the_machine_limits() {
     assert!(prog.notice.issues.iter().any(|i| i.code == "manual_tool_change" && i.message.contains("T7")), "{:?}", prog.notice.issues);
     assert!(prog.gcode.contains("\nM6 T7\n"));
     // Every preset validates, and the 4-axis ones carry a continuous A along X.
-    for id in Machine::PRESETS {
+    for id in Machine::presets() {
         let m = Machine::preset(id).unwrap();
         m.validate().unwrap();
         if id.ends_with("_4axis") {

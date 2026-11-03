@@ -32,6 +32,34 @@ flowchart LR
 Every step has a command whose result is a notice (`info`, `values`, `issues` with stable
 codes and a `suggestion`), so the assistant never has to read prose or guess.
 
+## Machines set the limits
+
+Every step is judged against a machine. The machine decides:
+- which directions a setup can cut from (three axes, a 4th axis, five axes);
+- whether the part and its stock fit (work area, Z travel, gantry clearance);
+- which tools it can hold (collet sizes, tool changer slots, the longest tool under the gantry);
+- how fast tools can turn and move (spindle speed range, power, feeds);
+- what the program looks like (the post dialect).
+
+So the analysis, the plan and the checks all take the machine: the setup's own, or one named in
+the call.
+
+**Known machines are documented as data files, one per machine**, so a person or an assistant
+can read them, check them and add new ones without changing code. A machine file holds:
+- the machine's numbers, in the same shape a setup stores;
+- its ids and aliases;
+- the options it can be fitted with (a 4th axis module, a laser);
+- the tool kit that suits it;
+- for every number, where it came from (the maker's published specification, and the date it
+  was checked).
+
+SolidCraft ships the files for the machines it knows (first the Makera Carvera, Carvera Air and
+Z1, from their public specifications) and reads them at start. `cam.machine.list` lists them;
+**new: `cam.machine.define {file | machine}`** checks a new file and adds the machine.
+`docs/cam-machines.md` describes the format. No other work in progress defines one: the open
+Manufacture preset pack (#2624) lists presets in code, and the machine backends (#2613) are
+about talking to a running machine.
+
 ## 1. Understand the job
 
 What the assistant needs before it plans, and where each answer comes from:
@@ -72,6 +100,9 @@ no decisions:
   - the deepest narrow feature sets the stick-out and flute length;
   - thin walls limit step-down.
 - **Fit.** Does the part fit the machine's work area, and does a stock that size fit?
+- **The machine's own limits.** Which access directions its axes allow, the largest shank its
+  collets take, the longest tool under its gantry, and the smallest tool its top spindle speed
+  can drive at a sensible surface speed.
 
 Issues carry codes the plan acts on:
 - `undercut`: needs another setup, the 4th axis, or a special tool.
@@ -214,6 +245,8 @@ are developed and tested against.
 
 ## Order of work
 
+0. **Machine files**: the format, the Makera machines and the generic presets as files,
+   `cam.machine.define`, and `docs/cam-machines.md`. Analysis and every check read them.
 1. **`cam.analyze`**: features, access and limits, with tests on the benchmark parts. Every
    later step needs it.
 2. **`cam.evaluate`**: one score over the checks that exist, plus per-feature leftover

@@ -1,0 +1,120 @@
+{
+  "format": "solidcraft-machine/1",
+  "id": "carvera",
+  "aliases": [
+    "makera_carvera"
+  ],
+  "summary": "Makera Carvera desktop CNC mill: 360 × 240 × 140 mm, 200 W spindle to 15 000 rev/min, 6-slot automatic tool changer, built-in 2.5 W laser.",
+  "machine": {
+    "name": "Makera Carvera",
+    "vendor": "Makera",
+    "model": "Carvera",
+    "post": "makera",
+    "kinematics": {
+      "kind": "three_axis"
+    },
+    "rapid_feed": 6000.0,
+    "rotary_rapid_deg_min": 3600.0,
+    "travel_min": null,
+    "travel_max": null,
+    "work_area": [
+      360.0,
+      240.0,
+      140.0
+    ],
+    "gantry_clearance": 120.0,
+    "spindle_rpm_min": 0.0,
+    "spindle_rpm_max": 15000.0,
+    "spindle_power_w": 200.0,
+    "max_feed": 6000.0,
+    "tool_changer": {
+      "kind": "automatic",
+      "slots": 6
+    },
+    "collets": [
+      3.175,
+      6.35,
+      6.0,
+      4.0,
+      3.0
+    ],
+    "rotary_capacity": null,
+    "laser": {
+      "power_w": 2.5,
+      "wavelength_nm": 445.0,
+      "builtin": true,
+      "spot_mm": 0.1
+    },
+    "tcp": false,
+    "linearisation_tolerance": 0.01,
+    "max_rotary_step_deg": 5.0
+  },
+  "options": [
+    {
+      "id": "carvera_4axis",
+      "aliases": [
+        "makera_carvera_4axis",
+        "carvera_4th_axis"
+      ],
+      "summary": "With Makera's 4th-axis module: a continuous A rotary along X taking stock up to Ø92 × 240 mm.",
+      "machine": {
+        "name": "Makera Carvera + 4th axis",
+        "kinematics": {
+          "kind": "four_axis",
+          "rotary": {
+            "name": "A",
+            "direction": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "min_deg": -99999.0,
+            "max_deg": 99999.0,
+            "on_table": true
+          }
+        },
+        "rotary_rapid_deg_min": 2300.0,
+        "rotary_capacity": [
+          92.0,
+          240.0
+        ]
+      }
+    }
+  ],
+  "kit": "makera_essential",
+  "sources": [
+    {
+      "fields": [
+        "work_area",
+        "gantry_clearance",
+        "spindle_rpm_max",
+        "spindle_power_w",
+        "max_feed",
+        "rapid_feed",
+        "tool_changer",
+        "collets",
+        "laser"
+      ],
+      "from": "Makera's published specifications for the Carvera (makera.com product and specification pages, retailer specification sheets) and the Carvera community documentation",
+      "checked": null
+    },
+    {
+      "fields": [
+        "kinematics",
+        "rotary_capacity",
+        "rotary_rapid_deg_min"
+      ],
+      "from": "Makera's published specifications for the Carvera 4th-axis module",
+      "checked": null
+    }
+  ],
+  "notes": [
+    "The control measures each tool's length after a change, so programs carry no tool length offset (the makera post).",
+    "The 1/8\" collet is standard; the others are optional collets."
+  ]
+}

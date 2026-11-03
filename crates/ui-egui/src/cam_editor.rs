@@ -337,6 +337,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         _ => None,
     };
     let tools: Vec<(u64, String)> = app.session.doc.manufacture.tools.tools.iter().map(|tl| (tl.id, format!("T{} {}", tl.number, tl.name))).collect();
+    let machines: Vec<(String, cam::machine::Machine)> = match ed.target {
+        Target::Setup(_) => solidcraft_engine::cmd::cam::known_machines(&app.session).into_iter().map(|e| (e.id, e.machine)).collect(),
+        _ => Vec::new(),
+    };
     // Points the designer placed (construction points), for the setup's origin.
     let points: Vec<String> = match ed.target {
         Target::Setup(_) => app
@@ -408,7 +412,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             }
                             Target::Tool(_) => tool_fields(ui, draft, inputs, uses),
                             Target::Setup(id) => {
-                                if let Some(extra) = setup_fields(ui, draft, inputs, *id, &setups, origin, &points) {
+                                if let Some(extra) = setup_fields(ui, draft, inputs, *id, &setups, origin, &points, &machines) {
                                     *place = Some(extra);
                                     apply_now = true;
                                 }
@@ -799,6 +803,7 @@ fn setup_fields(
     setups: &[(u64, String)],
     of: &mut OriginForm,
     points: &[String],
+    machines: &[(String, cam::machine::Machine)],
 ) -> Option<Value> {
     let Value::Object(st) = draft else { return None };
     let t = Tokens::get();
@@ -857,13 +862,13 @@ fn setup_fields(
     // The machine: a preset, then its properties.
     if let Some(machine) = st.get_mut("machine") {
         section(ui, "Machine", false, |ui| {
-            let presets = cam::machine::Machine::PRESETS;
+            // Every known machine: the machine files SolidCraft ships and the design's own.
             let mut labels: Vec<String> = vec![crate::i18n::tr_label("Keep this machine").to_string()];
-            labels.extend(presets.iter().map(|p| kind_label(p)));
+            labels.extend(machines.iter().map(|(_, m)| m.name.clone()));
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
             let mut k = 0usize;
             crate::ui_kit::row(ui, "Preset", |ui| crate::ui_kit::dropdown(ui, "cam_ed_machine_preset", &mut k, &refs));
-            if let Some(m) = k.checked_sub(1).and_then(|i| presets.get(i)).and_then(|p| cam::machine::Machine::preset(p)) {
+            if let Some(m) = k.checked_sub(1).and_then(|i| machines.get(i)).map(|x| x.1.clone()) {
                 if let Ok(v) = serde_json::to_value(m) {
                     *machine = v;
                 }

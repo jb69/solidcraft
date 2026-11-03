@@ -12,6 +12,9 @@ operations → `cam.generate` → `cam.simulate` → `cam.post`. Every result ca
 guessing, and fix issues before posting. `docs/cam.md` is the reference.
 
 ## Before the first call
+0. **Name the machine first.** Every limit comes from it: travel, spindle, feeds, collets, the
+   gantry, the axes. A setup without one gets a generic machine with no limits: every result then
+   carries `machine_unknown` and `cam.post` refuses. Ask which machine; `cam.machine.list`.
 1. `inspect_design` (or `measure`): know the part's bodies and bounding box. The WCS defaults to
    the design's origin and axes; z is the tool axis, so pick the setup's `wcs` so +z points out
    of the stock's top.
@@ -26,7 +29,10 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
    (`laser_cut`, `laser_engrave`) needs a laser tool (`cam.tool.kit` adds one for a machine
    with a module) and turning (`turn_face`, `turn_profile`, `turn_groove`, `turn_thread`) a
    `_4axis` machine with a cylinder stock along x.
-3. `cam.machine.list` and `cam.post.list` when the machine matters (4/5-axis work needs a
+3. `cam.machine.list` and `cam.post.list` when the machine matters. Machines are documented as
+   machine files (`docs/cam-machines.md`): each entry has its numbers, options, tool kit, `sources`
+   and `notes`; read the notes. For a machine that isn't listed, write its file from the maker's
+   specification and add it with `cam.machine.define {machine_file}`, then name its id on the setup (4/5-axis work needs a
    4/5-axis machine on the setup and the `fiveaxis` post). For a Makera Carvera, Carvera Air
    or Z1 put the preset on the setup (`machine: "carvera"`, `"carvera_air"`, `"z1"`, or the
    `_4axis` variant with the rotary module) and start the library with
@@ -37,6 +43,15 @@ guessing, and fix issues before posting. `docs/cam.md` is the reference.
 4. Operations are parametric steps: changing one (or its tool, the setup or the model) makes
    it and every later one stale, and `cam.generate` regenerates only those. Reorder with
    `cam.operation.move`; read `regenerated` and `reused` in the result.
+## Evaluate the part before planning
+`cam.analyze {setup?, machine?, material?}` reports facts, changes nothing: features (`pocket`,
+`step`, `hole`, `island`, `boss`, `freeform`, `undercut`, `top`) with their faces and numbers
+(depth, `largest_roughing_tool_mm`, `largest_finishing_tool_mm`, inside radii, `tap_drill_for`,
+`through`), the share of the part each of ±x/±y/±z reaches, `directions` (the fewest sides that
+reach everything: one setup each on a 3-axis machine), tool `limits` and the `fit`. Plan from it:
+map every feature to an operation, and answer each issue (`undercut`, `sharp_inside_corner`,
+`deep_narrow`, `needs_second_side`, `exceeds_work_area`, `gantry_room`) before building.
+
 ## Build
 - **Tools** first: `cam.tool.add {name, kind, diameter, flute_length, overall_length, feeds}`.
   Kinds: `flat`, `ball`, `bull` (+ `corner_radius`), `chamfer`, `drill`, `spot`, `tapered_ball`.

@@ -167,7 +167,46 @@ at once, and `cam.simulate`, `cam.simulate.show` and `cam.post` take the design'
 `setup` is left out. Post Process asks where to save the `.nc` file. A simulation shown from a
 script or the agent switches to the workspace by itself, and leaving the workspace ends it.
 
+## Analysing a part (`cam.analyze`)
+
+Before any plan, `cam.analyze {setup?, machine?, material?, faces?}` reports what the part asks
+of the machining, measured in the setup's frame (+z is the tool axis). It changes nothing.
+- **Features**, each with its faces and numbers:
+  - pockets and steps: depth, floor area, the largest roughing tool (the widest circle on the
+    floor), the largest finishing tool (twice the smallest inside radius), sharp inside corners;
+  - holes: diameter, depth, through or blind, and the thread it is a tap drill for;
+  - islands and bosses: their heights;
+  - free-form regions: the smallest radius, and with it the largest ball tool;
+  - undercuts: the faces no straight tool reaches.
+- **Access:** the share of the part each of ±x, ±y, ±z reaches, and the fewest directions that
+  reach everything (one setup each on a 3-axis machine).
+- **Limits** the features put on the tools: the deepest feature and the reach it needs, and the
+  smallest tool with the spindle speed it wants. These are judged against the machine's
+  collets, tool slots and top speed.
+- **Fit:** the part and the stock against the work area, and the room under the gantry.
+
+Issues come with codes:
+- `undercut`;
+- `sharp_inside_corner`;
+- `deep_narrow`;
+- `needs_second_side`;
+- `setups_needed`;
+- `exceeds_work_area` or `turn_to_fit`;
+- `gantry_room`;
+- `spindle_too_slow_for_small_tool`;
+- `machine_unknown`.
+
+## The machine
+
+Every check needs to know the machine. A setup that names none gets a generic machine with no
+limits. Every result then carries `machine_unknown`, `cam.inspect` lists the setup, and
+`cam.post` refuses unless it is given `allow_unknown_machine: true`.
+
 ## Makera machines (Carvera, Carvera Air, Z1)
+
+Every machine, these included, is a machine file (`docs/cam-machines.md`): its numbers, options,
+tool kit, sources and notes, listed by `cam.machine.list`. A design can add its own with
+`cam.machine.define`.
 
 CAM stays generic, and the Makera desktop machines are first-class: presets `carvera`,
 `carvera_air` and `z1`, each with a `_4axis` variant for the maker's rotary module, carry the

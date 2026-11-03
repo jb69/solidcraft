@@ -1,0 +1,118 @@
+{
+  "format": "solidcraft-machine/1",
+  "id": "z1",
+  "aliases": [
+    "makera_z1"
+  ],
+  "summary": "Makera Z1 desktop CNC mill: 200 × 200 × 100 mm, 150 W spindle to 13 000 rev/min, quick tool change by hand, optional laser module.",
+  "machine": {
+    "name": "Makera Z1",
+    "vendor": "Makera",
+    "model": "Z1",
+    "post": "makera",
+    "kinematics": {
+      "kind": "three_axis"
+    },
+    "rapid_feed": 1200.0,
+    "rotary_rapid_deg_min": 3600.0,
+    "travel_min": null,
+    "travel_max": null,
+    "work_area": [
+      200.0,
+      200.0,
+      100.0
+    ],
+    "gantry_clearance": 115.0,
+    "spindle_rpm_min": 0.0,
+    "spindle_rpm_max": 13000.0,
+    "spindle_power_w": 150.0,
+    "max_feed": 1200.0,
+    "tool_changer": {
+      "kind": "manual"
+    },
+    "collets": [
+      3.175,
+      6.35,
+      6.0,
+      4.0,
+      3.0
+    ],
+    "rotary_capacity": null,
+    "laser": {
+      "power_w": 5.0,
+      "wavelength_nm": 445.0,
+      "builtin": false,
+      "spot_mm": 0.1
+    },
+    "tcp": false,
+    "linearisation_tolerance": 0.01,
+    "max_rotary_step_deg": 5.0
+  },
+  "options": [
+    {
+      "id": "z1_4axis",
+      "aliases": [
+        "makera_z1_4axis",
+        "z1_4th_axis"
+      ],
+      "summary": "With Makera's 4th-axis module: Ø80 × 150 mm.",
+      "machine": {
+        "name": "Makera Z1 + 4th axis",
+        "kinematics": {
+          "kind": "four_axis",
+          "rotary": {
+            "name": "A",
+            "direction": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "min_deg": -99999.0,
+            "max_deg": 99999.0,
+            "on_table": true
+          }
+        },
+        "rotary_rapid_deg_min": 2300.0,
+        "rotary_capacity": [
+          80.0,
+          150.0
+        ]
+      }
+    }
+  ],
+  "kit": "makera_essential",
+  "sources": [
+    {
+      "fields": [
+        "work_area",
+        "gantry_clearance",
+        "spindle_rpm_max",
+        "spindle_power_w",
+        "max_feed",
+        "rapid_feed",
+        "tool_changer",
+        "collets",
+        "laser"
+      ],
+      "from": "Makera's published specifications for the Z1 (makera.com product and specification pages, retailer specification sheets) and the Carvera community documentation",
+      "checked": null
+    },
+    {
+      "fields": [
+        "kinematics",
+        "rotary_capacity",
+        "rotary_rapid_deg_min"
+      ],
+      "from": "Makera's published specifications for the Z1 4th-axis module",
+      "checked": null
+    }
+  ],
+  "notes": [
+    "Tools are changed by hand; the control pauses at each change."
+  ]
+}

@@ -28,6 +28,10 @@ fn block() -> Session {
     s
 }
 
+/// A machine with its limits set wide (a known machine that objects to nothing these tests do).
+static TEST_MILL: std::sync::LazyLock<Value> =
+    std::sync::LazyLock::new(|| json!({"name": "Test mill", "work_area": [600, 400, 200], "spindle_rpm_max": 24000}));
+
 fn add_flat(s: &mut Session, d: f64) -> u64 {
     let t = run(s, "cam.tool.add", json!({"name": format!("{d} mm flat"), "kind": "flat", "diameter": d, "flute_length": 20, "overall_length": 50}));
     t["id"].as_u64().unwrap()
@@ -103,7 +107,7 @@ fn block_is_faced_roughed_profiled_and_drilled() {
     let setup = run(
         &mut s,
         "cam.setup.create",
-        json!({"name": "Top", "stock": {"mode": "relative_box", "x_neg": 1, "x_pos": 1, "y_neg": 1, "y_pos": 1, "z_pos": 1}}),
+        json!({"name": "Top", "machine": TEST_MILL.clone(), "stock": {"mode": "relative_box", "x_neg": 1, "x_pos": 1, "y_neg": 1, "y_pos": 1, "z_pos": 1}}),
     )["id"]
         .as_u64()
         .unwrap();
@@ -172,7 +176,7 @@ fn block_is_faced_roughed_profiled_and_drilled() {
     assert!(sim["total"]["removed_volume_mm3"].as_f64().unwrap() > 1500.0, "{}", sim["notice"]);
     assert_eq!(sim["notice"]["status"], "ok", "{}", sim["notice"]);
     // Post: one program, two tools, canned peck cycle, ends with M30.
-    let post = run(&mut s, "cam.post", json!({"setup": setup}));
+    let post = run(&mut s, "cam.post", json!({"setup": setup, "allow_unknown_machine": true}));
     let g = post["gcode"].as_str().unwrap();
     assert!(g.contains("T1 M6") && g.contains("T2 M6"), "{}", &g[..600]);
     assert!(g.contains("G83"), "{}", &g[g.len() - 800..]);
@@ -219,7 +223,7 @@ fn rotary_part_posts_with_a_words() {
         assert!(m.get(5).is_some(), "tilted move without axis: {m}");
     }
     assert!(tp["stats"]["max_tilt_deg"].as_f64().unwrap() > 90.0);
-    let post = run(&mut s, "cam.post", json!({"setup": setup}));
+    let post = run(&mut s, "cam.post", json!({"setup": setup, "allow_unknown_machine": true}));
     assert_eq!(post["post"], "fiveaxis");
     let g = post["gcode"].as_str().unwrap();
     assert!(g.lines().any(|l| l.contains(" A") || l.starts_with('A')), "{}", &g[..800]);
@@ -231,7 +235,7 @@ fn rotary_part_posts_with_a_words() {
         }
     }
     // The 3-axis post refuses it with a clear message.
-    let e = fails(&mut s, "cam.post", json!({"setup": setup, "post": "generic"}));
+    let e = fails(&mut s, "cam.post", json!({"setup": setup, "post": "generic", "allow_unknown_machine": true}));
     assert!(e.contains("multi-axis post"), "{e}");
 }
 
@@ -239,7 +243,7 @@ fn rotary_part_posts_with_a_words() {
 fn swarf_and_indexed_orientation() {
     let mut s = block();
     let flat = add_flat(&mut s, 6.0);
-    let setup = run(&mut s, "cam.setup.create", json!({"name": "5x", "machine": "trunnion_ac"}))["id"].as_u64().unwrap();
+    let setup = run(&mut s, "cam.setup.create", json!({"name": "5x", "machine": {"preset": "trunnion_ac", "work_area": [500, 400, 300], "spindle_rpm_max": 20000}}))["id"].as_u64().unwrap();
     // Swarf along the block's front wall, which is vertical: the tool axis is z.
     let op = run(
         &mut s,
@@ -270,7 +274,7 @@ fn swarf_and_indexed_orientation() {
         let a = &m[5];
         assert!((a[1].as_f64().unwrap() + 1.0).abs() < 1e-9, "{m}");
     }
-    let post = run(&mut s, "cam.post", json!({"setup": setup}));
+    let post = run(&mut s, "cam.post", json!({"setup": setup, "allow_unknown_machine": true}));
     assert_eq!(post["notice"]["status"], "ok", "{}", post["notice"]);
     assert!(post["gcode"].as_str().unwrap().contains("A"));
 }
@@ -417,7 +421,7 @@ fn carvera_program_uses_the_kit_the_checks_and_the_makera_post() {
             assert_eq!(i["code"], "tool_diameter_mismatch", "{o}");
         }
     }
-    let post = run(&mut s, "cam.post", json!({}));
+    let post = run(&mut s, "cam.post", json!({"allow_unknown_machine": true}));
     assert_eq!(post["post"], "makera", "{post}");
     let code = post["gcode"].as_str().unwrap();
     assert!(code.contains("M6 T1") && code.contains("M6 T9") && !code.contains("G43") && !code.contains("G83"), "{}", &code[..400]);
@@ -526,7 +530,7 @@ fn every_operation_kind_has_a_command_and_the_new_kinds_cut() {
     assert!(zs.iter().all(|z| *z >= -1e-6 && *z <= 10.0 + 1e-6), "{zs:?}");
     assert!(zs.iter().filter(|z| (**z - 10.0).abs() < 1e-6).count() > zs.len() / 2, "mostly on the top face");
     // The makera post writes G84 as an expanded cycle and the generic one as a canned cycle.
-    let p = run(&mut s, "cam.post", json!({"post": "generic"}));
+    let p = run(&mut s, "cam.post", json!({"post": "generic", "allow_unknown_machine": true}));
     assert!(p["gcode"].as_str().unwrap().contains("G84"), "{}", &p["gcode"].as_str().unwrap()[..300]);
 }
 
@@ -570,7 +574,7 @@ fn laser_programs_post_in_makera_laser_mode() {
     // The stock simulation leaves laser work alone.
     let sim = run(&mut s, "cam.simulate", json!({}));
     assert_eq!(sim["notice"]["values"]["gouge_cells"], 0, "{}", sim["notice"]);
-    let post = run(&mut s, "cam.post", json!({}));
+    let post = run(&mut s, "cam.post", json!({"allow_unknown_machine": true}));
     let code = post["gcode"].as_str().unwrap();
     let on = code.find("\nM321\n").unwrap_or_else(|| panic!("{code}"));
     let off = code.find("\nM322\n").unwrap_or_else(|| panic!("{code}"));
@@ -636,7 +640,7 @@ fn turning_on_the_rotary_axis_faces_grooves_and_threads() {
     assert!(xs.iter().all(|x| *x >= -25.0 - 1e-6 && *x <= -10.0 + 1e-6));
     assert_ne!(by(&profile["id"])["status"], "error");
     // The makera post writes the turns as A words with the tool vertical.
-    let post = run(&mut s, "cam.post", json!({"setup": setup}));
+    let post = run(&mut s, "cam.post", json!({"setup": setup, "allow_unknown_machine": true}));
     assert_eq!(post["post"], "makera");
     let code = post["gcode"].as_str().unwrap();
     assert!(code.lines().filter(|l| l.contains(" A")).count() > 300, "{}", &code[..600]);
@@ -699,7 +703,7 @@ fn operations_are_parametric_steps_each_depending_on_the_ones_before() {
     let list = run(&mut s, "cam.operation.list", json!({}));
     assert_eq!(list["operations"][1]["generated"], false, "{list}");
     assert!(!super::cam::shown_toolpaths(&s).iter().any(|x| x.0 == rough), "its toolpath is no longer drawn");
-    let post = run(&mut s, "cam.post", json!({}));
+    let post = run(&mut s, "cam.post", json!({"allow_unknown_machine": true}));
     assert!(post["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "stale"), "{}", post["notice"]);
     let g = run(&mut s, "cam.generate", json!({}));
     assert_eq!((g["regenerated"].as_u64(), g["reused"].as_u64()), (Some(2), Some(1)), "{g}");
@@ -1036,4 +1040,148 @@ fn the_origin_goes_to_a_coordinate_a_point_of_the_stock_or_model_or_a_placed_poi
     assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": [1e9, 0, 0]})).contains("origin"));
     assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": [0, 0, 0], "origin_at": {}})).contains("not both"));
     assert!(fails(&mut s, "cam.setup.set", json!({"setup": id, "origin": "here"})).contains("coordinate"));
+}
+
+#[test]
+fn machines_are_files_a_design_can_add_to() {
+    let mut s = block();
+    // The shipped files: every machine with its documentation, Makera's among them.
+    let list = run(&mut s, "cam.machine.list", json!({}));
+    let carvera = list["machines"].as_array().unwrap().iter().find(|m| m["preset"] == "carvera").unwrap().clone();
+    assert_eq!((carvera["from"].as_str(), carvera["kit"].as_str()), (Some("shipped"), Some("makera_essential")), "{carvera}");
+    assert!(carvera["sources"][0]["from"].as_str().unwrap().contains("Makera"), "{carvera}");
+    let four = list["machines"].as_array().unwrap().iter().find(|m| m["preset"] == "carvera_4axis").unwrap();
+    assert_eq!((four["option_of"].as_str(), four["axes"].as_u64()), (Some("carvera"), Some(4)));
+    // A machine of the user's own: checked, kept with the design, named by a setup like any other.
+    let file = json!({
+        "format": "solidcraft-machine/1",
+        "id": "shop_router",
+        "aliases": ["router"],
+        "summary": "The shop's 600 × 400 router",
+        "machine": {"name": "Shop router", "work_area": [600, 400, 90], "spindle_rpm_max": 24000, "max_feed": 8000, "collets": [6, 8]},
+        "options": [{"id": "shop_router_4axis", "machine": {"name": "Shop router + A", "kinematics": {"kind": "four_axis", "rotary": {"name": "A", "direction": [1, 0, 0], "pivot": [0, 0, 0], "min_deg": -99999, "max_deg": 99999, "on_table": true}}}}],
+    });
+    let d = run(&mut s, "cam.machine.define", json!({"machine_file": file}));
+    assert_eq!(d["machines"], json!(["shop_router", "shop_router_4axis"]), "{d}");
+    assert!(d["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "no_sources"), "{d}");
+    let setup = run(&mut s, "cam.setup.create", json!({"machine": "router"}))["id"].as_u64().unwrap();
+    let st = s.doc.manufacture.setup(setup).unwrap();
+    assert_eq!((st.machine.name.as_str(), st.machine.work_area.x), ("Shop router", 600.0));
+    let list = run(&mut s, "cam.machine.list", json!({}));
+    assert!(list["machines"].as_array().unwrap().iter().any(|m| m["preset"] == "shop_router_4axis" && m["from"] == "design"));
+    // Saved with the design, and undone like any edit.
+    let saved = serde_json::to_value(&s.doc.manufacture).unwrap();
+    assert_eq!(saved["machines"][0]["id"], "shop_router");
+    // Bad files are refused with what is wrong, and leave the design as it was.
+    for bad in [
+        json!({"format": "solidcraft-machine/1", "id": "x", "machine": {"name": "x", "max_feed": -5}}),
+        json!({"format": "other", "id": "x", "machine": {"name": "x"}}),
+        json!({"format": "solidcraft-machine/1", "id": "Bad Id", "machine": {"name": "x"}}),
+        json!("not an object"),
+    ] {
+        assert!(!fails(&mut s, "cam.machine.define", json!({"machine_file": bad})).is_empty());
+    }
+    assert_eq!(s.doc.manufacture.machines.len(), 1);
+    assert!(fails(&mut s, "cam.setup.create", json!({"machine": "nowhere"})).contains("cam.machine.define"));
+}
+
+/// The benchmark part for the analysis: a 100 × 70 × 20 block with a closed 40 × 30 × 8 pocket
+/// holding a 10 × 10 island 6 mm high, a Ø6 through hole, a Ø5 blind hole 10 mm deep (an M6
+/// tap drill), an open 5 mm step along the back, and a T-slot closed at both ends (an undercut).
+fn benchmark_part() -> Session {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 100, "width": 70, "height": 20, "body_name": "Part"}));
+    let cut = |s: &mut Session, l: f64, w: f64, h: f64, at: [f64; 3]| {
+        run(s, "solid.box", json!({"length": l, "width": w, "height": h, "corner": at, "operation": "cut", "targets": ["Part"]}));
+    };
+    cut(&mut s, 40.0, 30.0, 8.0, [5.0, 5.0, 12.0]);
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 6, "corner": [20, 15, 12], "operation": "join", "targets": ["Part"]}));
+    run(&mut s, "solid.cylinder", json!({"diameter": 6, "height": 22, "base": [70, 15, -1], "operation": "cut", "targets": ["Part"]}));
+    run(&mut s, "solid.cylinder", json!({"diameter": 5, "height": 11, "base": [85, 15, 10], "operation": "cut", "targets": ["Part"]}));
+    cut(&mut s, 45.0, 20.0, 5.0, [55.0, 50.0, 15.0]);
+    // The T-slot: a 6 mm neck from the top, and a 14 mm wide slot under it, closed at both ends.
+    cut(&mut s, 30.0, 6.0, 10.0, [55.0, 35.0, 10.0]);
+    cut(&mut s, 30.0, 14.0, 4.0, [55.0, 31.0, 10.0]);
+    s
+}
+
+#[test]
+fn the_analysis_finds_the_features_their_access_and_the_machines_limits() {
+    let mut s = benchmark_part();
+    // No machine named: the analysis still reports, and says nothing was checked.
+    let a = run(&mut s, "cam.analyze", json!({}));
+    let codes = |a: &Value| -> Vec<String> { a["notice"]["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap().to_string()).collect() };
+    assert!(codes(&a).contains(&"machine_unknown".to_string()), "{}", a["notice"]);
+    let features = |a: &Value, kind: &str| -> Vec<Value> { a["features"].as_array().unwrap().iter().filter(|f| f["kind"] == kind).cloned().collect() };
+    // The pocket: 8 deep, its sharp corners reported.
+    let pockets = features(&a, "pocket");
+    let pocket = pockets.iter().find(|p| (p["values"]["depth_mm"].as_f64().unwrap() - 8.0).abs() < 1e-6).unwrap_or_else(|| panic!("{:#}", a["features"]));
+    assert!(pocket["values"]["sharp_inside_corners"].as_u64().unwrap() >= 4, "{pocket}");
+    assert!(pocket["values"]["largest_roughing_tool_mm"].as_f64().unwrap() > 5.0, "{pocket}");
+    assert!(codes(&a).contains(&"sharp_inside_corner".to_string()));
+    // The island in it, 6 high.
+    let islands = features(&a, "island");
+    assert!(islands.iter().any(|i| (i["values"]["height_mm"].as_f64().unwrap() - 6.0).abs() < 1e-6), "{:#}", a["features"]);
+    // The holes: one through, one blind with its tap.
+    let holes = features(&a, "hole");
+    assert!(holes.iter().any(|h| h["values"]["through"] == true && (h["values"]["diameter_mm"].as_f64().unwrap() - 6.0).abs() < 1e-3), "{holes:#?}");
+    let blind = holes.iter().find(|h| (h["values"]["diameter_mm"].as_f64().unwrap() - 5.0).abs() < 1e-3).unwrap_or_else(|| panic!("{holes:#?}"));
+    assert_eq!((blind["values"]["through"].as_bool(), blind["values"]["tap_drill_for"].as_str()), (Some(false), Some("M6")), "{blind}");
+    assert!((blind["values"]["depth_mm"].as_f64().unwrap() - 10.0).abs() < 1e-3, "{blind}");
+    // The open step at the back.
+    assert!(features(&a, "step").iter().any(|f| (f["values"]["depth_mm"].as_f64().unwrap() - 5.0).abs() < 1e-6), "{:#}", a["features"]);
+    // The T-slot's hidden faces: no straight tool reaches them.
+    assert!(!features(&a, "undercut").is_empty() && codes(&a).contains(&"undercut".to_string()), "{}", a["notice"]);
+    // From the top first; the top reaches most of the part.
+    // Everything a straight tool reaches, it reaches from the top: one setup, the flat bottom
+    // left as the stock's.
+    assert_eq!(a["directions"], json!(["+z"]), "{}", a["notice"]);
+    assert_eq!(a["notice"]["values"]["flat_bottom"], true);
+    assert!(!codes(&a).contains(&"needs_second_side".to_string()), "{}", a["notice"]);
+    // Judged against a Carvera: it fits, and nothing says the machine is unknown.
+    let a = run(&mut s, "cam.analyze", json!({"machine": "carvera"}));
+    assert!(!codes(&a).contains(&"machine_unknown".to_string()), "{}", a["notice"]);
+    assert_eq!(a["fit"]["fits"], true, "{}", a["fit"]);
+    assert_eq!(a["limits"]["tool_slots"], 6, "{}", a["limits"]);
+    assert!(a["limits"]["smallest_tool_mm"].as_f64().unwrap() <= 5.0 + 1e-6, "{}", a["limits"]);
+    // Too big for a Z1 when the stock is a large block.
+    run(&mut s, "cam.setup.create", json!({"machine": "z1", "stock": {"mode": "relative_box", "x_neg": 60, "x_pos": 60, "y_neg": 10, "y_pos": 10, "z_pos": 1}}));
+    let a = run(&mut s, "cam.analyze", json!({}));
+    assert!(codes(&a).contains(&"exceeds_work_area".to_string()), "{}", a["notice"]);
+    // Faces on request, each with its role and the directions that reach it.
+    let a = run(&mut s, "cam.analyze", json!({"faces": true}));
+    assert!(a["faces"].as_array().unwrap().iter().any(|f| f["role"] == "hole"));
+}
+
+#[test]
+fn a_machine_nobody_named_is_reported_and_its_program_refused() {
+    let mut s = block();
+    let flat = add_flat(&mut s, 6.0);
+    let st = run(&mut s, "cam.setup.create", json!({"name": "Top"}));
+    assert_eq!(st["machine"]["known"], false, "{st}");
+    assert_eq!(st["notice"]["issues"][0]["code"], "machine_unknown", "{st}");
+    run(&mut s, "cam.operation.face", json!({"tool": flat, "stepover": 4, "heights": {"bottom": {"from": "model_top", "offset": 0}}}));
+    run(&mut s, "cam.generate", json!({}));
+    let n = run(&mut s, "cam.notices", json!({}));
+    assert!(n.to_string().contains("machine_unknown"), "{n}");
+    let e = fails(&mut s, "cam.post", json!({}));
+    assert!(e.contains("machine_unknown") && e.contains("cam.machine.set"), "{e}");
+    let i = run(&mut s, "cam.inspect", json!({}));
+    assert!(i["attention"].to_string().contains("machine_unknown"), "{i}");
+    // Named, it is checked and posts.
+    let id = st["id"].as_u64().unwrap();
+    run(&mut s, "cam.machine.set", json!({"setup": id, "machine": "carvera"}));
+    run(&mut s, "cam.generate", json!({}));
+    let p = run(&mut s, "cam.post", json!({}));
+    assert!(!p["notice"].to_string().contains("machine_unknown"), "{}", p["notice"]);
+}
+
+#[test]
+fn a_pocket_in_the_bottom_asks_for_the_other_side() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 15, "body_name": "Part"}));
+    run(&mut s, "solid.box", json!({"length": 20, "width": 20, "height": 5, "corner": [20, 10, 0], "operation": "cut", "targets": ["Part"]}));
+    let a = run(&mut s, "cam.analyze", json!({"machine": "carvera"}));
+    assert_eq!(a["directions"], json!(["+z", "-z"]), "{}", a["notice"]);
+    assert!(a["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "needs_second_side" || i["code"] == "setups_needed"), "{}", a["notice"]);
 }

@@ -4,7 +4,8 @@
 //! word, and the toolpath is flagged `laser` so the stock simulation leaves it alone and the
 //! post enters the control's laser mode.
 
-use solidcraft_geom::{Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use super::two_d::raster_passes;
 use super::{Context, OpKind, Side};

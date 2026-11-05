@@ -3,7 +3,8 @@
 //! bottom and a top chain), multi-axis contour (surface-normal passes with lead and tilt) and
 //! flow (passes morphed between two rails, surface-normal).
 
-use solidcraft_geom::{Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use super::two_d::raster_passes;
 use super::{Context, Direction, OpKind, default_stepover, sample_segment, simplify3};

@@ -19,7 +19,9 @@ use solidcraft_cam::ops::{Context, OpKind, ResolvedGeometry};
 use solidcraft_cam::setup::{Geometry, Operation, Setup, Stock};
 use solidcraft_cam::tool::{Tool, ToolKind};
 use solidcraft_cam::toolpath::{MoveKind, Toolpath, ToolpathStats};
-use solidcraft_geom::{Aabb3, Mesh, Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
+use solidcraft_geom::{Aabb3, Mesh};
 
 use super::CommandSpec;
 use crate::{

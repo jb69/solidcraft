@@ -2,7 +2,8 @@
 //! inference for interactive tools.
 
 use serde_json::{Value, json};
-use solidcraft_geom::Vec2;
+use solidcore_record::Vec2;
+use solidcraft_geom::prelude::*;
 use solidcraft_sketch::{ConstraintKind, CurveKind, Sketch};
 
 use super::sketch::{add_c, constraint_result, dof_now, edit, listed, redundancy, residual_of};
@@ -31,7 +32,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("auto_constrain")
         .enabled(in_sketch)
         .params("tolerance?: mm (default 0.01), angle_tolerance?: deg (default 1), dimensions?: bool (default true): infer constraints, then dimension until fully constrained"),
-    CommandSpec::new("sketch.auto_constrain_from_datum", "AutoConstrain from datum", auto_constrain_datum)
+    CommandSpec::new("sketch.auto_constrain_from_datum", "AutoConstrain from Datum", auto_constrain_datum)
         .at("SKETCH", "CONSTRAINTS")
         .icon("auto_constrain")
         .enabled(in_sketch)

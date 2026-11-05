@@ -3,7 +3,9 @@
 //! material. Also the marching-squares extraction of level contours, which gives waterlines.
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Aabb2, Vec2};
+use solidcore_record::Vec2;
+use solidcraft_geom::Aabb2;
+use solidcraft_geom::prelude::*;
 
 use crate::polyline::{self, Poly};
 use crate::{CamError, MAX_CELLS, Result};

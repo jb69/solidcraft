@@ -5,7 +5,8 @@
 //! ([`crate::machine::post_kinematics`]) to get the rotary words.
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
+use solidcraft_geom::prelude::*;
 
 use crate::machine::{Kinematics, Machine, post_kinematics};
 use crate::notice::{Issue, Notice, r3};

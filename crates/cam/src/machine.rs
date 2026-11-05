@@ -4,7 +4,8 @@
 //! for controls without tool-centre-point control.
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
+use solidcraft_geom::prelude::*;
 
 use crate::frame::rotate;
 use crate::toolpath::{Move, Toolpath};

@@ -2,7 +2,9 @@
 //! 2.5D toolpaths need: area and orientation, containment, scanline clipping, segment tests,
 //! simplification and a grid for nearest-segment distance queries.
 
-use solidcraft_geom::{Aabb2, Vec2};
+use solidcore_record::Vec2;
+use solidcraft_geom::Aabb2;
+use solidcraft_geom::prelude::*;
 
 /// A closed polygon: consecutive points are edges and the last point joins the first.
 pub type Poly = Vec<Vec2>;

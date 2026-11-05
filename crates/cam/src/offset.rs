@@ -11,7 +11,8 @@
 //! "offset, intersect, prune by distance" scheme, which handles self-intersections, merging and
 //! splitting without a general polygon clipper.
 
-use solidcraft_geom::Vec2;
+use solidcore_record::Vec2;
+use solidcraft_geom::prelude::*;
 
 use crate::polyline::{self, MinMaxPt, Poly, SegmentGrid, arc_segments};
 use crate::{CamError, Result};

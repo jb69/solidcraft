@@ -4,7 +4,9 @@
 //! material. Multi-axis moves are checked for shank and holder collisions against the model.
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Aabb2, Mesh, Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::{Aabb2, Mesh};
+use solidcraft_geom::prelude::*;
 
 use crate::dropcutter::DropMesh;
 use crate::heightmap::HeightMap;

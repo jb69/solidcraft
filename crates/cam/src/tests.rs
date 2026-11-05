@@ -1,6 +1,8 @@
 //! Tests of the CAM algorithms against analytic values.
 
-use solidcraft_geom::{Aabb3, Mesh, Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::{Aabb3, Mesh};
+use solidcraft_geom::prelude::*;
 
 use crate::dropcutter::DropMesh;
 use crate::frame::Frame;

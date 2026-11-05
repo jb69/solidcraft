@@ -119,8 +119,8 @@ pub struct OriginForm {
     before: Option<Vec<solidcraft_engine::Sel>>,
     hover: Option<(solidcraft_engine::Sel, Option<crate::dialogs_assembly::SnapPt>)>,
     /// The snap under the pointer (of the model or the stock), and the one a click chose.
-    current: Option<solidcraft_engine::geom::Vec3>,
-    chosen: Option<solidcraft_engine::geom::Vec3>,
+    current: Option<solidcore_record::Vec3>,
+    chosen: Option<solidcore_record::Vec3>,
 }
 
 /// The text typed in each field (by the parameter's path), so a value half typed survives the
@@ -1290,7 +1290,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, proj: &crate::viewpo
         }
         let model = ed.origin.hover.as_ref().and_then(|h| h.1.clone());
         let on_stock = pointer.zip(stock.as_ref()).and_then(|(p, (shape, wcs))| nearest_stock_point(proj, shape, wcs, p, 14.0));
-        let dist = |a: solidcraft_engine::geom::Vec3| pointer.zip(proj.to_screen(a)).map_or(f32::INFINITY, |(p, q)| p.distance(q));
+        let dist = |a: solidcore_record::Vec3| pointer.zip(proj.to_screen(a)).map_or(f32::INFINITY, |(p, q)| p.distance(q));
         let pick: Option<(SnapPt, &str)> = match (model, on_stock) {
             (Some(m), Some(s)) if dist(s.0.at) < dist(m.at) => Some(s),
             (Some(m), _) => {
@@ -1313,7 +1313,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, proj: &crate::viewpo
 /// The stock's outline (in the text colour, apart from the toolpaths' accent): a box's twelve
 /// edges, or a cylinder's end circles and four lines.
 fn draw_stock(painter: &egui::Painter, proj: &crate::viewport::Proj, shape: &cam::setup::StockShape, wcs: &cam::frame::Frame, col: egui::Color32) {
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     let stroke = egui::Stroke::new(1.5, col.gamma_multiply(0.85));
     let line = |a: Vec3, b: Vec3| {
         if let (Some(p), Some(q)) = (proj.to_screen(wcs.to_world(a)), proj.to_screen(wcs.to_world(b))) {
@@ -1359,7 +1359,7 @@ fn nearest_stock_point(
     reach: f32,
 ) -> Option<(crate::dialogs_assembly::SnapPt, &'static str)> {
     use crate::dialogs_assembly::{SnapKind, SnapPt};
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     let mut pts: Vec<(Vec3, SnapKind, &'static str)> = Vec::new();
     match *shape {
         cam::setup::StockShape::Box { min, max } => {

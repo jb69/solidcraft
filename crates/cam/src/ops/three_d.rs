@@ -2,7 +2,9 @@
 //! parallel, waterline, scallop, pencil, spiral, radial, morphed spiral, project, horizontal
 //! and steep-and-shallow finishing. With an operation orientation they run as 3+2 work.
 
-use solidcraft_geom::{Aabb2, Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::Aabb2;
+use solidcraft_geom::prelude::*;
 
 use super::two_d::{adaptive_level, pocket_level, raster_passes, round_corners};
 use super::{Context, Direction, OpKind, default_stepover, levels, sample_segment, simplify3};

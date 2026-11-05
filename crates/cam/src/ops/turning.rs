@@ -7,7 +7,7 @@
 //! kinematics turns a point at angle `theta` around the axis into an A angle and a vertical
 //! tool. A thread is a helix: the part turns while the tool advances one pitch a turn.
 
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 
 use super::multi_axis::radial_frame;
 use super::{Context, OpKind, levels};

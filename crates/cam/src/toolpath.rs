@@ -3,7 +3,8 @@
 //! move has axis `(0, 0, 1)`.
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
+use solidcraft_geom::prelude::*;
 
 use crate::{CamError, MAX_MOVES, Result};
 

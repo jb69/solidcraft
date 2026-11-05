@@ -245,6 +245,18 @@ Editable drawing code, native projects and shipped exports are collected under `
 | assets/icons/ui/design/svg/flat/plus.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/flat/pan.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/flat/perspective.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_appearance.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_assistant.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_design.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_general.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_graphics.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_layout.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_mouse3d.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_navigation.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_plugins.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_shortcuts.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_sketch.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/prefs_tools.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/flat/redo.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/flat/save.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/flat/settings.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
@@ -305,7 +317,6 @@ Editable drawing code, native projects and shipped exports are collected under `
 | assets/icons/ui/design/svg/model/circle_ttt.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/coil.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/colored_components.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
-| assets/icons/ui/design/svg/model/colored_components_off.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/combine.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/component.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 
@@ -773,6 +784,23 @@ Original SolidCraft drawings, Open for owner review; no runtime assignments.
 | `assets/locales/pending/sketch-offset-instances.json` | SolidCraft contributors | Original offset instance-count label and translations | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/flat/settings_profile.svg | SolidCraft contributors | single-colour application/navigation icon master (64 grid), original analytic head and shoulder geometry for settings profiles | MIT OR Apache-2.0 |
 | tests/kernel-cases/import/4561-convert-box-mesh-with-a-zero-area-triangle/box-degenerate.stl | SolidCraft contributors | synthetic ASCII STL written by hand: a box with one zero-area triangle, for the kernel regression case of tangency-labs/solidcraft#4561 | MIT OR Apache-2.0 |
+| assets/locales/pending/theme-blur-ui.json | SolidCraft contributors | Original blur controls, notices and translations | MIT OR Apache-2.0 |
+| crates/ui-egui/tests/fixtures/theme-blur.json | SolidCraft contributors | Original theme for blur option scenarios and manager review | MIT OR Apache-2.0 |
+| assets/locales/ka.json | David Machakhelidze (devius) | Original Georgian translation of SolidCraft's English catalog, written with Claude Code from the meaning of each English string; terminology and doubtful strings decided by a native Georgian speaker; no commercial CAD text used | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-mark.svg | SolidCraft contributors | static SolidCraft mark: the five faces and gradients of assets/icons/app/macos/source/SolidCraft.icon/Assets/03-solid-blue-cutout.svg (the final frame of assets/styles/web/loading-logo.svg), cropped to the mark's bounds; original artwork | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-mark-mono-black.svg | SolidCraft contributors | one-colour (black) version of assets/branding/logo/solidcraft-mark.svg, same paths; original artwork | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-mark-mono-white.svg | SolidCraft contributors | one-colour (white) version of assets/branding/logo/solidcraft-mark.svg, same paths; original artwork | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-mark-512.png | SolidCraft contributors | transparent 512 px render of assets/branding/logo/solidcraft-mark.svg (cairosvg); original artwork | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-mark-1024.png | SolidCraft contributors | transparent 1024 px render of assets/branding/logo/solidcraft-mark.svg (cairosvg); original artwork | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-mark-2048.png | SolidCraft contributors | transparent 2048 px render of assets/branding/logo/solidcraft-mark.svg (cairosvg); original artwork | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-wordmark.svg | SolidCraft contributors | the name SolidCraft set like the loading logo's wordmark (bold, +0.02 em tracking, #15499e) in IBM Plex Sans Bold from assets/fonts/ibm-plex-sans (SIL OFL 1.1, IBM Corp.), outlined to paths; no font file is embedded | MIT OR Apache-2.0 |
+| assets/branding/logo/solidcraft-lockup-horizontal.svg | SolidCraft contributors | assets/branding/logo/solidcraft-mark.svg beside assets/branding/logo/solidcraft-wordmark.svg, in the proportions of assets/branding/web/source/og.png; original artwork | MIT OR Apache-2.0 |
+| assets/styles/ui/themes/onyx.json | SolidCraft contributors | original Onyx stone-grey palette, option overlays and semantic icon-role mapping; existing SolidCraft artwork is unchanged | MIT OR Apache-2.0 |
+| docs/book/src/media/ui-tour/window.png | SolidCraft contributors | screenshot of SolidCraft 0.29.0 itself (`solidcraft --sample`, default dark theme, software renderer, 1280x800) with original numbered callouts (digits set in DejaVu Sans Bold), captured with examples/demo/doc_shots.py | MIT OR Apache-2.0 |
+| docs/book/src/media/ui-tour/navigate.mp4 | SolidCraft contributors | original screen recording of the actual SolidCraft 0.29.0 English desktop UI (`--sample`, default dark theme, software renderer) orbiting, panning and zooming, with the original drawn pointer of examples/demo/overlay.py and labels set in DejaVu Sans Bold, captured with examples/demo/doc_shots.py | MIT OR Apache-2.0 |
+| assets/locales/pending/sketch-tool-hints.json | carlymx | Original sketch tool hints and engine error translations | MIT OR Apache-2.0 |
+| assets/locales/pending/primitive-pick-field-tips.json | SolidCraft contributors | Original primitive pick-field tooltip translations | MIT OR Apache-2.0 |
+| assets/locales/pending/ribbon-panel-hover.json | SolidCraft contributors | Original ribbon panel menu preference labels and translations | MIT OR Apache-2.0 |
 
 ## Code adapted from sibling projects
 
@@ -812,10 +840,19 @@ in THIRD-PARTY-LICENSES.txt; no images or artwork from that project are copied.
 The glTF test files are built by the tests themselves (crates/io/src/gltf_in_tests.rs,
 crates/engine/src/tests/gltf_import.rs); no third-party models are committed.
 
+## Geometry kernel crates
+
+| Crate | Used for | Licence |
+|---|---|---|
+| solidcore (https://github.com/tangency-labs/solidcore, pinned by rev in Cargo.toml) | the Rust port of NVIDIA's SMLib: the B-rep kernel behind crates/smlib | Apache-2.0 (its NOTICE credits NVIDIA's USD BRep) |
+
+Linked as a crate; no code from it is copied into SolidCraft. Its licence text and NOTICE go
+into THIRD-PARTY-LICENSES.txt when `main` regenerates it.
+
 ## FreeCAD and Rhino import library
 
 FreeCAD `.FCStd` and Rhino `.3dm` files are read with [cadmpeg](https://github.com/cadmpeg/cadmpeg)
-0.6.3 (Apache-2.0), linked as the crates `cadmpeg-core`, `cadmpeg-ir`, `cadmpeg-registry`,
+0.6.7 (Apache-2.0), linked as the crates `cadmpeg-core`, `cadmpeg-ir`, `cadmpeg-registry`,
 `cadmpeg-container`, `cadmpeg-codec-freecad`, `cadmpeg-codec-rhino` and `cadmpeg-codec-step`
 in native and browser builds (`crates/io/src/native_cad.rs`). Only those open-format codecs are built: no
 default features, so cadmpeg's codecs for commercial CAD formats and its ShapeManager/ACIS
@@ -827,6 +864,7 @@ copied into SolidCraft.
 | SolidCraft file | Original contribution | Licence |
 |---|---|---|
 | crates/ui-egui/src/viewport.rs (`nearest_quarter_turn`, `axis_view_orbit`) | N3MI-DG's [PR #101](https://github.com/bherbruck/solidcraft/pull/101): [minimal TOP/BOTTOM turns](https://github.com/bherbruck/solidcraft/commit/c28e780f52490784ef5886f094b9d3f6d10c3e3f) and [drag-to-orbit](https://github.com/bherbruck/solidcraft/commit/f30b30be6ecc4e2e6544a851243137c01a354934), adapted to the axis gizmo | MIT OR Apache-2.0 |
+| crates/smlib/src/core/offset.rs (`draft`: the tilted planes and `SmBrep::LocalOperation`, the tail of the capi's `draft_faces`) | ablasik's `draft` in `crates/smlib/src/ffi/rs_ops2.rs` on [ablasik/solidcraft `app/solidcore-backend-on-develop`](https://github.com/ablasik/solidcraft/blob/9c7e8e31565e1823f0591b58e2967351c32af13f/crates/smlib/src/ffi/rs_ops2.rs), adapted to `core::offset`'s errors and checks | MIT OR Apache-2.0 |
 
 ## Vendored third-party code
 

@@ -23,7 +23,9 @@
 use std::cell::OnceCell;
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Aabb2, Vec2};
+use solidcore_record::Vec2;
+use solidcraft_geom::Aabb2;
+use solidcraft_geom::prelude::*;
 
 use crate::dropcutter::DropMesh;
 use crate::heightmap::HeightMap;

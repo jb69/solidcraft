@@ -10,9 +10,11 @@
 //! lines and circular arcs are recovered exactly, the rest (an ellipse from a tilted circle,
 //! a spline edge running out of the plane) becomes a chain of lines.
 
+use solidcraft_geom::prelude::*;
 use std::collections::BTreeMap;
 
-use solidcraft_geom::{Mesh, Plane, Seg2, Vec2, Vec3};
+use solidcore_record::{Plane, Seg2, Vec2, Vec3};
+use solidcraft_geom::Mesh;
 use solidcraft_sketch::{CurveKind, LinkGeom, LinkKind, LinkSource, Sketch, WireCurve};
 
 use crate::eval::ModelState;
@@ -363,7 +365,7 @@ fn edge_curves(body: Option<&crate::ModelBody>, e: usize) -> Vec<WireCurve> {
     record
         .edges
         .get(e)
-        .filter(|edge| !matches!(edge.curve, solidcraft_geom::brep::Curve::SurfaceIntersection { .. }))
+        .filter(|edge| !matches!(edge.curve, solidcore_record::brep::Curve::SurfaceIntersection { .. }))
         .map(|edge| vec![WireCurve { curve: edge.parameters().clone(), interval: edge.interval }])
         .unwrap_or_default()
 }
@@ -394,9 +396,9 @@ fn projected_wires(
 /// in front of it.
 fn first_hits(
     target: &crate::ModelBody,
-    curves: Vec<(solidcraft_geom::brep::Curve, [f64; 2])>,
+    curves: Vec<(solidcore_record::brep::Curve, [f64; 2])>,
     toward: Vec3,
-) -> Result<Vec<(solidcraft_geom::brep::Curve, [f64; 2])>> {
+) -> Result<Vec<(solidcore_record::brep::Curve, [f64; 2])>> {
     let Some(dir) = toward.normalized() else { return Ok(curves) };
     let mesh = target.mesh();
     let reach = 2.0 * mesh.bounds().diagonal().max(1e-9);
@@ -418,7 +420,7 @@ fn first_hits(
 /// direction they come (a projection split at a sphere's pole into two pieces that both end there
 /// joins again there, the second run the other way), each wire its points (for display) and its
 /// exact curves.
-fn joined_wires(curves: Vec<(solidcraft_geom::brep::Curve, [f64; 2])>, tol: f64) -> Result<(Vec<Vec<Vec3>>, Vec<Vec<WireCurve>>)> {
+fn joined_wires(curves: Vec<(solidcore_record::brep::Curve, [f64; 2])>, tol: f64) -> Result<(Vec<Vec<Vec3>>, Vec<Vec<WireCurve>>)> {
     let (mut wires, mut exact): (Vec<Vec<Vec3>>, Vec<Vec<WireCurve>>) = (Vec::new(), Vec::new());
     for (curve, interval) in curves {
         let pts = crate::kernel::PathPiece::Segs(crate::kernel::curve_path(&curve, interval)?).points();
@@ -466,7 +468,7 @@ fn joined_wires(curves: Vec<(solidcraft_geom::brep::Curve, [f64; 2])>, tol: f64)
 /// own knots (a line's `1 - t`, a circle's or ellipse's angle negated with its y axis turned).
 /// Exact; `None` for a curve kind it doesn't turn.
 fn reversed(c: &WireCurve) -> Option<WireCurve> {
-    use solidcraft_geom::brep::{Curve, Frame};
+    use solidcore_record::brep::{Curve, Frame};
     let [t0, t1] = c.interval;
     let flip = |frame: &Frame| Frame { origin: frame.origin, x_axis: frame.x_axis, y_axis: frame.y_axis.map(|v| -v) };
     let (curve, interval) = match &c.curve {
@@ -1032,8 +1034,16 @@ fn refresh_links_in(
         if !l.auto_face
             && let (Some(name), LinkSource::Face { body, at }) = (&l.face_name, &mut source)
         {
-            let (index, p) =
-                st.body(body).and_then(|target| crate::naming::face_on_body(target, name, *at)).ok_or_else(|| DocError::reselect(name.as_str()))?;
+            let (index, p) = st
+                .body(body)
+                .and_then(|target| {
+                    if l.kind == LinkKind::Project {
+                        crate::name_lookup::locate_projected_face(target, name, *at)
+                    } else {
+                        crate::naming::face_on_body(target, name, *at)
+                    }
+                })
+                .ok_or_else(|| DocError::reselect(name.as_str()))?;
             *at = p;
             named_face = Some((body.clone(), index, p));
         }
@@ -1609,7 +1619,36 @@ pub(crate) fn section(plane: &Plane, m: &Mesh, face: Option<u32>) -> Vec<LinkGeo
     // where they are) are kept when they take no more curves than the loose fit.
     let close = refine(fit_segments(&segs, size, true));
     let plain = |v: &[LinkGeom]| v.iter().all(|g| matches!(g, LinkGeom::Line(..) | LinkGeom::Arc { .. } | LinkGeom::Circle(..)));
-    if plain(&close) && close.len() <= lossy.len() { close } else { lossy }
+    // A loose fit with fewer curves can still be wrong: short faces beside a small round (2 mm
+    // walls each side of an R2 corner) fit within its tolerance as one larger arc. The exact
+    // crossings (on planes and rulings) show it: one of them off every curve of the fit.
+    // Any other curve counts as near, and past a work limit nothing is checked: the loose fit
+    // stands, as before.
+    let tight = size * 1e-4;
+    let checkable = exact.len().saturating_mul(close.len()) <= 4_000_000;
+    let strays = |v: &[LinkGeom]| exact.iter().any(|p| !v.iter().any(|g| plain_distance(g, *p).is_none_or(|d| d <= tight)));
+    if plain(&close) && (close.len() <= lossy.len() || (checkable && strays(&lossy) && !strays(&close))) { close } else { lossy }
+}
+
+/// How far `p` lies from a line, arc or circle; None for any other curve.
+fn plain_distance(g: &LinkGeom, p: Vec2) -> Option<f64> {
+    match *g {
+        LinkGeom::Line(a, b) => {
+            let d = b - a;
+            let t = if d.len2() > 0.0 { ((p - a).dot(d) / d.len2()).clamp(0.0, 1.0) } else { 0.0 };
+            Some(p.dist(a.lerp(b, t)))
+        }
+        LinkGeom::Circle(c, r) => Some((p.dist(c) - r).abs()),
+        LinkGeom::Arc { c, a, b } => {
+            let (s0, sw) = ((a - c).angle(), ((b - c).angle() - (a - c).angle()).rem_euclid(std::f64::consts::TAU));
+            if ((p - c).angle() - s0).rem_euclid(std::f64::consts::TAU) <= sw + 1e-9 {
+                Some((p.dist(c) - c.dist(a)).abs())
+            } else {
+                Some(p.dist(a).min(p.dist(b)))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The segments where the plane crosses the mesh's triangles (in plane coordinates, each with

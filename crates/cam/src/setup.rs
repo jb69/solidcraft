@@ -4,7 +4,9 @@
 //! from it by [`crate::ops`].
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Aabb3, Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::Aabb3;
+use solidcraft_geom::prelude::*;
 
 use crate::frame::Frame;
 use crate::linking::{Heights, Linking};

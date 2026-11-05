@@ -800,7 +800,7 @@ fn toolpaths_show_and_hide_on_the_workpiece() {
     // The simulation draws each operation's path only while its eye is on.
     run(&mut s, "cam.simulate.show", json!({"progress": 0.5}));
     let preview = s.cam.preview.clone().unwrap();
-    let ops_in = |lines: &[(u64, Vec<solidcraft_geom::Vec3>)]| lines.iter().map(|(op, _)| *op).collect::<std::collections::BTreeSet<_>>();
+    let ops_in = |lines: &[(u64, Vec<solidcore_record::Vec3>)]| lines.iter().map(|(op, _)| *op).collect::<std::collections::BTreeSet<_>>();
     let mut all_ops = ops_in(&preview.path_done);
     all_ops.extend(ops_in(&preview.path_todo));
     assert_eq!(all_ops, [a, b].into_iter().collect(), "both operations have simulation paths");
@@ -1006,7 +1006,8 @@ fn area_operations_machine_within_a_boundary_chosen_for_them() {
 
 #[test]
 fn the_origin_goes_to_a_coordinate_a_point_of_the_stock_or_model_or_a_placed_point() {
-    use solidcraft_geom::Vec3;
+    use solidcore_record::Vec3;
+    use solidcraft_geom::prelude::*;
     let mut s = block();
     add_flat(&mut s, 6.0);
     let id = run(&mut s, "cam.setup.create", json!({"name": "Top"}))["id"].as_u64().unwrap();

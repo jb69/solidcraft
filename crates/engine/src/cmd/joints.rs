@@ -3,13 +3,15 @@
 //! joint graph and moves the occurrences it places; the session re-solves after any edit too,
 //! so joints follow the geometry their origins snap to.
 
+use solidcraft_geom::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
+use solidcore_record::Vec3;
 use solidcraft_doc::expr::{self, Kind};
 use solidcraft_doc::joints::cam::{self, Cam, CamProfile, Follower};
 use solidcraft_doc::joints::{self, Coupling, Joint, JointExprs, JointKind, JointOrigin, MotionLink, NamedOrigin, Size, Snap, XRef};
-use solidcraft_geom::{Aabb3, Vec3};
+use solidcraft_geom::Aabb3;
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, num, str_, vec3};
@@ -496,7 +498,7 @@ fn same_frame(s: &Session, o: &JointOrigin, at: Vec3, z: Vec3) -> bool {
 const MAX_FACE_NAME: usize = 16_384;
 
 /// The component an occurrence places (0 for the root, or an unknown occurrence).
-fn component_of(s: &Session, occurrence: u64) -> u64 {
+pub(crate) fn component_of(s: &Session, occurrence: u64) -> u64 {
     if occurrence == 0 { 0 } else { s.doc.occurrences.iter().find(|o| o.id == occurrence).map_or(0, |o| o.component) }
 }
 
@@ -618,12 +620,13 @@ pub(crate) fn joint_id(s: &Session, v: Option<&Value>, cmd: &str) -> Result<u64>
 /// A joint value: numbers are degrees for angles and mm for distances; text is an expression.
 pub(crate) fn value(s: &Session, v: &Value, angle: bool, cmd: &str) -> Result<f64> {
     let kind = if angle { Kind::Angle } else { Kind::Length };
+    // A number out of range says so, rather than that it is not a number (#9625).
     let e = match v {
         Value::Number(n) => n.as_f64().filter(|x| x.is_finite() && x.abs() < 1e9).map(|x| x.to_string()),
         Value::String(t) => Some(t.clone()),
         _ => None,
     }
-    .ok_or_else(|| bad(cmd, "values must be numbers or expressions"))?;
+    .ok_or_else(|| bad(cmd, format!("a joint value {}", crate::params::expr_problem(Some(v)))))?;
     s.doc.eval(&e, kind).map_err(|e| bad(cmd, e.to_string()))
 }
 

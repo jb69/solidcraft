@@ -3,8 +3,9 @@
 use crate::test_support::sample_app;
 use egui::pos2;
 use serde_json::json;
+use solidcore_record::Vec3;
 use solidcraft_engine::Session;
-use solidcraft_engine::geom::Vec3;
+use solidcraft_engine::geom::prelude::*;
 
 use crate::context_menu::{self, Item, Target};
 use crate::viewport::Hit;
@@ -38,9 +39,9 @@ fn find(items: &[Item], label: &str) -> Item {
         .unwrap_or_else(|| panic!("no `{label}` in {:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>()))
 }
 
-/// Run the item labelled `label` of the target's menu.
+/// Run the item labelled `label` of the target's menu or one of its flyouts.
 fn act(app: &mut SolveApp, t: &Target, label: &str) {
-    let item = find(&context_menu::items(app, t), label);
+    let item = find(&context_menu::entries(app, t), label);
     context_menu::run_item(app, &item, pos2(0.0, 0.0));
 }
 
@@ -468,6 +469,17 @@ fn component_menu_activates_grounds_and_pastes() {
     let t = Target::Component { id: c };
     act(&mut app, &t, "Activate");
     assert_eq!(app.session.active_component, c);
+    let rows = context_menu::items(&app, &t);
+    let ids: Vec<_> = rows.iter().map(|i| i.id.as_str()).collect();
+    let movement = ids.iter().position(|id| *id == "ui.moveOccurrence").expect("Move/Copy stays on the menu");
+    assert_eq!(ids.get(movement + 1), Some(&"ui.group.placement"), "Placement follows Move/Copy");
+    assert!(find(&rows, "Placement").children.iter().any(|i| i.id == "occurrence.ground"), "Ground sits in the Placement flyout");
+    let own: Vec<_> = find(&rows, "Component").children.iter().map(|i| i.id.clone()).collect();
+    for id in ["ui.rename", "ui.appearance", "ui.material", "component.cycle_color", "component.create", "ui.properties"] {
+        assert!(own.iter().any(|o| o == id) && !ids.contains(&id), "{id} sits in the Component flyout only");
+    }
+    assert!(find(&rows, "Organize").children.iter().any(|i| i.id == "ui.newGroup"), "New Group sits with the browser tree's entries");
+    assert!(ids.contains(&"ui.pasteNew"), "Paste New stays with the clipboard");
     // The design's first part comes in grounded (#2804); the menu frees it and grounds it again.
     assert!(app.session.doc.occurrence_of(c).unwrap().grounded);
     act(&mut app, &t, "Unground");
@@ -483,7 +495,7 @@ fn component_menu_activates_grounds_and_pastes() {
     act(&mut app, &placement, "Copy");
     assert_eq!(app.copied_placements.len(), 1, "{:?}", app.status);
     let design = Target::Component { id: 0 };
-    assert!(find(&context_menu::items(&app, &design), "Paste New").enabled);
+    assert!(find(&context_menu::entries(&app, &design), "Paste New").enabled);
     act(&mut app, &design, "Paste New");
     assert_eq!(app.session.doc.components.len(), 2);
 }
@@ -612,7 +624,7 @@ fn expand_and_collapse_all_open_the_browser_tree_from_the_design_menu() {
     let mut app = sample_app();
     let n = app.session.undo.len();
     let root = Target::Component { id: 0 };
-    assert!(context_menu::items(&app, &root).iter().any(|i| i.label == "Expand All" && i.id == "browser.expand_all"));
+    assert!(context_menu::entries(&app, &root).iter().any(|i| i.label == "Expand All" && i.id == "browser.expand_all"));
     act(&mut app, &root, "Collapse All");
     assert!(app.tree.collapsed.contains("c0/bodies"), "{:?}", app.tree.collapsed);
     assert!(!app.tree.collapsed.contains("c0"), "the design row stays open: {:?}", app.tree.collapsed);
@@ -793,7 +805,7 @@ fn menu_delete_items_use_the_same_path() {
     let plate = restored.body(&b).unwrap();
     assert_eq!(plate.component, 0);
     assert!((solidcraft_engine::kernel::measure(&plate.body).unwrap().volume - original_volume).abs() < 1e-6);
-    assert!(plate.mesh().contains(solidcraft_engine::geom::Vec3::new(40.0, 35.0, 12.0)));
+    assert!(plate.mesh().contains(solidcore_record::Vec3::new(40.0, 35.0, 12.0)));
     let mut reopened = solidcraft_engine::Session::new(solidcraft_engine::doc::Document::from_json(&app.session.doc.to_json()).unwrap());
     reopened.refresh();
     let reopened_state = reopened.world_state().unwrap();
@@ -1081,7 +1093,7 @@ fn rename_shows_f2_and_f2_with_a_menu_open_renames_what_the_menu_is_for() {
     let data = solidcraft_engine::doc::canvas::base64_encode(&png);
     let canvas = h.app.run("canvas.insert", json!({"data": data, "plane": "XY", "width": 80})).unwrap()["canvas"].as_u64().unwrap();
     let rename_key = |app: &SolveApp, target: &Target| {
-        context_menu::items(app, target)
+        context_menu::entries(app, target)
             .into_iter()
             .find(|i| i.id == "ui.rename")
             .map(|i| i.shortcut)
@@ -1176,14 +1188,14 @@ fn occurrence_moves_turn_about_their_origin_then_move() {
     let occ = app.session.doc.occurrences[0].id;
     app.run("occurrence.ground", json!({"occurrence": occ, "grounded": false})).unwrap();
     let mut m = crate::browser::OccMove::new(occ);
-    m.pivot = Some(solidcraft_engine::geom::Vec3::new(5.0, 0.0, 0.0));
+    m.pivot = Some(solidcore_record::Vec3::new(5.0, 0.0, 0.0));
     m.translate = [10.0, 0.0, 0.0];
     m.angles = [0.0, 0.0, 90.0];
     crate::browser::apply_occurrence_move(&mut app, &m);
     let t = *app.session.pending_moves.get(&occ).unwrap();
     // The pivot lands 10 mm along X; X turns into Y.
-    let p = solidcraft_engine::doc::apply_point(&t, solidcraft_engine::geom::Vec3::new(5.0, 0.0, 0.0));
-    let x = solidcraft_engine::doc::apply_vector(&t, solidcraft_engine::geom::Vec3::X);
+    let p = solidcraft_engine::doc::apply_point(&t, solidcore_record::Vec3::new(5.0, 0.0, 0.0));
+    let x = solidcraft_engine::doc::apply_vector(&t, solidcore_record::Vec3::X);
     assert!((p.x - 15.0).abs() < 1e-9 && p.y.abs() < 1e-9, "{p:?}");
     assert!((x.y - 1.0).abs() < 1e-9, "{x:?}");
     // Changing the values again starts from where it was, not from the last move.
@@ -1288,7 +1300,7 @@ fn construction_plane_row_opens_its_menu() {
 /// starts the sketch on that plane.
 #[test]
 fn right_click_on_a_plane_offers_a_sketch_on_it() {
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     let normal = |h: &crate::scenario::Harness| h.app.session.world_state().unwrap().sketches.first().map(|s| s.plane.normal()).unwrap_or_default();
     for (plane, axis) in [("XY", Vec3::Z), ("XZ", Vec3::Y), ("YZ", Vec3::X)] {
         let mut h = crate::scenario::Harness::new();
@@ -1390,7 +1402,7 @@ fn empty_space_leads_with_create_sketch() {
 /// Create Sketch from a right-click on empty space sketches on the next plane clicked (#3032).
 #[test]
 fn create_sketch_from_empty_space_sketches_on_the_plane_clicked_next() {
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     let mut h = crate::scenario::Harness::new();
     h.app.home.open = false;
     h.settle();
@@ -1482,7 +1494,8 @@ fn typing_a_new_body_name_and_enter_renames_it() {
 
 #[test]
 fn contribution_picked_faces_open_their_own_feature_after_later_modifiers() {
-    use solidcraft_engine::{Sel, geom::Vec3};
+    use solidcore_record::Vec3;
+    use solidcraft_engine::Sel;
     for expected in [1, 2, 3] {
         let mut app = SolveApp::new(Session::default(), Services::default());
         app.run("solid.box", json!({"length":40,"width":30,"height":20,"body_name":"Plate"})).unwrap();
@@ -1526,8 +1539,7 @@ fn contribution_picked_faces_open_their_own_feature_after_later_modifiers() {
 fn contribution_unresolvable_face_does_not_edit_the_body_creator() {
     let mut app = SolveApp::new(Session::default(), Services::default());
     app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Plate"})).unwrap();
-    app.session.selection =
-        vec![solidcraft_engine::Sel::Face { body: "Plate".into(), index: usize::MAX, point: solidcraft_engine::geom::Vec3::ZERO }];
+    app.session.selection = vec![solidcraft_engine::Sel::Face { body: "Plate".into(), index: usize::MAX, point: solidcore_record::Vec3::ZERO }];
     let items = context_menu::items(&app, &Target::Viewport);
     assert!(!find(&items, "Edit Feature").enabled);
     assert!(!find(&items, "Find in Timeline").enabled);
@@ -1575,6 +1587,7 @@ fn every_context_target_has_identified_icon_rows_including_submenus() {
         Target::HistoryControls,
         Target::Workspace,
         Target::NamedViews,
+        Target::ViewGizmo,
         Target::NamedView { name: "Top".into() },
         Target::Canvas { id: 1 },
         Target::Section,
@@ -1813,6 +1826,149 @@ fn only_one_row_is_lit_while_a_flyout_is_closing() {
     h.frames(2);
     assert!(rect_of("menu:appearance.assign:Aluminum - Satin").is_some(), "the flyout is still closing");
     assert_eq!(lit_rows(&h, &rows), vec![other.label.clone()], "the parent gives up its highlight as soon as the pointer leaves it");
+}
+
+/// A component's menu (its Component flyout holds Appearance, which has a flyout of its own),
+/// open in a harness with the pointer on the menu.
+fn component_menu() -> (crate::scenario::Harness, u64) {
+    let mut h = crate::scenario::Harness::new();
+    h.app = sample_app();
+    let b = body(&h.app);
+    h.app.run("component.from_bodies", json!({"bodies": [b]})).unwrap();
+    let c = h.app.session.doc.components[0].id;
+    h.frames(3);
+    context_menu::open_for(&mut h.app, pos2(300.0, 60.0), Target::Component { id: c });
+    h.frames(2);
+    h.step(&json!({"move":[10, 10]})).unwrap();
+    (h, c)
+}
+
+#[test]
+fn a_flyout_inside_a_flyout_opens_on_hover_and_applies_its_choice() {
+    use crate::scenario::rect_of;
+    let (mut h, c) = component_menu();
+    h.step(&json!({"move":{"handle":"menu:ui.group.component"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.appearance:Appearance"}})).unwrap();
+    h.frames(2);
+    let swatch = "menu:appearance.assign:Aluminum - Satin";
+    assert!(rect_of(swatch).is_some(), "hovering Appearance in the Component flyout opens its quick choices");
+    assert!(rect_of("menu:ui.rename:Rename").is_some(), "the Component flyout stays open");
+    h.step(&json!({"click":{"handle":swatch}})).unwrap();
+    assert!(h.app.session.doc.appearances.components.contains_key(&c), "the choice applies to the component");
+    assert!(h.app.viewport.context_menu.is_none());
+    assert!(h.app.dialog.is_none(), "a quick choice opens no editor");
+}
+
+#[test]
+fn keys_walk_into_nested_flyouts_and_left_steps_back_one_level() {
+    use crate::scenario::rect_of;
+    let (mut h, _) = component_menu();
+    let rows = context_menu::items(&h.app, &h.app.menu.target.clone());
+    h.app.menu.key_row = rows.iter().position(|i| i.id == "ui.group.component");
+    h.step(&json!({"key":"ArrowRight"})).unwrap();
+    assert!(rect_of("menu:ui.rename:Rename").is_some(), "Right opens the Component flyout");
+    let own = &find(&rows, "Component").children;
+    let downs = own.iter().filter(|i| i.enabled && i.id != "-" && !i.id.starts_with('#')).position(|i| i.id == "ui.appearance").unwrap();
+    for _ in 0..downs {
+        h.step(&json!({"key":"ArrowDown"})).unwrap();
+    }
+    h.step(&json!({"key":"ArrowRight"})).unwrap();
+    h.frames(2);
+    assert!(rect_of("menu:appearance.assign:Aluminum - Satin").is_some(), "Right on Appearance opens its quick choices");
+    assert!(h.app.dialog.is_none(), "opening a flyout runs nothing");
+    h.step(&json!({"key":"ArrowLeft"})).unwrap();
+    h.frames(2);
+    assert!(rect_of("menu:appearance.assign:Aluminum - Satin").is_none(), "Left closes the innermost flyout");
+    assert!(rect_of("menu:ui.rename:Rename").is_some(), "and keeps the one it came from");
+    h.step(&json!({"key":"ArrowLeft"})).unwrap();
+    h.frames(2);
+    assert!(rect_of("menu:ui.rename:Rename").is_none(), "Left again closes the Component flyout");
+    assert!(h.app.viewport.context_menu.is_some(), "the menu itself stays open");
+}
+
+/// Resting on another row of a flyout closes only the flyouts further in (#6657).
+#[test]
+fn resting_on_another_row_of_a_flyout_closes_only_the_flyout_beyond_it() {
+    use crate::scenario::rect_of;
+    let (mut h, _) = component_menu();
+    h.step(&json!({"move":{"handle":"menu:ui.group.component"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.appearance:Appearance"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.rename:Rename"}})).unwrap();
+    h.frames(30);
+    assert!(rect_of("menu:appearance.assign:Aluminum - Satin").is_none(), "resting on Rename closes the Appearance flyout");
+    assert!(rect_of("menu:ui.rename:Rename").is_some(), "the Component flyout stays open");
+}
+
+/// Left from a flyout the pointer opened chooses the row that opened it, so Enter never runs a
+/// row the keys chose before.
+#[test]
+fn left_from_a_hovered_flyout_chooses_the_row_that_opened_it() {
+    let (mut h, _) = component_menu();
+    let rows = context_menu::items(&h.app, &h.app.menu.target.clone());
+    h.app.menu.key_row = rows.iter().position(|i| i.id == "ui.copy");
+    h.step(&json!({"move":{"handle":"menu:ui.group.component"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"key":"ArrowLeft"})).unwrap();
+    assert_eq!(h.app.menu.key_row, rows.iter().position(|i| i.id == "ui.group.component"));
+    assert!(crate::scenario::rect_of("menu:ui.rename:Rename").is_none(), "the flyout closed");
+}
+
+/// Near the right edge a flyout opens to the left, and a flyout inside it opens further left
+/// instead of over the menu.
+#[test]
+fn a_flyout_inside_a_flyout_that_opened_to_the_left_opens_to_the_left() {
+    use crate::scenario::rect_of;
+    let (mut h, c) = component_menu();
+    let right = h.ctx.content_rect().right();
+    context_menu::open_for(&mut h.app, pos2(right - context_menu::LIST_W - 50.0, 60.0), Target::Component { id: c });
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.group.component"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.appearance:Appearance"}})).unwrap();
+    h.frames(2);
+    let menu = rect_of("menu:ui.group.component").unwrap();
+    let own = rect_of("menu:ui.rename:Rename").unwrap();
+    let swatch = rect_of("menu:appearance.assign:Aluminum - Satin").unwrap();
+    assert!(own.right() <= menu.left(), "the Component flyout opens to the left: {own:?} {menu:?}");
+    assert!(swatch.right() <= own.left(), "and the Appearance flyout further left: {swatch:?} {own:?}");
+}
+
+/// `ui.menuPick` reaches the entries of every flyout and refuses a row that only opens one.
+#[test]
+fn menu_pick_runs_flyout_entries_and_refuses_a_row_that_only_opens_one() {
+    let (mut h, _) = component_menu();
+    assert!(context_menu::pick(&mut h.app, "Organize").is_err());
+    assert!(h.app.viewport.context_menu.is_some(), "a refused pick leaves the menu open");
+    assert_eq!(context_menu::pick(&mut h.app, "Collapse All").unwrap()["ran"], "browser.collapse_all");
+}
+
+/// Every flyout is as tall as its entries: one opened after a shorter one used to keep the shorter
+/// one's height and scroll, so its last entries could not be clicked.
+#[test]
+fn a_flyout_opened_after_a_shorter_one_shows_all_its_entries() {
+    let (mut h, _) = component_menu();
+    h.step(&json!({"move":{"handle":"menu:ui.group.organize"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.group.component"}})).unwrap();
+    h.frames(3);
+    h.step(&json!({"click":{"handle":"menu:ui.properties:Properties"}})).unwrap();
+    assert!(h.app.menu.props.is_some(), "the last entry of the Component flyout is reachable");
+}
+
+/// A flyout taller than egui's default area size (the quick choices) is measured whole, so it
+/// moves up to fit and its last entries can be clicked.
+#[test]
+fn a_tall_flyout_moves_up_to_fit_and_its_last_entries_can_be_clicked() {
+    let (mut h, c) = component_menu();
+    h.step(&json!({"move":{"handle":"menu:ui.group.component"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"move":{"handle":"menu:ui.appearance:Appearance"}})).unwrap();
+    h.frames(3);
+    h.step(&json!({"click":{"handle":"menu:appearance.assign:Glass - Smoked"}})).unwrap();
+    assert!(h.app.session.doc.appearances.components.contains_key(&c), "a late quick choice is reachable");
 }
 
 #[test]

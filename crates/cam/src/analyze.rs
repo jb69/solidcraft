@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 use serde_json::json;
-use solidcraft_geom::{Mesh, Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::Mesh;
+use solidcraft_geom::prelude::*;
 
 use crate::dropcutter::DropMesh;
 use crate::frame::Frame;

@@ -1,7 +1,8 @@
 //! 2.5D operations: facing, pocketing, adaptive clearing, contouring, chamfering, drilling and
 //! boring. They work on closed loops in the operation frame's XY and cut in flat levels.
 
-use solidcraft_geom::{Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use super::{Context, Direction, OpKind, Side, default_stepover, levels, orient_for, start_near};
 use crate::linking::{Linker, Pass};

@@ -1,7 +1,8 @@
+use solidcraft_geom::prelude::*;
 use std::f64::consts::FRAC_PI_2;
 
 use serde_json::{Value, json};
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 
 use crate::Session;
 
@@ -121,6 +122,27 @@ fn revolute_hinge_turns_about_the_knuckle() {
     assert!(near(place(&s, "LeafB", p), Vec3::new(20.0, 66.0, 8.0)));
     run(&mut s, "edit.undo", json!({}));
     assert!(near(place(&s, "LeafB", p), Vec3::new(20.0, 29.0, 37.0)));
+}
+
+/// A joint value too large says so, rather than that it is not a number (#9625).
+#[test]
+fn a_joint_value_out_of_range_says_so() {
+    let mut s = Session::default();
+    leaf(&mut s, "LeafA");
+    leaf(&mut s, "LeafB");
+    let o = occ(&s, "LeafA");
+    run(&mut s, "occurrence.ground", json!({"occurrence": o, "grounded": true}));
+    let hinge = json!({"type": "revolute", "a": {"occurrence": "LeafA", "circle": [1, 37, 4]}, "b": {"occurrence": "LeafB", "circle": [1, 37, 4]}, "flip": true, "name": "Hinge"});
+    run(&mut s, "joint.create", hinge);
+    for value in [json!(1e9), json!(-5e15)] {
+        let e = s.execute("joint.drive", &json!({"joint": "Hinge", "value": value})).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            e.contains("a joint value must be a number between -1e9 and 1e9") && !e.contains("a joint value must be a number or"),
+            "{value}: {e}"
+        );
+    }
+    let e = s.execute("joint.drive", &json!({"joint": "Hinge", "value": true})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("a joint value must be a number or an expression") && !e.contains("between"), "{e}");
 }
 
 /// Two 10 mm cubes in components A (grounded) and B.

@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
+use solidcraft_engine::geom::prelude::*;
 use crate::scenario::Harness;
 
 /// A block, a tool, a setup and a pocket operation; returns the operation's id.
@@ -375,12 +376,12 @@ fn a_setups_origin_is_placed_on_the_stock_a_design_point_or_picked_on_the_model(
     // The stock's top front-left corner (the form's first choices).
     h.step(&json!({"widget": "Place Origin"})).unwrap();
     h.frames(2);
-    assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(-1.0, -1.0, 11.0)).len() < 1e-6, "{:?}", origin(&h));
+    assert!((origin(&h) - solidcore_record::Vec3::new(-1.0, -1.0, 11.0)).len() < 1e-6, "{:?}", origin(&h));
     assert_eq!(h.app.cam_editor.as_ref().unwrap().draft["wcs"]["origin"], json!([-1.0, -1.0, 11.0]), "the form shows the coordinate");
     // The point the designer placed.
     h.step(&json!({"widget": "Use Point"})).unwrap();
     h.frames(2);
-    assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(40.0, 30.0, 10.0)).len() < 1e-6, "{:?}", origin(&h));
+    assert!((origin(&h) - solidcore_record::Vec3::new(40.0, 30.0, 10.0)).len() < 1e-6, "{:?}", origin(&h));
     // Picked on the model: the click that picks the top face puts the origin at its centre.
     h.step(&json!({"widget": "Pick on Model or Stock"})).unwrap();
     h.frames(2);
@@ -393,7 +394,7 @@ fn a_setups_origin_is_placed_on_the_stock_a_design_point_or_picked_on_the_model(
     h.app.run("select.set", json!({"items": [{"type": "face", "body": "Block", "index": top, "point": [5.0, 5.0, 10.0]}]})).unwrap();
     h.frames(3);
     assert!(!h.app.cam_editor.as_ref().unwrap().origin.picking, "a pick ends picking");
-    assert!((origin(&h) - solidcraft_engine::geom::Vec3::new(20.0, 15.0, 10.0)).len() < 1e-3, "the face's centre: {:?}", origin(&h));
+    assert!((origin(&h) - solidcore_record::Vec3::new(20.0, 15.0, 10.0)).len() < 1e-3, "the face's centre: {:?}", origin(&h));
     // The stock is drawn while the setup is edited, and its points snap: a click at its top
     // back-right corner (away from the model) puts the origin there.
     h.step(&json!({"widget": "Pick on Model or Stock"})).unwrap();

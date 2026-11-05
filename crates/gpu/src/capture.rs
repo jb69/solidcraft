@@ -7,11 +7,12 @@
 //! renderer that drew it (`gpu`, `gpu-software` or `cpu`); `hardware` and `software` fail with an
 //! error that names the policy.
 
+use solidcraft_geom::prelude::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 use solidcraft_render::hatch::Hatch;
 use solidcraft_render::{AnalysisMode, Camera, Rgb, SECTION_CAP, Scene, SceneMesh};
 use wgpu::util::DeviceExt;
@@ -396,6 +397,7 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
         pv_key: 0,
         pv_slot: empty(),
         pv_hide: false,
+        preview_bounds: None,
         view_proj: cam.view_proj(f64::from(width) / f64::from(height.max(1)), scene.radius.max(1.0)).to_f32(),
         back: cam.back().to_f32(),
         size_px: [width as f32, height as f32],

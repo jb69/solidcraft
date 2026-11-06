@@ -1170,6 +1170,50 @@ fn the_simulated_stock_shades_a_round_wall_smoothly() {
 }
 
 #[test]
+fn a_short_sprue_is_kept_clear_of_only_at_its_own_heights() {
+    // A sprue 2 mm tall at mid height beside a block: roughing keeps the tool clear of it all
+    // round, and still clears the stock above it (the stock below it is the other side's).
+    use crate::boundary::{Boundary, Containment, Plan, Source};
+    let m = DropMesh::new(&box_mesh(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 20.0, 10.0)));
+    let (lo, hi) = (Vec3::new(20.0, 8.0, 4.0), Vec3::new(30.0, 12.0, 6.0));
+    let sprue = DropMesh::new(&box_mesh(lo, hi));
+    let tool = flat(6.0);
+    let mut ctx = ctx_3d(&tool, &m, heights(12.0, 0.0));
+    ctx.stock = StockShape::Box { min: Vec3::new(-15.0, -15.0, 0.0), max: Vec3::new(35.0, 35.0, 12.0) };
+    ctx.fixtures = Some(&sprue);
+    let b = Boundary { source: Source::Part, containment: Containment::Outside, offset: 12.0, fixture_clearance: 0.5, ..Boundary::default() };
+    let kind: OpKind = serde_json::from_value(serde_json::json!({ "type": "adaptive3d", "stepdown": 1.0, "optimal_load": 1.0 })).unwrap();
+    ctx.boundary = Plan::new(&b, &kind, false, true, false);
+    let mut o = op(kind);
+    o.tolerance = 0.05;
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    // How far the flat tool, its tip at `p`, comes within the clearance of the sprue.
+    let (r, c) = (3.0, 0.5);
+    let into = |p: Vec3| {
+        let q = Vec2::new(p.x.clamp(lo.x, hi.x), p.y.clamp(lo.y, hi.y));
+        let across = (Vec2::new(p.x, p.y) - q).len();
+        if across < r + c && p.z < hi.z + c { (r + c - across).min(hi.z + c - p.z) } else { 0.0 }
+    };
+    let mut worst = 0.0_f64;
+    let mut above = 0;
+    let mut from: Option<Vec3> = None;
+    for mv in &tp.moves {
+        if let (MoveKind::Cut, Some(a)) = (mv.kind, from) {
+            for k in 0..=20 {
+                let p = a.lerp(mv.to, k as f64 / 20.0);
+                worst = worst.max(into(p));
+                if p.x > lo.x + 1.0 && p.x < hi.x - 1.0 && p.y > lo.y && p.y < hi.y && p.z > hi.z {
+                    above += 1;
+                }
+            }
+        }
+        from = Some(mv.to);
+    }
+    assert!(worst <= 0.06, "the tool comes {worst} mm inside the sprue's clearance");
+    assert!(above > 0, "the stock above the sprue is left uncut");
+}
+
+#[test]
 fn boundaries_follow_the_part_and_choose_by_what_the_operation_does() {
     use crate::boundary::{Boundary, Containment, Plan, Source, region};
     let kind = |t: &str| -> OpKind { serde_json::from_value(serde_json::json!({ "type": t })).unwrap() };
@@ -1222,7 +1266,14 @@ fn boundaries_follow_the_part_and_choose_by_what_the_operation_does() {
     let clamp = DropMesh::new(&box_mesh(Vec3::new(30.0, 0.0, 0.0), Vec3::new(40.0, 20.0, 15.0)));
     ctx.fixtures = Some(&clamp);
     let near = Boundary { source: Source::Part, containment: Containment::Outside, offset: 20.0, ..Boundary::default() };
+    // A 3D operation keeps clear of it as a solid, so the boundary still covers it ...
     let (_, rep, loops) = bounds_for(&mut ctx, Plan::new(&near, &kind("adaptive3d"), false, true, false));
+    assert!(rep.fixtures_avoided);
+    assert!(polyline::set_contains(&loops, Vec2::new(35.0, 10.0)), "solid fixtures stay in the boundary");
+    // ... and one that keeps clear of its outline has it taken out at every height.
+    let mut flat_plan = Plan::new(&near, &kind("adaptive3d"), false, true, false);
+    flat_plan.fixtures_as_solids = false;
+    let (_, rep, loops) = bounds_for(&mut ctx, flat_plan);
     assert!(rep.fixtures_avoided);
     assert!(!polyline::set_contains(&loops, Vec2::new(35.0, 10.0)), "not over the clamp");
     assert!(!polyline::set_contains(&loops, Vec2::new(27.0, 10.0)), "3 mm radius + 1 mm clearance from the clamp");

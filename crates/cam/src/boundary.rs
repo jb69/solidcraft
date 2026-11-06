@@ -129,6 +129,11 @@ pub struct Plan {
     pub clip_to_stock: bool,
     pub avoid_fixtures: bool,
     pub fixture_clearance: f64,
+    /// The operation keeps clear of the fixtures as solids, by dropping the tool on them as on
+    /// the part ([`crate::ops::Context::drop`]): only at the fixtures' own heights, so a short
+    /// sprue at the part's edge leaves the stock above and below it to be cut. Otherwise the
+    /// fixtures' outline is taken out of the boundary at every height.
+    pub fixtures_as_solids: bool,
     pub why: String,
 }
 
@@ -195,6 +200,8 @@ impl Plan {
             clip_to_stock: b.clip_to_stock,
             avoid_fixtures: b.avoid_fixtures,
             fixture_clearance: if b.fixture_clearance.is_finite() { b.fixture_clearance.clamp(0.0, 1_000.0) } else { 1.0 },
+            // The multi-axis contour tilts the tool and drops on the model itself.
+            fixtures_as_solids: !matches!(kind, OpKind::MultiAxisContour { .. }),
             why,
         }
     }
@@ -209,6 +216,7 @@ impl Plan {
             clip_to_stock: true,
             avoid_fixtures: true,
             fixture_clearance: 1.0,
+            fixtures_as_solids: true,
             why: String::new(),
         }
     }
@@ -324,14 +332,14 @@ pub fn region(ctx: &Context) -> Result<(Vec<Poly>, Report)> {
             clipped = (polyline::set_area(&out) - before).abs() > tol * tol;
         }
     }
-    let mut avoided = false;
-    if plan.avoid_fixtures
-        && let Some(fx) = ctx.fixtures.filter(|f| !f.is_empty())
+    let avoided = plan.avoid_fixtures && ctx.fixtures.is_some_and(|f| !f.is_empty());
+    if avoided
+        && !plan.fixtures_as_solids
+        && let Some(fx) = ctx.fixtures
     {
         let keep_out = offset::offset_set(&silhouette(fx, tol)?, r + plan.fixture_clearance, tol)?;
         if !keep_out.is_empty() {
             out = subtract(&out, &keep_out, tol)?;
-            avoided = true;
         }
     }
     if out.is_empty() {

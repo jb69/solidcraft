@@ -195,9 +195,12 @@ step in it has a `why` and the feature ids it covers:
   hold nothing (`tabs_placed` 0, `tabs_unsupported`). A part with no flat waist (a rounded
   or lens-shaped part, its edge at different heights round its outline) has no height where
   a web meets it: leave **sprues** instead. Each is a small box body just outside the outline,
-  the stock's full height, named in every setup's `fixtures`; every area operation keeps
-  clear of it (`fixture_clearance` about 0.3 mm), so a bar of stock joins the frame to the
-  part's edge on both sides. Put them where the edge is thickest and away from holes; the
+  at the height where the part's edge comes nearest it, named in every setup's `fixtures`.
+  A 3D operation keeps clear of a fixture as a solid (`fixture_clearance` about 0.3 mm), only
+  at the fixture's own heights, so the stock above a sprue is cut from the top and the stock
+  under it by the last cut from below (rest machining, down to the sprue). A sprue must reach
+  past the ring cut into the frame: the ring's offset plus the roughing tool's diameter, and
+  1 mm more. Put them where the edge is thickest and away from holes; the
   last pass cuts only through the web round the part (`rest_machining`, the web's depth),
   and the sprues are sawn off and filed by hand. Hold the part with tabs or with sprues, not
   both, unless each holds where the other cannot (tabs along a flat stretch of edge, a sprue

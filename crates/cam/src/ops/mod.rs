@@ -699,6 +699,20 @@ pub struct ResolvedGeometry {
     pub chain_b: Vec<Vec3>,
 }
 
+/// `tool` grown by `by` all round (same kind, a bull nose's corner grown with it): its surface
+/// offset by `by`, so its tip sits `by` below the grown tool's when they share a centre.
+fn grow_tool(tool: &Tool, by: f64) -> Tool {
+    let mut t = tool.clone();
+    if by.abs() > 1e-9 {
+        let r = (t.radius() + by).max(0.01);
+        t.diameter = r * 2.0;
+        if let crate::tool::ToolKind::BullNose { corner_radius } = t.kind {
+            t.kind = crate::tool::ToolKind::BullNose { corner_radius: (corner_radius + by).clamp(0.001, r - 0.001) };
+        }
+    }
+    t
+}
+
 /// Everything a generator reads.
 pub struct Context<'a> {
     pub tool: &'a Tool,
@@ -742,15 +756,7 @@ impl Context<'_> {
     /// The tool with the radial and axial stock to leave folded in: a tool of larger radius
     /// (same corner radius) dropped `stock_to_leave_axial` lower.
     pub fn virtual_tool(&self) -> Tool {
-        let mut t = self.tool.clone();
-        if self.stock_to_leave_radial.abs() > 1e-9 {
-            let r = (t.radius() + self.stock_to_leave_radial).max(0.01);
-            t.diameter = r * 2.0;
-            if let crate::tool::ToolKind::BullNose { corner_radius } = t.kind {
-                t.kind = crate::tool::ToolKind::BullNose { corner_radius: (corner_radius + self.stock_to_leave_radial).clamp(0.001, r - 0.001) };
-            }
-        }
-        t
+        grow_tool(self.tool, self.stock_to_leave_radial)
     }
 
     /// The cell size for height maps: the tolerance-derived sampling, capped so the map stays
@@ -779,15 +785,38 @@ impl Context<'_> {
             for i in 0..map.nx {
                 let p = map.point(i, j);
                 let z = mesh.drop(tool, &Frame::IDENTITY, p, floor).map_or(floor, |c| c.z + axial);
-                map.set(i, j, z.max(floor));
+                let fz = self.fixture_drop(tool, p, floor).map_or(floor, |c| c.z);
+                map.set(i, j, z.max(fz).max(floor));
             }
         }
         Ok(map)
     }
 
     /// Drops the tool at `xy` in the operation frame, with the stock to leave applied.
+    /// The fixtures count as solids the tool keeps `fixture_clearance` from.
     pub fn drop(&self, tool: &Tool, xy: Vec2, floor: f64) -> Option<crate::dropcutter::Contact> {
-        self.model?.drop(tool, &Frame::IDENTITY, xy, floor).map(|c| crate::dropcutter::Contact { z: c.z + self.stock_to_leave_axial, ..c })
+        let part = self
+            .model
+            .and_then(|m| m.drop(tool, &Frame::IDENTITY, xy, floor))
+            .map(|c| crate::dropcutter::Contact { z: c.z + self.stock_to_leave_axial, ..c });
+        match (part, self.fixture_drop(tool, xy, floor)) {
+            (Some(p), Some(f)) => Some(if f.z > p.z { f } else { p }),
+            (p, f) => p.or(f),
+        }
+    }
+
+    /// Where the tool at `xy` comes down on the fixtures, `fixture_clearance` clear of them
+    /// all round: the tool grown by the clearance, its tip lifted by it. `None` when the
+    /// operation keeps clear of the fixtures' outline instead, or touches none.
+    fn fixture_drop(&self, tool: &Tool, xy: Vec2, floor: f64) -> Option<crate::dropcutter::Contact> {
+        let plan = &self.boundary;
+        if !(plan.avoid_fixtures && plan.fixtures_as_solids) {
+            return None;
+        }
+        let fx = self.fixtures.filter(|f| !f.is_empty())?;
+        let c = plan.fixture_clearance;
+        let grown = grow_tool(tool, c);
+        fx.drop(&grown, &Frame::IDENTITY, xy, floor - c).map(|k| crate::dropcutter::Contact { z: k.z + c, ..k })
     }
 
     /// The machining boundary for area operations: where the tool centre may go in XY

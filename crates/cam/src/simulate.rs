@@ -878,118 +878,114 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
             }
         }
     }
-    let push_tri = |mesh: &mut Mesh, a: u32, b: u32, c: u32, face: u32| {
-        mesh.triangles.push([a, b, c]);
-        mesh.tri_face.push(face);
-    };
-    // Top quads.
-    for j in 0..ny.saturating_sub(1) {
-        for i in 0..nx.saturating_sub(1) {
-            if let (Some(a), Some(b), Some(c), Some(d)) =
-                (index[j * nx + i], index[j * nx + i + 1], index[(j + 1) * nx + i + 1], index[(j + 1) * nx + i])
+    // Where each top vertex sits on the grid, and the outline's outward direction there: the
+    // kept cells, blurred over a few cells, fall away across the outline. On a curved wall the
+    // grid makes a staircase of x- and y-facing skirts; shading them by the blurred outline
+    // instead of their own edges draws the wall smooth.
+    let mut grid_of: Vec<(usize, usize)> = vec![(0, 0); mesh.positions.len()];
+    for j in 0..ny {
+        for i in 0..nx {
+            if let Some(k) = index[j * nx + i]
+                && let Some(g) = grid_of.get_mut(k as usize)
             {
-                push_tri(&mut mesh, a, b, c, 0);
-                push_tri(&mut mesh, a, c, d, 0);
+                *g = (i, j);
             }
         }
     }
-    // Skirts: for every kept cell edge whose neighbour is missing, a quad down to the bottom.
-    let mut bottom_pts: Vec<(usize, usize)> = Vec::new();
+    let kept: Vec<f64> = index.iter().map(|k| if k.is_some() { 1.0 } else { 0.0 }).collect();
+    let blurred = box_blur(&kept, nx, ny, 2);
+    let outward = |k: u32| -> Option<Vec3> {
+        let &(i, j) = grid_of.get(k as usize)?;
+        let b = |di: isize, dj: isize| -> f64 {
+            let (ii, jj) = (i as isize + di, j as isize + dj);
+            if ii < 0 || jj < 0 || ii >= nx as isize || jj >= ny as isize { 0.0 } else { blurred[jj as usize * nx + ii as usize] }
+        };
+        Vec3::new(b(-1, 0) - b(1, 0), b(0, -1) - b(0, 1), 0.0).normalized()
+    };
+    // Top triangles, counter-clockwise from above: two for a cell with all four corners kept,
+    // one for a cell with three, so a curved outline steps across the diagonal rather than
+    // round it.
+    let mut top: Vec<[u32; 3]> = Vec::new();
+    for j in 0..ny.saturating_sub(1) {
+        for i in 0..nx.saturating_sub(1) {
+            let corners = [index[j * nx + i], index[j * nx + i + 1], index[(j + 1) * nx + i + 1], index[(j + 1) * nx + i]];
+            match corners {
+                [Some(a), Some(b), Some(c), Some(d)] => {
+                    top.push([a, b, c]);
+                    top.push([a, c, d]);
+                }
+                _ => {
+                    let kept: Vec<u32> = corners.iter().flatten().copied().collect();
+                    if let [a, b, c] = kept[..] {
+                        top.push([a, b, c]);
+                    }
+                }
+            }
+        }
+    }
+    for t in &top {
+        mesh.triangles.push(*t);
+        mesh.tri_face.push(0);
+    }
+    // Skirts: down to the floor along every edge of the top used by one triangle only (the
+    // outline, and the rims of holes cut through). The top lies on such an edge's left.
+    let inner: std::collections::HashSet<(u32, u32)> = top.iter().flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]).collect();
     let add_skirt = |mesh: &mut Mesh, a: u32, b: u32| {
         let pa = mesh.positions[a as usize];
         let pb = mesh.positions[b as usize];
         let (fa, fb) = (floors.get(a as usize).copied().unwrap_or(bottom), floors.get(b as usize).copied().unwrap_or(bottom));
         let base = mesh.positions.len() as u32;
         let n = (pb - pa).cross(Vec3::new(0.0, 0.0, 1.0)).normalized().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-        for p in [pa, pb, Vec3::new(pb.x, pb.y, fb), Vec3::new(pa.x, pa.y, fa)] {
+        // The smoothed direction, where it faces the same side as the edge.
+        let smooth = |k: u32| outward(k).filter(|o| o.dot(n) > 0.0).unwrap_or(n);
+        let (na, nb) = (smooth(a), smooth(b));
+        for (p, nn) in [(pa, na), (pb, nb), (Vec3::new(pb.x, pb.y, fb), nb), (Vec3::new(pa.x, pa.y, fa), na)] {
             mesh.positions.push(p);
-            mesh.normals.push(n);
+            mesh.normals.push(nn);
         }
         mesh.triangles.push([base, base + 2, base + 1]);
         mesh.tri_face.push(1);
         mesh.triangles.push([base, base + 3, base + 2]);
         mesh.tri_face.push(1);
     };
-    for j in 0..ny {
-        for i in 0..nx {
-            let Some(here) = index[j * nx + i] else { continue };
-            bottom_pts.push((i, j));
-            // Right neighbour missing: skirt along the cell's right edge needs the vertex above.
-            if i + 1 < nx
-                && index[j * nx + i + 1].is_none()
-                && j + 1 < ny
-                && let Some(up) = index[(j + 1) * nx + i]
-            {
-                add_skirt(&mut mesh, up, here);
-            }
-            if (i == 0 || index[j * nx + i - 1].is_none())
-                && j + 1 < ny
-                && let Some(up) = index[(j + 1) * nx + i]
-            {
-                add_skirt(&mut mesh, here, up);
-            }
-            if j + 1 < ny
-                && index[(j + 1) * nx + i].is_none()
-                && i + 1 < nx
-                && let Some(right) = index[j * nx + i + 1]
-            {
-                add_skirt(&mut mesh, here, right);
-            }
-            if (j == 0 || index[(j - 1) * nx + i].is_none())
-                && i + 1 < nx
-                && let Some(right) = index[j * nx + i + 1]
-            {
-                add_skirt(&mut mesh, right, here);
-            }
-            if i + 1 == nx
-                && j + 1 < ny
-                && let Some(up) = index[(j + 1) * nx + i]
-            {
-                add_skirt(&mut mesh, up, here);
-            }
-            if j + 1 == ny
-                && i + 1 < nx
-                && let Some(right) = index[j * nx + i + 1]
-            {
-                add_skirt(&mut mesh, here, right);
+    for t in &top {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            if !inner.contains(&(b, a)) {
+                add_skirt(&mut mesh, a, b);
             }
         }
     }
-    // Bottom: the kept cells' quads at the bottom height, facing down.
+    // Bottom: the top's triangles at the floor under each vertex, facing down.
+    let h = m.cell * step as f64;
+    let floor_wide = stock.floor.as_ref().map(|_| box_blur(&(0..nx * ny).map(|k| fl(k % nx, k / nx)).collect::<Vec<_>>(), nx, ny, 2));
     let base = mesh.positions.len() as u32;
-    let mut bottom_index: Vec<Option<u32>> = vec![None; nx * ny];
-    for (i, j) in &bottom_pts {
-        bottom_index[j * nx + i] = Some(mesh.positions.len() as u32);
-        mesh.positions.push(pt(*i, *j, fl(*i, *j)));
+    for (k, &(i, j)) in grid_of.iter().enumerate() {
+        mesh.positions.push(pt(i, j, floors.get(k).copied().unwrap_or(bottom)));
         // A floor of its own (stock carried over from the other side) has steps: shade them from
         // the floor's slope, as the top is shaded from its own.
-        let n = if stock.floor.is_some() {
-            let f = |di: isize, dj: isize| -> f64 {
-                let (ii, jj) = (*i as isize + di, *j as isize + dj);
-                if ii < 0 || jj < 0 || ii >= nx as isize || jj >= ny as isize || index[jj as usize * nx + ii as usize].is_none() {
-                    return fl(*i, *j);
-                }
-                fl(ii as usize, jj as usize)
-            };
-            let h = m.cell * step as f64;
-            Vec3::new((f(1, 0) - f(-1, 0)) / (2.0 * h), (f(0, 1) - f(0, -1)) / (2.0 * h), -1.0).normalized().unwrap_or(Vec3::new(0.0, 0.0, -1.0))
-        } else {
-            Vec3::new(0.0, 0.0, -1.0)
+        let n = match &floor_wide {
+            Some(wide) => {
+                let f = |di: isize, dj: isize| -> f64 {
+                    let (ii, jj) = (i as isize + di, j as isize + dj);
+                    if ii < 0 || jj < 0 || ii >= nx as isize || jj >= ny as isize || index[jj as usize * nx + ii as usize].is_none() {
+                        return fl(i, j);
+                    }
+                    fl(ii as usize, jj as usize)
+                };
+                let (gx, gy) = grid_slope(&f, wide, i, j, nx, ny, h);
+                Vec3::new(gx, gy, -1.0).normalized().unwrap_or(Vec3::new(0.0, 0.0, -1.0))
+            }
+            None => Vec3::new(0.0, 0.0, -1.0),
         };
         mesh.normals.push(n);
     }
-    let _ = base;
-    for j in 0..ny.saturating_sub(1) {
-        for i in 0..nx.saturating_sub(1) {
-            if let (Some(a), Some(b), Some(c), Some(d)) =
-                (bottom_index[j * nx + i], bottom_index[j * nx + i + 1], bottom_index[(j + 1) * nx + i + 1], bottom_index[(j + 1) * nx + i])
-            {
-                push_tri(&mut mesh, a, c, b, 2);
-                push_tri(&mut mesh, a, d, c, 2);
-            }
-        }
+    for t in &top {
+        mesh.triangles.push([base + t[0], base + t[2], base + t[1]]);
+        mesh.tri_face.push(2);
     }
-    // Smooth top normals from the height field.
+    // Smooth top normals from the height field (`grid_slope`).
+    let heights: Vec<f64> = (0..nx * ny).map(|k| at(k % nx, k / nx).unwrap_or(bottom)).collect();
+    let wide = box_blur(&heights, nx, ny, 2);
     for j in 0..ny {
         for i in 0..nx {
             let Some(k) = index[j * nx + i] else { continue };
@@ -1000,15 +996,54 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
                 }
                 at(ii as usize, jj as usize).unwrap_or_else(|| at(i, j).unwrap_or(bottom))
             };
-            let h = m.cell * step as f64;
-            let n =
-                Vec3::new(-(z(1, 0) - z(-1, 0)) / (2.0 * h), -(z(0, 1) - z(0, -1)) / (2.0 * h), 1.0).normalized().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+            let (gx, gy) = grid_slope(&z, &wide, i, j, nx, ny, h);
+            let n = Vec3::new(-gx, -gy, 1.0).normalized().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
             if let Some(nn) = mesh.normals.get_mut(k as usize) {
                 *nn = n;
             }
         }
     }
     mesh
+}
+
+/// The slope (dz/dx, dz/dy) of a height field on the grid at vertex (`i`, `j`), `z` giving
+/// the heights round it and `wide` the field averaged over 5 x 5 cells (`box_blur`). A 3 x 3
+/// (Sobel) slope, so the grid's steps on a sloped floor average out instead of shading as
+/// stripes; where it is steep (a wall standing between neighbouring vertices) the staircase
+/// along a curved wall turns the slope between x and y from one vertex to the next, so the wall
+/// faces the way the wider average falls instead.
+fn grid_slope(z: &dyn Fn(isize, isize) -> f64, wide: &[f64], i: usize, j: usize, nx: usize, ny: usize, h: f64) -> (f64, f64) {
+    let gx = (z(1, -1) + 2.0 * z(1, 0) + z(1, 1) - z(-1, -1) - 2.0 * z(-1, 0) - z(-1, 1)) / (8.0 * h);
+    let gy = (z(-1, 1) + 2.0 * z(0, 1) + z(1, 1) - z(-1, -1) - 2.0 * z(0, -1) - z(1, -1)) / (8.0 * h);
+    let slope = (gx * gx + gy * gy).sqrt();
+    if slope <= 1.0 {
+        return (gx, gy);
+    }
+    let w = |di: isize, dj: isize| -> f64 {
+        let (ii, jj) = ((i as isize + di).clamp(0, nx as isize - 1), (j as isize + dj).clamp(0, ny as isize - 1));
+        wide.get(jj as usize * nx + ii as usize).copied().unwrap_or(0.0)
+    };
+    let (wx, wy) = (w(1, 0) - w(-1, 0), w(0, 1) - w(0, -1));
+    let len = (wx * wx + wy * wy).sqrt();
+    if len > 1e-12 { (wx / len * slope, wy / len * slope) } else { (gx, gy) }
+}
+
+/// `field` (`nx` by `ny`) averaged over the (2r + 1)² cells round each cell, the map's edge
+/// clamped.
+fn box_blur(field: &[f64], nx: usize, ny: usize, r: usize) -> Vec<f64> {
+    let pass = |src: &[f64], along_x: bool| -> Vec<f64> {
+        let mut out = vec![0.0; src.len()];
+        for j in 0..ny {
+            for i in 0..nx {
+                let (c, len) = if along_x { (i, nx) } else { (j, ny) };
+                let (lo, hi) = (c.saturating_sub(r), (c + r).min(len.saturating_sub(1)));
+                let sum: f64 = (lo..=hi).map(|t| if along_x { src[j * nx + t] } else { src[t * nx + i] }).sum();
+                out[j * nx + i] = sum / (hi - lo + 1) as f64;
+            }
+        }
+        out
+    };
+    pass(&pass(field, true), false)
 }
 
 /// The tool as a mesh: a surface of revolution of its profile (tip, corner, flutes, shank),

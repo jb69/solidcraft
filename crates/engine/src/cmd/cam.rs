@@ -314,7 +314,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .noundo(),
     CommandSpec::new("cam.simulate.show", "Show Simulation", simulate_show).at("MANUFACTURE", "TOOLPATHS")
         .icon("play")
-        .params("setup?: id (default the only setup); progress?: 0..1 of the program's time | time_s? | operation?: id with move?: index | step?: moves to advance from where the simulation stands; cell? (mm, default by the stock size); show_model?: bool (default false: the stock stands in for the bodies): sweeps the stock to that moment and shows it in the viewport with the tool where it is and the path so far. Returns where it stands (progress, time_s, operation, move, tip, axis) and the stock volume. cam.simulate.hide ends it")
+        .params("setup?: id (default the only setup); progress?: 0..1 of the program's time | time_s? | operation?: id with move?: index | step?: moves to advance from where the simulation stands; cell? (mm, default by the stock size); show_model?: bool (default false: the stock stands in for the bodies); show_path?: bool (default true; false shows the stock's surface alone): sweeps the stock to that moment and shows it in the viewport with the tool where it is and the path so far. Returns where it stands (progress, time_s, operation, move, tip, axis) and the stock volume. cam.simulate.hide ends it")
         .noundo(),
     CommandSpec::new("cam.simulate.hide", "Hide Simulation", simulate_hide).icon("play").params("ends the simulation preview").noundo(),
     CommandSpec::new("cam.post.list", "Post Processors", post_list).icon("export").params("lists the post processors").noundo(),
@@ -2905,6 +2905,7 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
             if before { done.push((op.id, cur)) } else { todo.push((op.id, cur)) }
         }
     }
+    let show_path = bool_(p, "show_path").unwrap_or(true);
     let op_now = sim.operations.get(cursor.operation).map(|o| (o.id, o.name.clone()));
     let tip = to_design(sim.tip);
     let axis = wcs.dir_to_world(sim.axis);
@@ -2919,8 +2920,8 @@ fn simulate_show(s: &mut Session, p: &Value) -> Result<Value> {
         gouges: Arc::new(gouge_mesh),
         gouge_cells,
         tool: Arc::new(tool_mesh),
-        path_done: done,
-        path_todo: todo,
+        path_done: if show_path { done } else { Vec::new() },
+        path_todo: if show_path { todo } else { Vec::new() },
         tip,
         axis,
         progress: sim.progress(),

@@ -1007,6 +1007,90 @@ fn stock_turned_over_keeps_the_first_sides_cuts() {
 }
 
 #[test]
+fn the_simulated_stock_shades_a_round_wall_smoothly() {
+    // A round bar stood on end: on the grid its side is a staircase of x- and y-facing steps.
+    // Each wall vertex is shaded facing out from the axis, not along the step it stands on.
+    let shape = StockShape::Cylinder { axis: crate::setup::Axis::Z, radius: 10.0, start: 0.0, end: 5.0 };
+    let stock = crate::simulate::StockMap::new(&shape, 0.25).unwrap();
+    let mesh = crate::simulate::stock_mesh(&stock, 1);
+    let mut worst = 0.0f64;
+    let mut walls = 0;
+    for (n, p) in mesh.normals.iter().zip(&mesh.positions) {
+        if n.z.abs() > 1e-9 || p.z > 4.9 {
+            continue;
+        }
+        let Some(radial) = Vec3::new(p.x, p.y, 0.0).normalized() else { continue };
+        worst = worst.max(n.dot(radial).clamp(-1.0, 1.0).acos().to_degrees());
+        walls += 1;
+    }
+    assert!(walls > 100, "{walls} wall vertices");
+    assert!(worst < 15.0, "a wall vertex is shaded {worst:.1} deg off the radial direction");
+    // Every face winds outward: the mesh encloses the bar's volume with a positive sign.
+    let volume: f64 = mesh
+        .triangles
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|k| mesh.positions[k as usize]);
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum();
+    let bar = std::f64::consts::PI * 100.0 * 5.0;
+    // Closed: every edge is used once each way (no gaps where the outline steps diagonally).
+    let key = |p: Vec3| ((p.x * 1000.0).round() as i64, (p.y * 1000.0).round() as i64, (p.z * 1000.0).round() as i64);
+    let mut edges: std::collections::HashMap<_, i32> = Default::default();
+    for t in &mesh.triangles {
+        for e in 0..3 {
+            let (a, b) = (key(mesh.positions[t[e] as usize]), key(mesh.positions[t[(e + 1) % 3] as usize]));
+            *edges.entry((a.min(b), a.max(b))).or_default() += if a < b { 1 } else { -1 };
+        }
+    }
+    assert_eq!(edges.values().filter(|v| **v != 0).count(), 0, "open edges");
+    assert!((volume - bar).abs() < bar * 0.03, "enclosed {volume:.0} mm³, the bar {bar:.0}");
+    // A round pocket milled into a block: its wall stands within the top surface, between
+    // neighbouring vertices, and faces the pocket's axis all the way round.
+    let block = StockShape::Box { min: Vec3::new(-15.0, -15.0, 0.0), max: Vec3::new(15.0, 15.0, 5.0) };
+    let mut stock = crate::simulate::StockMap::new(&block, 0.25).unwrap();
+    stock.cut(&flat(20.0), Vec3::new(0.0, 0.0, 2.0), Vec3::new(0.0, 0.0, 2.0));
+    let mesh = crate::simulate::stock_mesh(&stock, 1);
+    let mut worst = 0.0f64;
+    let mut walls = 0;
+    for (n, p) in mesh.normals.iter().zip(&mesh.positions) {
+        if n.z < 0.0 || n.z > 0.7 || p.x.abs() > 12.0 || p.y.abs() > 12.0 {
+            continue;
+        }
+        let Some(inward) = Vec3::new(-p.x, -p.y, 0.0).normalized() else { continue };
+        let Some(across) = Vec3::new(n.x, n.y, 0.0).normalized() else { continue };
+        worst = worst.max(across.dot(inward).clamp(-1.0, 1.0).acos().to_degrees());
+        walls += 1;
+    }
+    assert!(walls > 100, "{walls} pocket wall vertices");
+    assert!(worst < 15.0, "a pocket wall vertex faces {worst:.1} deg off the axis");
+    // Turned over, the pocket is in the floor: its wall is drawn by the floor's own steps and
+    // faces the axis too.
+    let block = StockShape::Box { min: Vec3::new(0.0, 0.0, 0.0), max: Vec3::new(30.0, 30.0, 5.0) };
+    let mut stock = crate::simulate::StockMap::new(&block, 0.25).unwrap();
+    stock.cut(&flat(20.0), Vec3::new(15.0, 15.0, 2.0), Vec3::new(15.0, 15.0, 2.0));
+    let flipped =
+        Frame { origin: Vec3::new(0.0, 30.0, 0.0), x: Vec3::new(1.0, 0.0, 0.0), y: Vec3::new(0.0, -1.0, 0.0), z: Vec3::new(0.0, 0.0, -1.0) };
+    let (under, exact) = stock.transfer(&Frame::IDENTITY, &flipped).unwrap();
+    assert!(exact);
+    let mesh = crate::simulate::stock_mesh(&under, 1);
+    let mut worst = 0.0f64;
+    let mut walls = 0;
+    for (n, p) in mesh.normals.iter().zip(&mesh.positions) {
+        if n.z > 0.0 || n.z < -0.7 || (p.x - 15.0).abs() > 12.0 || (p.y - 15.0).abs() > 12.0 {
+            continue;
+        }
+        let Some(inward) = Vec3::new(15.0 - p.x, 15.0 - p.y, 0.0).normalized() else { continue };
+        let Some(across) = Vec3::new(n.x, n.y, 0.0).normalized() else { continue };
+        worst = worst.max(across.dot(inward).clamp(-1.0, 1.0).acos().to_degrees());
+        walls += 1;
+    }
+    assert!(walls > 100, "{walls} pocket wall vertices underneath");
+    assert!(worst < 15.0, "a pocket wall vertex underneath faces {worst:.1} deg off the axis");
+}
+
+#[test]
 fn boundaries_follow_the_part_and_choose_by_what_the_operation_does() {
     use crate::boundary::{Boundary, Containment, Plan, Source, region};
     let kind = |t: &str| -> OpKind { serde_json::from_value(serde_json::json!({ "type": t })).unwrap() };

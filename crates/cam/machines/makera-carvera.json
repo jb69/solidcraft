@@ -96,7 +96,13 @@
         "spindle_power_w",
         "max_feed",
         "rapid_feed",
-        "tool_changer",
+        "tool_changer"
+      ],
+      "from": "Makera's Carvera specification page (Spindle, Motion System, Dimensions)",
+      "checked": "2026-11-06"
+    },
+    {
+      "fields": [
         "collets",
         "laser"
       ],
@@ -115,6 +121,9 @@
   ],
   "notes": [
     "The control measures each tool's length after a change, so programs carry no tool length offset (the makera post).",
-    "The 1/8\" collet is standard; the others are optional collets."
+    "The 1/8\" collet is standard; the others are optional collets.",
+    "Motion: servo motors on X, Y and Z (400 W in all), 15 mm linear rails and ball screws on X and Z, 25 mm hardened rods and a ball screw on Y.",
+    "Spindle runout under 0.01 mm; resolution 0.01 mm.",
+    "The 200 W spindle is the limit when roughing aluminium: a 6 mm two-flute end mill at 15 000 rev/min and 1500 mm/min, 4 mm deep, takes about 170 W at 15 % stepover in 6061."
   ]
 }

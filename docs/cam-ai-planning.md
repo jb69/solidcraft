@@ -60,6 +60,70 @@ Z1, from their public specifications) and reads them at start. `cam.machine.list
 Manufacture preset pack (#2624) lists presets in code, and the machine backends (#2613) are
 about talking to a running machine.
 
+## How cutting loads are estimated
+
+Feeds and speeds are only safe if the cut they make fits the machine. So for every roughing
+operation SolidCraft estimates the load the cut puts on the spindle and on the X and Y drives,
+for the job's material (`cam.job.set {material}`), and reports how close it runs to each limit.
+The numbers are planning estimates, not measurements: they say how much margin a cut has, so
+the person can choose to push it or not.
+
+**The engagement** comes from the operation:
+
+| Operation | Radial width `ae` | Axial depth `ap` |
+|---|---|---|
+| Adaptive (2D, 3D) | the optimal load (default 20 % of the diameter) | the stepdown (default half the diameter) |
+| Pocket, slot | the full diameter: the first ring is a slot | the stepdown |
+| Face | the stepover | the stepdown |
+
+`ap` is capped at the flute length (a deeper cut is reported as `tool_too_short`).
+
+**The chip.** With feed `F` (mm/min), spindle speed `n` (rev/min) and `z` flutes, each tooth
+takes `fz = F / (n·z)`. Over the engagement angle `φ = acos(1 − 2·ae/D)` the chip is
+`h_mean = fz·(1 − cos φ)/φ` thick on average and `h_max = fz·sin φ` at most (`fz` when `φ`
+passes 90°). A narrow cut makes a thin chip even at a high feed (chip thinning).
+
+**The force.** The material's specific cutting force rises as the chip gets thinner
+(Kienzle): `kc = kc1.1 · h^(−mc)`. The values used are kc1.1 = 700 N/mm² and mc = 0.25 for
+aluminium (6061), 150 and 0.3 for plastics, 60 and 0.3 for wood.
+
+**The power.** The removal rate is `Q = ae·ap·F` (mm³/min); the cutting power is
+`P = kc(h_mean)·Q / 60 000` W. The spindle gives its rated power at its top speed and about
+constant torque below it, so the power available at `n` is `P_rated · min(n, n_max)/n_max`.
+The share `P / P_available` is the spindle load.
+
+**The force on the drives.** The tooth at its thickest chip pushes with
+`F_t = kc(h_max)·ap·h_max` along the cut, and pushes the tool off the wall with a radial force
+about 40 % of that in aluminium; the X and Y drives see `F_t·√(1 + 0.4²)`. It is set against
+the machine's `axis_force_n` when the machine file gives one.
+
+**What is reported:**
+
+| Share | Spindle | X/Y drives |
+|---|---|---|
+| over 100 % | `spindle_overload` (warning): it may stall or chatter | `axis_overload` (warning); on open-loop steppers the steps are lost without notice and the rest of the program is cut out of place |
+| 80–100 % | `spindle_margin` (information) | `axis_margin` (information) |
+
+Each issue says the width and depth that cause it, so the planner can narrow the cut, take a
+shallower step or slow the feed.
+
+**How well it matches real cuts.** Two hands-on Makera Z1 tests in 6061 (150 W spindle) agree:
+
+| Test | Load estimate | What happened |
+|---|---|---|
+| 6 mm 3-flute, 12 000 rev/min, 1000 mm/min, 2.5 × 1 mm | 65 % | clean |
+| same, 3 × 1 mm | 78 % | stalled twice in one corner |
+| same, 3 × 0.8 mm | 64 % | clean |
+| 6 mm 1-flute, 4 mm wide, 0.6 mm deep | 41 % | clean |
+| same, 1.0 mm deep | 69 % | the spindle slowed |
+| same, 1.1 mm deep | 75 % | stalled |
+
+So a stall comes at about 75–80 % of the estimate, and the trouble starts in corners, where an
+adaptive path engages the tool more than its nominal width. **The planner keeps the nominal
+load at about 50–65 %.** 7075 reached its limit sooner than 6061 at the same estimate and needs
+its own, higher cutting force; small cutters (2.5–3 mm) fail from clogged chips and breaking
+before they run out of power.
+
 ## 1. Understand the job
 
 What the assistant needs before it plans, and where each answer comes from:

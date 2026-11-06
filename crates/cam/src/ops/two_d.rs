@@ -453,6 +453,38 @@ fn contour(
     for k in (0..fp).rev() {
         offsets.push((k as f64 * fs, true));
     }
+    // A tab holds the part only where the part's wall meets the loop at the tab's height: just
+    // inside a loop round the part (the tool's radius in), the part's material (between its
+    // surface seen from below and from above) covers at least half the tab's height. Under an
+    // overhang, or beside a part that ends above the tab, it does not, and the tab would hold
+    // nothing.
+    let tab_top = bottom + tabs.2;
+    let probe = crate::tool::Tool::new(0, "probe", crate::tool::ToolKind::FlatEnd, 1e-3);
+    let floor = ctx.model_bounds.min.z - 1.0;
+    let below = crate::frame::Frame::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 0.0)).ok();
+    let ceiling = -(ctx.model_bounds.max.z + 1.0);
+    let supported = |i: usize, dense: &[Vec2], d: f64| -> bool {
+        let (Some(model), Side::Outside) = (ctx.model, side) else { return true };
+        let m = dense.len();
+        let (a, b) = (dense[(i + m - 1) % m], dense[(i + 1) % m]);
+        let t = b - a;
+        let len = t.len();
+        if len <= 0.0 {
+            return true;
+        }
+        // The part is on the loop's left when it runs counter-clockwise.
+        let left = Vec2::new(-t.y / len, t.x / len);
+        let inward = if polyline::is_ccw(dense) { left } else { left * -1.0 };
+        let q = dense[i] + inward * (d + 0.5);
+        let Some(high) = model.drop_z(&probe, q, floor).map(|c| c.z) else { return false };
+        // Seen from below (the frame turned over: y and z flip), the highest contact is the
+        // part's lowest surface.
+        let Some(low) = below.as_ref().and_then(|f| model.drop(&probe, f, Vec2::new(q.x, -q.y), ceiling)).map(|c| -c.z) else {
+            return false;
+        };
+        high.min(tab_top) - low.max(bottom) >= tabs.2 * 0.5 - ctx.tolerance
+    };
+    let mut tabs_placed: Option<u32> = None;
     let mut from_z = ctx.heights.feed;
     let mut pass_count = 0usize;
     for z in &zs {
@@ -475,7 +507,10 @@ fn contour(
                 // Outside a boss the tool is outside the loop; inside a pocket, inside it.
                 let pocket_like = side == Side::Inside;
                 let oriented = orient_for(ring, direction, pocket_like);
-                let pts = with_tabs(&oriented, *z, bottom, tabs, ctx.tolerance);
+                let (pts, placed) = with_tabs(&oriented, *z, bottom, tabs, ctx.tolerance, &|i, dense| supported(i, dense, d));
+                if tabs.0 > 0 && placed < tabs_placed.unwrap_or(u32::MAX) && *z < bottom + tabs.2 - 1e-9 {
+                    tabs_placed = Some(placed);
+                }
                 passes.push(Pass { points: pts, closed: true });
                 pass_count += 1;
             }
@@ -491,38 +526,80 @@ fn contour(
     lk.retract_clearance(&mut tp)?;
     notice.value("levels", zs.len());
     notice.value("passes", pass_count);
+    if let Some(placed) = tabs_placed {
+        notice.value("tabs_placed", placed);
+        if placed < tabs.0 {
+            notice.issue(
+                Issue::warning(
+                    "tabs_unsupported",
+                    format!(
+                        "{placed} of {} tabs meet the part: elsewhere the part does not reach the loop at the tab's height (an overhang); hold it another way or with more tabs",
+                        tabs.0
+                    ),
+                )
+                .parameter("tabs", tabs.0),
+            );
+        }
+    }
     Ok((tp, notice))
 }
 
 /// The loop at level `z` with `tabs.0` tabs of width `tabs.1` and height `tabs.2` above the
-/// bottom, raised where the tool passes over a tab (only on the bottom level).
-fn with_tabs(ring: &[Vec2], z: f64, bottom: f64, tabs: (u32, f64, f64), tol: f64) -> Vec<Vec3> {
+/// bottom, raised where the tool passes over a tab (only on the bottom level). Tabs are spread
+/// evenly; `supported` (a point on the loop) says where the part meets the loop at the tab's
+/// height, and each tab slides to the nearest stretch it covers or is left out. Returns the
+/// points and the number of tabs placed.
+fn with_tabs(ring: &[Vec2], z: f64, bottom: f64, tabs: (u32, f64, f64), tol: f64, supported: &dyn Fn(usize, &[Vec2]) -> bool) -> (Vec<Vec3>, u32) {
     let (n, w, h) = tabs;
     let tab_top = bottom + h;
+    let flat = |ring: &[Vec2]| ring.iter().map(|p| Vec3::new(p.x, p.y, z)).collect::<Vec<_>>();
     if n == 0 || w <= 0.0 || h <= 0.0 || z >= tab_top - 1e-9 {
-        return ring.iter().map(|p| Vec3::new(p.x, p.y, z)).collect();
+        return (flat(ring), 0);
     }
     let per = polyline::perimeter(ring);
     if per <= w * n as f64 {
-        return ring.iter().map(|p| Vec3::new(p.x, p.y, z)).collect();
+        return (flat(ring), 0);
     }
     let spacing = per / n as f64;
     let dense = polyline::densify(ring, (tol * 10.0).max(0.2));
-    let mut out = Vec::with_capacity(dense.len() + 4 * n as usize);
-    let mut run = 0.0;
     let m = dense.len();
+    // Distance along the loop to each point, and whether the part meets the loop there.
+    let mut at = Vec::with_capacity(m);
+    let mut run = 0.0;
+    for i in 0..m {
+        if i > 0 {
+            run += dense[i - 1].dist(dense[i]);
+        }
+        at.push(run);
+    }
+    let ok: Vec<bool> = (0..m).map(|i| supported(i, &dense)).collect();
+    // Distance along the loop between two positions, the short way round.
+    let gap = |a: f64, b: f64| {
+        let d = (a - b).abs() % per;
+        d.min(per - d)
+    };
+    let covers = |c: f64| (0..m).filter(|&i| gap(at[i], c) <= w * 0.5).all(|i| ok[i]);
+    let mut centres: Vec<f64> = Vec::new();
+    for k in 0..n {
+        let target = spacing * (k as f64 + 0.5);
+        let reach = (spacing - w) * 0.5;
+        let best = (0..m)
+            .map(|i| at[i])
+            .filter(|&c| gap(c, target) <= reach && covers(c) && centres.iter().all(|&o| gap(o, c) >= w))
+            .min_by(|a, b| gap(*a, target).total_cmp(&gap(*b, target)));
+        if let Some(c) = best {
+            centres.push(c);
+        }
+    }
+    let mut out = Vec::with_capacity(m + 1);
     for i in 0..=m {
         let p = dense[i % m];
-        if i > 0 {
-            run += dense[i - 1].dist(p);
-        }
-        // In a tab when within w/2 of a multiple of the spacing (centred at spacing/2).
-        let phase = (run + spacing * 0.5) % spacing;
-        let in_tab = phase < w * 0.5 || phase > spacing - w * 0.5;
+        let d = if i == m { per } else { at[i] };
+        let in_tab = centres.iter().any(|&c| gap(d, c) < w * 0.5);
         out.push(Vec3::new(p.x, p.y, if in_tab { tab_top } else { z }));
     }
     out.pop();
-    out
+    (out, centres.len() as u32)
 }
 
 fn chamfer(op: &Operation, ctx: &Context, width: f64, tip_offset: f64, side: Side) -> Result<(Toolpath, Notice)> {

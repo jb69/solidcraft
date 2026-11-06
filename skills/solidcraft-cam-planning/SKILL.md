@@ -33,6 +33,8 @@ ring of a pocket, a web cut) take the most power: step down less.
 - `cam.simulate` each setup: 0 `gouge_cells`, 0 collisions, no `uncut` warning.
 - The web cut reports `tabs_placed`; `tabs_unsupported` means tabs would meet air. Cut the web
   round the part's outline at its height: `geometry: {source: silhouette, within_heights: true}`.
+- A rounded part with no flat waist gets **sprues**, not tabs: small box bodies at the edge,
+  full height, in every setup's `fixtures`; the area operations leave them standing.
 - Show the person the plan and the numbers (time, loads, what is left) before posting.
 
 ## Red flags

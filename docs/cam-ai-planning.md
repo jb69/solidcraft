@@ -192,7 +192,14 @@ step in it has a `why` and the feature ids it covers:
   web of stock left to hold it until the last cut. The web cut follows the part's outline at
   the web's own height (`geometry: {source: silhouette, within_heights: true}`): a part
   narrower there than at its widest would otherwise be cut round in air, and its tabs would
-  hold nothing (`tabs_placed` 0, `tabs_unsupported`);
+  hold nothing (`tabs_placed` 0, `tabs_unsupported`). A part with no flat waist (a rounded
+  or lens-shaped part, its edge at different heights round its outline) has no height where
+  a web meets it: leave **sprues** instead. Each is a small box body just outside the outline,
+  the stock's full height, named in every setup's `fixtures`; every area operation keeps
+  clear of it (`fixture_clearance` about 0.3 mm), so a bar of stock joins the frame to the
+  part's edge on both sides. Put them where the edge is thickest and away from holes; the
+  last pass cuts only through the web round the part (`rest_machining`, the web's depth),
+  and the sprues are sawn off and filed by hand;
 - largest material removal first: a clearing pass with the largest tool the part allows → an
   adaptive rough → flats (flat-area finishing) and verticals (a profile or waterline on faces
   steeper than about 45° to the tool axis) → parallel finishing on the shallow areas only →

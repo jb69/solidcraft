@@ -123,10 +123,12 @@ impl Surface {
 
     /// The part of the free region at `z` where the tool still cuts the rest stock: tool
     /// positions with material standing above `z + margin` closer than `r - margin` to the tool
-    /// axis. The margin leaves a skin thinner than it (an earlier operation's stock to leave) to
-    /// finishing instead of retracing every wall.
-    fn rest_region(&self, rest: &HeightMap, r: f64, z: f64, margin: f64) -> Vec<Poly> {
-        let near = material_distance(rest, z + margin);
+    /// axis, and reaching below `roof - margin` (the level above: what this level clears; the
+    /// stock's bottom per cell in `floor`, where the stock was turned over and holds air under
+    /// a web). The margin leaves a skin thinner than it (an earlier operation's stock to leave)
+    /// to finishing instead of retracing every wall.
+    fn rest_region(&self, rest: &HeightMap, floor: Option<&HeightMap>, r: f64, z: f64, roof: f64, margin: f64) -> Vec<Poly> {
+        let near = material_distance(rest, floor, z + margin, roof - margin);
         let reach = r - margin;
         let mut map = HeightMap { origin: self.map.origin, cell: self.map.cell, nx: self.map.nx, ny: self.map.ny, z: self.map.z.clone() };
         for j in 0..map.ny {
@@ -274,15 +276,17 @@ fn pocket3d(
     // Regions per level, each a set of loops; with order_by_depth, regions are grouped by
     // the area they lie in and each area is cut to the bottom before the next.
     let mut per_level: Vec<(f64, Vec<Poly>)> = Vec::new();
+    let mut roof = top;
     for z in &zs {
         // Rest machining cuts only where the earlier operations left material for this tool.
         let region = match ctx.rest {
-            Some(rest) => surf.rest_region(rest, tool.radius(), *z, rest_margin),
+            Some(rest) => surf.rest_region(rest, ctx.rest_floor, tool.radius(), *z, roof.max(*z + rest_margin * 2.0), rest_margin),
             None => surf.free_region(z + eps),
         };
         if !region.is_empty() {
             per_level.push((*z, region));
         }
+        roof = *z;
     }
     if order_by_depth {
         // Group by the outer loop at the top level each region's probe falls in.
@@ -1103,9 +1107,11 @@ fn free_region_of(map: &HeightMap, z: f64) -> Vec<Poly> {
 
 /// For each cell of `rest`, the distance (mm) to the nearest cell whose stock stands above
 /// `z`: a two-pass chamfer distance transform, within a few percent of the Euclidean distance.
-fn material_distance(rest: &HeightMap, z: f64) -> Vec<f64> {
+fn material_distance(rest: &HeightMap, floor: Option<&HeightMap>, z: f64, roof: f64) -> Vec<f64> {
     let (nx, ny) = (rest.nx, rest.ny);
-    let mut d: Vec<f64> = rest.z.iter().map(|v| if v.is_finite() && *v > z { 0.0 } else { f64::INFINITY }).collect();
+    let below_roof = |k: usize| floor.and_then(|f| f.z.get(k)).is_none_or(|b| !b.is_finite() || *b < roof);
+    let mut d: Vec<f64> =
+        rest.z.iter().enumerate().map(|(k, v)| if v.is_finite() && *v > z && below_roof(k) { 0.0 } else { f64::INFINITY }).collect();
     let (a, b) = (rest.cell, rest.cell * std::f64::consts::SQRT_2);
     let at = |d: &[f64], i: i64, j: i64| -> f64 {
         if i < 0 || j < 0 || i >= nx as i64 || j >= ny as i64 { f64::INFINITY } else { d[j as usize * nx + i as usize] }

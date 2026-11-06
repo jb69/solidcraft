@@ -226,6 +226,7 @@ fn ctx_2d<'a>(tool: &'a Tool, loops: Vec<Vec<Vec2>>, h: ResolvedHeights) -> Cont
         stock_to_leave_radial: 0.0,
         stock_to_leave_axial: 0.0,
         rest: None,
+        rest_floor: None,
         boundary: crate::boundary::Plan::fixed(crate::boundary::Source::Selection, crate::boundary::Containment::Outside),
         boundary_cache: Default::default(),
     }
@@ -373,6 +374,7 @@ fn ctx_3d<'a>(tool: &'a Tool, mesh: &'a DropMesh, h: ResolvedHeights) -> Context
         stock_to_leave_radial: 0.0,
         stock_to_leave_axial: 0.0,
         rest: None,
+        rest_floor: None,
         boundary: crate::boundary::Plan::fixed(crate::boundary::Source::Stock, crate::boundary::Containment::Outside),
         boundary_cache: Default::default(),
     }
@@ -1211,6 +1213,67 @@ fn a_short_sprue_is_kept_clear_of_only_at_its_own_heights() {
     }
     assert!(worst <= 0.06, "the tool comes {worst} mm inside the sprue's clearance");
     assert!(above > 0, "the stock above the sprue is left uncut");
+    // The simulation agrees: passing over the sprue clear of it is no collision, and a cut
+    // through it is one.
+    let mut stock = StockMap::new(&ctx.stock, 0.25).unwrap();
+    let rep = simulate(&mut stock, &tool, &tp, None, None, None, Some(&sprue), 0.01).unwrap();
+    assert_eq!(rep.fixture_collisions, 0);
+    let mut through = Toolpath::new();
+    through.rapid(Vec3::new(25.0, 0.0, 20.0)).unwrap();
+    through.rapid(Vec3::new(25.0, 0.0, 5.0)).unwrap();
+    through.cut(Vec3::new(25.0, 20.0, 5.0), 500.0).unwrap();
+    let rep = simulate(&mut stock, &tool, &through, None, None, None, Some(&sprue), 0.01).unwrap();
+    assert!(rep.fixture_collisions > 0);
+}
+
+#[test]
+fn rest_machining_turned_over_cuts_the_web_and_not_the_air_under_it() {
+    // What a setup turned over sees: a 1.5 mm web on top of the stock round a block, air under
+    // it, and a column of stock standing under a sprue (here 4 x 4 mm at x 28..32, y 8..12).
+    let m = DropMesh::new(&box_mesh(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 20.0, 12.0)));
+    let tool = flat(6.0);
+    let mut ctx = ctx_3d(&tool, &m, heights(12.0, 0.0));
+    ctx.stock = StockShape::Box { min: Vec3::new(-15.0, -15.0, 0.0), max: Vec3::new(35.0, 35.0, 12.0) };
+    let b = solidcraft_geom::Aabb2 { min: Vec2::new(-16.0, -16.0), max: Vec2::new(36.0, 36.0) };
+    let mut tops = HeightMap::new(b, 0.25, 12.0).unwrap();
+    let mut floor = HeightMap::new(b, 0.25, 10.5).unwrap();
+    for j in 0..floor.ny {
+        for i in 0..floor.nx {
+            let p = floor.point(i, j);
+            if (28.0..=32.0).contains(&p.x) && (8.0..=12.0).contains(&p.y) {
+                floor.set(i, j, 0.0);
+            }
+            if (0.0..=20.0).contains(&p.x) && (0.0..=20.0).contains(&p.y) {
+                tops.set(i, j, 12.0);
+                floor.set(i, j, 0.0);
+            }
+        }
+    }
+    ctx.rest = Some(&tops);
+    ctx.rest_floor = Some(&floor);
+    let kind: OpKind = serde_json::from_value(serde_json::json!({ "type": "adaptive3d", "stepdown": 1.0, "optimal_load": 1.0 })).unwrap();
+    ctx.boundary = crate::boundary::Plan::new(
+        &crate::boundary::Boundary {
+            source: crate::boundary::Source::Part,
+            containment: crate::boundary::Containment::Outside,
+            offset: 12.0,
+            ..Default::default()
+        },
+        &kind,
+        false,
+        true,
+        true,
+    );
+    let mut o = op(kind);
+    o.tolerance = 0.05;
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    let cuts: Vec<Vec3> = tp.moves.iter().filter(|m| m.kind == MoveKind::Cut).map(|m| m.to).collect();
+    assert!(cuts.iter().any(|p| p.z > 10.0), "the web is cut");
+    let deep: Vec<&Vec3> = cuts.iter().filter(|p| p.z < 10.0).collect();
+    assert!(!deep.is_empty(), "the column under the sprue is cut");
+    for p in deep {
+        assert!(p.x > 28.0 - 3.0 - 1.0 && p.x < 32.0 + 4.0 && p.y > 8.0 - 4.0 && p.y < 12.0 + 4.0, "cuts air under the web at {p:?}");
+    }
 }
 
 #[test]

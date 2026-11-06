@@ -2143,6 +2143,7 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
         stock_to_leave_radial: op.stock_to_leave_radial,
         stock_to_leave_axial: op.stock_to_leave_axial,
         rest: rest_map,
+        rest_floor: rest_map.and(rest.and_then(|r| r.floor.as_ref())),
         boundary: cam::boundary::Plan::new(&op.boundary, &op.kind, has_selection, has_model, rest_map.is_some()),
         boundary_cache: Default::default(),
     };

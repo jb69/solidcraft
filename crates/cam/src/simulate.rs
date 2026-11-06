@@ -443,6 +443,26 @@ pub fn gouge_mesh(stock: &StockMap, model: &HeightMap, tol: f64) -> Mesh {
     mesh
 }
 
+/// Whether the tool meets a fixture on move `m` (from `prev`). Along the tool axis the cutter
+/// is dropped on the fixtures every half radius of the move, as the toolpath was made, so a
+/// tool passing over a short sprue clear of it is not a collision; the shank above the flutes
+/// is checked as a cylinder. A tilted tool is checked as a cylinder from its tip.
+fn meets_fixture(fx: &DropMesh, tool: &Tool, prev: Option<Vec3>, m: &crate::toolpath::Move, vertical: bool, tol: f64) -> bool {
+    let shank_r = tool.radius_at(tool.flute_length + 0.01);
+    if !vertical {
+        return fx.cylinder_hits(m.to, m.axis, tool.radius().max(shank_r), 0.0, tool.overall_length, 0.0);
+    }
+    if fx.cylinder_hits(m.to, m.axis, shank_r, tool.flute_length, tool.overall_length, 0.0) {
+        return true;
+    }
+    let from = prev.unwrap_or(m.to);
+    let n = ((from - m.to).len() / (tool.radius() * 0.5).max(tol)).ceil().clamp(0.0, 10_000.0) as usize;
+    (0..=n).any(|k| {
+        let p = if n == 0 { m.to } else { from.lerp(m.to, k as f64 / n as f64) };
+        fx.drop_z(tool, Vec2::new(p.x, p.y), p.z - tool.overall_length).is_some_and(|c| c.z > p.z + tol)
+    })
+}
+
 /// Simulates a toolpath against the stock map. Moves with the tool axis along z are swept;
 /// tilted moves are checked for collisions of the shank and holder against the model and
 /// fixtures. `model` is the model's Z-map on the stock grid (for gouges), when available.
@@ -500,7 +520,7 @@ pub fn simulate(
             }
         }
         if let Some(fx) = fixtures
-            && fx.cylinder_hits(m.to, m.axis, tool.radius().max(tool.radius_at(tool.flute_length + 0.01)), 0.0, tool.overall_length, 0.0)
+            && meets_fixture(fx, tool, prev, m, vertical, tol)
         {
             rep.fixture_collisions += 1;
         }

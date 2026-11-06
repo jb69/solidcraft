@@ -733,6 +733,9 @@ pub struct Context<'a> {
     /// The stock left by the previous operations, as a height map in the operation frame, for
     /// rest machining (`None`: machine the full stock).
     pub rest: Option<&'a HeightMap>,
+    /// The bottom of that stock in each cell (same grid), where it does not reach the stock's
+    /// bottom: a setup turned over sees the web the one before left as stock with air under it.
+    pub rest_floor: Option<&'a HeightMap>,
     /// The machining boundary to use ([`crate::boundary`]), and the region once worked out.
     pub boundary: crate::boundary::Plan,
     pub boundary_cache: crate::boundary::Cache,

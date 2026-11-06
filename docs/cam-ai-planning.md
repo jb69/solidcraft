@@ -199,7 +199,11 @@ step in it has a `why` and the feature ids it covers:
   clear of it (`fixture_clearance` about 0.3 mm), so a bar of stock joins the frame to the
   part's edge on both sides. Put them where the edge is thickest and away from holes; the
   last pass cuts only through the web round the part (`rest_machining`, the web's depth),
-  and the sprues are sawn off and filed by hand;
+  and the sprues are sawn off and filed by hand. Hold the part with tabs or with sprues, not
+  both, unless each holds where the other cannot (tabs along a flat stretch of edge, a sprue
+  at a rounded tip). Sprues are as small as still hold the part: the fewest (three spread round
+  it), the narrowest that takes the finishing load, only as long as the gap to the frame, since
+  each is sawn off and filed by hand;
 - largest material removal first: a clearing pass with the largest tool the part allows → an
   adaptive rough → flats (flat-area finishing) and verticals (a profile or waterline on faces
   steeper than about 45° to the tool axis) → parallel finishing on the shallow areas only →

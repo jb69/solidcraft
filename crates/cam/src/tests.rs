@@ -401,6 +401,51 @@ fn parallel_finishing_follows_a_sphere() {
 }
 
 #[test]
+fn parallel_finishing_climbs_a_step_without_cutting_into_it() {
+    // A tall block on a plate: the ball climbs 10 mm round the block's edge within one
+    // sample spacing, and a straight move between samples cut across that turn into the block.
+    let boxes = [(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 20.0, 2.0)), (Vec3::new(15.0, 0.0, 2.0), Vec3::new(25.0, 20.0, 12.0))];
+    let mut part = Mesh::default();
+    for (lo, hi) in boxes {
+        let b = box_mesh(lo, hi);
+        let base = part.positions.len() as u32;
+        part.positions.extend(b.positions);
+        part.normals.extend(b.normals);
+        part.triangles.extend(b.triangles.iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+    }
+    let mesh = DropMesh::new(&part);
+    let tool = ball(6.0);
+    let mut ctx = ctx_3d(&tool, &mesh, heights(14.0, 0.0));
+    ctx.tolerance = 0.01;
+    let o = op(OpKind::Parallel { stepover: 4.0, angle_deg: 0.0, direction: crate::ops::Direction::Both, slope_min_deg: 0.0, slope_max_deg: 90.0 });
+    let (tp, _) = generate(&o, &ctx).unwrap();
+    // How far the ball, its tip at `p`, reaches into the boxes: its radius less the distance
+    // from its centre to the nearest box.
+    let into = |p: Vec3| {
+        let c = Vec3::new(p.x, p.y, p.z + 3.0);
+        let d = boxes
+            .iter()
+            .map(|(lo, hi)| {
+                let q = Vec3::new(c.x.clamp(lo.x, hi.x), c.y.clamp(lo.y, hi.y), c.z.clamp(lo.z, hi.z));
+                (c - q).len()
+            })
+            .fold(f64::INFINITY, f64::min);
+        3.0 - d
+    };
+    let mut worst = 0.0_f64;
+    let mut from: Option<Vec3> = None;
+    for m in &tp.moves {
+        if let (MoveKind::Cut, Some(a)) = (m.kind, from) {
+            for k in 1..40 {
+                worst = worst.max(into(a.lerp(m.to, k as f64 / 40.0)));
+            }
+        }
+        from = Some(m.to);
+    }
+    assert!(worst <= 0.03, "the ball cuts {worst} mm into the part");
+}
+
+#[test]
 fn waterline_contours_of_a_box_are_rectangles_offset_by_the_radius() {
     let mesh = DropMesh::new(&box_mesh(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 20.0, 10.0)));
     let tool = flat(4.0);

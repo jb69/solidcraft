@@ -35,6 +35,9 @@ ring of a pocket, a web cut) take the most power: step down less.
   round the part's outline at its height: `geometry: {source: silhouette, within_heights: true}`.
 - A rounded part with no flat waist gets **sprues**, not tabs: small box bodies at the edge,
   full height, in every setup's `fixtures`; the area operations leave them standing.
+- Hold with tabs or with sprues, not both, unless each holds where the other cannot (tabs on a
+  flat edge, a sprue at a rounded tip). Make sprues as small as still hold: the fewest (three
+  spread round the part), the narrowest that takes the finishing load, the gap's length only.
 - Show the person the plan and the numbers (time, loads, what is left) before posting.
 
 ## Red flags

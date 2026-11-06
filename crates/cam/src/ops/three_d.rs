@@ -387,13 +387,23 @@ fn drop_polyline(ctx: &Context, surf: &Surface, tool: &crate::tool::Tool, pts: &
     if pts.len() == 1 {
         dense.push(pts[0]);
     }
-    let dropped: Vec<Vec3> = dense
-        .iter()
-        .map(|p| {
-            let z = ctx.drop(tool, *p, surf.floor).map_or(surf.floor, |c| c.z);
-            Vec3::new(p.x, p.y, z.clamp(bottom, top.max(bottom)))
-        })
-        .collect();
+    let drop_at = |p: Vec2| {
+        let z = ctx.drop(tool, p, surf.floor).map_or(surf.floor, |c| c.z);
+        Vec3::new(p.x, p.y, z.clamp(bottom, top.max(bottom)))
+    };
+    // The spacing holds the chord error where the tool's path bends no tighter than the
+    // surface's own curve; where the tool climbs a step its path turns round the step's edge,
+    // and a straight move between two samples cuts across the turn into the part. Each span is
+    // split where the tool's height half way along is off the straight move by more than the
+    // tolerance.
+    let mut dropped: Vec<Vec3> = Vec::with_capacity(dense.len());
+    if let Some(&first) = dense.first() {
+        dropped.push(drop_at(first));
+    }
+    for w in dense.windows(2) {
+        let (Some(&a), b) = (dropped.last(), drop_at(w[1])) else { continue };
+        refine_span(&drop_at, a, b, ctx.tolerance, 16, &mut dropped);
+    }
     let in_bounds = |p: &Vec3| polyline::set_contains(&surf.boundary, Vec2::new(p.x, p.y));
     let in_slope = |p: &Vec3| {
         slope.is_none_or(|(lo, hi)| {
@@ -402,6 +412,24 @@ fn drop_polyline(ctx: &Context, surf: &Surface, tool: &crate::tool::Tool, pts: &
         })
     };
     split_where(&dropped, |p| in_bounds(p) && in_slope(p)).into_iter().map(|piece| simplify3(&piece, ctx.tolerance)).collect()
+}
+
+/// Appends the tool's path from `a` to `b` (both on it) to `out`, `b` included: the straight
+/// move, or where the tool's height half way along is off it by more than `tol`, the two halves
+/// refined the same way, at most `depth` times and no shorter than `tol`.
+fn refine_span(drop_at: &dyn Fn(Vec2) -> Vec3, a: Vec3, b: Vec3, tol: f64, depth: u32, out: &mut Vec<Vec3>) {
+    let (a2, b2) = (Vec2::new(a.x, a.y), Vec2::new(b.x, b.y));
+    if depth == 0 || a2.dist(b2) <= tol {
+        out.push(b);
+        return;
+    }
+    let m = drop_at(a2.lerp(b2, 0.5));
+    if (m.z - (a.z + b.z) * 0.5).abs() <= tol {
+        out.push(b);
+        return;
+    }
+    refine_span(drop_at, a, m, tol, depth - 1, out);
+    refine_span(drop_at, m, b, tol, depth - 1, out);
 }
 
 /// The sample spacing along a pass for a chord error of the tolerance on a surface the tool

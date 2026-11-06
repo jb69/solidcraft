@@ -243,7 +243,13 @@ fn rotary_part_posts_with_a_words() {
 fn swarf_and_indexed_orientation() {
     let mut s = block();
     let flat = add_flat(&mut s, 6.0);
-    let setup = run(&mut s, "cam.setup.create", json!({"name": "5x", "machine": {"preset": "trunnion_ac", "work_area": [500, 400, 300], "spindle_rpm_max": 20000}}))["id"].as_u64().unwrap();
+    let setup = run(
+        &mut s,
+        "cam.setup.create",
+        json!({"name": "5x", "machine": {"preset": "trunnion_ac", "work_area": [500, 400, 300], "spindle_rpm_max": 20000}}),
+    )["id"]
+        .as_u64()
+        .unwrap();
     // Swarf along the block's front wall, which is vertical: the tool axis is z.
     let op = run(
         &mut s,
@@ -414,11 +420,12 @@ fn carvera_program_uses_the_kit_the_checks_and_the_makera_post() {
         json!({"setup": setup, "type": "drill", "tool": drill, "name": "Drill", "cycle": "peck", "peck": 1, "geometry": {"source": "holes", "points": [[13, 10, 5]]}}),
     );
     let g = run(&mut s, "cam.generate", json!({"setup": setup}));
-    // The block's hole is 6 mm and the kit's drill 3.175 mm: that warning is the only one.
+    // The block's hole is 6 mm and the kit's drill 3.175 mm: that warning is the only one (the
+    // job has no material, so the roughing load is not estimated: information only).
     assert_eq!(g["status"], "warning", "{g}");
     for o in g["setups"][0]["operations"].as_array().unwrap() {
         for i in o["notice"]["issues"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
-            assert_eq!(i["code"], "tool_diameter_mismatch", "{o}");
+            assert!(i["code"] == "tool_diameter_mismatch" || i["code"] == "material_unknown", "{o}");
         }
     }
     let post = run(&mut s, "cam.post", json!({"allow_unknown_machine": true}));
@@ -644,6 +651,120 @@ fn turning_on_the_rotary_axis_faces_grooves_and_threads() {
     assert_eq!(post["post"], "makera");
     let code = post["gcode"].as_str().unwrap();
     assert!(code.lines().filter(|l| l.contains(" A")).count() > 300, "{}", &code[..600]);
+}
+
+#[test]
+fn a_roughing_cut_reports_its_spindle_load_for_the_jobs_material() {
+    let mut s = block();
+    let t = run(
+        &mut s,
+        "cam.tool.add",
+        json!({"name": "6 mm 2-flute", "kind": "flat", "diameter": 6, "flutes": 2, "flute_length": 22, "overall_length": 60,
+               "feeds": {"spindle_rpm": 15000, "cutting": 1500, "plunge": 300}}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "machine": "carvera"}));
+    let op = run(&mut s, "cam.operation.adaptive3d", json!({"tool": t, "stepdown": 4, "optimal_load": 0.9}))["id"].as_u64().unwrap();
+    let notice = |s: &mut Session| {
+        run(s, "cam.generate", json!({}));
+        run(s, "cam.notices", json!({}))["notices"].as_array().unwrap().iter().find(|n| n["operation"] == op).unwrap().clone()
+    };
+    let codes = |n: &Value| n["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    // No material: the load is not guessed.
+    let n = notice(&mut s);
+    assert!(codes(&n).contains(&"material_unknown".to_string()) && n["values"]["spindle_load"].is_null(), "{n}");
+    // 6061: about 170 W of the Carvera's 200 W, reported as little margin.
+    run(&mut s, "cam.job.set", json!({"material": "aluminium"}));
+    let n = notice(&mut s);
+    let load = &n["values"]["spindle_load"];
+    assert!((load["power_w"].as_f64().unwrap() - 170.0).abs() < 5.0, "{n}");
+    assert!(codes(&n).contains(&"spindle_margin".to_string()), "{n}");
+    // A wider cut is past the spindle: a warning, not a refusal.
+    run(&mut s, "cam.operation.set", json!({"operation": op, "optimal_load": 1.3}));
+    let n = notice(&mut s);
+    assert!(codes(&n).contains(&"spindle_overload".to_string()) && n["status"] == "warning", "{n}");
+    // The same cut in wood is light; changing the material regenerates the operation.
+    run(&mut s, "cam.job.set", json!({"material": "wood"}));
+    let n = notice(&mut s);
+    assert!(!codes(&n).iter().any(|c| c.starts_with("spindle_")), "{n}");
+    assert!(fails(&mut s, "cam.job.set", json!({"material": "unobtainium"})).contains("unknown material"));
+}
+
+#[test]
+fn rest_roughing_cuts_only_what_the_larger_tool_left() {
+    let mut s = block();
+    let big = add_flat(&mut s, 6.0);
+    let small = add_flat(&mut s, 3.0);
+    // Stock 10 mm around the part, cleared in a ring around it: a frame of stock stays, as when
+    // the frame holds the part.
+    let stock = json!({"mode": "relative_box", "x_neg": 10, "x_pos": 10, "y_neg": 10, "y_pos": 10, "z_neg": 0, "z_pos": 1});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "machine": *TEST_MILL, "stock": stock}));
+    let leave =
+        json!({"stock_to_leave_radial": 0.3, "stock_to_leave_axial": 0.2, "boundary": {"source": "part", "containment": "outside", "offset": 4}});
+    let with = |p: Value| {
+        let mut p = p;
+        p.as_object_mut().unwrap().extend(leave.as_object().unwrap().clone());
+        p
+    };
+    run(&mut s, "cam.operation.adaptive3d", with(json!({"tool": big, "stepdown": 3})));
+    let rest = run(&mut s, "cam.operation.adaptive3d", with(json!({"tool": small, "stepdown": 3, "rest_machining": true})))["id"].as_u64().unwrap();
+    let full = run(&mut s, "cam.operation.adaptive3d", with(json!({"tool": small, "stepdown": 3})))["id"].as_u64().unwrap();
+    run(&mut s, "cam.generate", json!({}));
+    let notices = run(&mut s, "cam.notices", json!({}));
+    let length = |id: u64| {
+        let n = notices["notices"].as_array().unwrap().iter().find(|n| n["operation"] == id).unwrap();
+        n["values"]["cutting_length_mm"].as_f64().unwrap_or(0.0)
+    };
+    let (rest_len, full_len) = (length(rest), length(full));
+    // The 6 mm tool leaves the pocket's corners and the 6 mm hole; the frame of stock beyond the
+    // ring and the 0.3 mm skin on every wall are not rest material for the 3 mm tool.
+    assert!(rest_len > 0.0, "the corners and the hole are left for the small tool");
+    // About 1 % of a full rough here; keeping or dropping whole loops of the free region
+    // retraced the ring along the frame and every wall (over 5 %).
+    assert!(rest_len < full_len * 0.03, "rest roughing retraced the part: {rest_len:.0} mm against {full_len:.0} mm for the whole part");
+}
+
+#[test]
+fn a_waterline_inside_the_parts_outline_does_not_gouge_along_the_boundary() {
+    // Inside the outline the boundary crosses the part's top: the levels below the top met the
+    // blocked cells outside it, read as the floor, and ran along the edge through the part.
+    let mut s = block();
+    let tool = add_flat(&mut s, 3.0);
+    let setup = run(&mut s, "cam.setup.create", json!({"name": "Top", "machine": *TEST_MILL}))["id"].as_u64().unwrap();
+    run(
+        &mut s,
+        "cam.operation.contour3d",
+        json!({"tool": tool, "stepdown": 1, "boundary": {"source": "part", "containment": "inside", "offset": 0}}),
+    );
+    run(&mut s, "cam.generate", json!({}));
+    let sim = run(&mut s, "cam.simulate", json!({"setup": setup}));
+    assert_eq!(sim["total"]["gouge_cells"], 0, "{}", sim["notice"]);
+}
+
+#[test]
+fn the_simulation_reports_a_surface_left_uncut_above_the_bottom_height() {
+    // A rough that stops 2 mm above the pocket's floor leaves the floor, a surface facing the
+    // tool, uncut: the simulation says how much and where. Cut to the floor, nothing is left.
+    let uncut = |bottom: Value| {
+        let mut s = block();
+        let tool = add_flat(&mut s, 3.0);
+        let setup = run(&mut s, "cam.setup.create", json!({"name": "Top", "machine": *TEST_MILL}))["id"].as_u64().unwrap();
+        run(&mut s, "cam.operation.adaptive3d", json!({"tool": tool, "stepdown": 2, "heights": {"bottom": bottom}}));
+        run(&mut s, "cam.generate", json!({}));
+        let sim = run(&mut s, "cam.simulate", json!({"setup": setup}));
+        let issue = sim["notice"]["issues"].as_array().and_then(|i| i.iter().find(|x| x["code"] == "uncut")).cloned();
+        (sim["notice"]["values"]["uncut_area_mm2"].as_f64().unwrap(), issue)
+    };
+    let (area, issue) = uncut(json!({"from": "model_top", "offset": -2}));
+    assert!(area > 100.0, "most of the 16 x 10 mm pocket floor: {area}");
+    let issue = issue.expect("an uncut warning");
+    assert_eq!(issue["severity"], "warning", "{issue}");
+    let at = &issue["suggestion"]["uncut_at"];
+    let (x, y) = (at[0].as_f64().unwrap(), at[1].as_f64().unwrap());
+    assert!((20.0..=36.0).contains(&x) && (10.0..=20.0).contains(&y), "in the pocket: {issue}");
+    let (area, issue) = uncut(json!({"from": "model_bottom", "offset": 0}));
+    assert!(area < 10.0 && issue.is_none(), "cut to the floor: {area} {issue:?}");
 }
 
 #[test]
@@ -925,6 +1046,9 @@ fn a_second_setup_turns_the_part_over_and_starts_from_what_the_first_left() {
     assert!(start < num(&top_sim["notice"]["values"]["initial_stock_mm3"]) - 500.0, "the top's cuts are gone from the bottom's stock");
     assert_eq!(bottom_sim["notice"]["values"]["stock_from_setup"], top_id);
     assert_eq!(bottom_sim["total"]["gouge_cells"], 0, "{}", bottom_sim["notice"]);
+    // What is left on the part's own outline is measured apart from the stock around it.
+    let on_part = num(&bottom_sim["notice"]["values"]["rest_on_part_mm3"]);
+    assert!(on_part > 0.0 && on_part < num(&bottom_sim["notice"]["values"]["rest_volume_mm3"]), "{}", bottom_sim["notice"]);
     // Parametric across setups: changing the top makes the bottom stale; generating brings both current.
     run(&mut s, "cam.operation.set", json!({"operation": face, "stepover": 3}));
     let n = run(&mut s, "cam.notices", json!({}));
@@ -1111,12 +1235,15 @@ fn the_analysis_finds_the_features_their_access_and_the_machines_limits() {
     let mut s = benchmark_part();
     // No machine named: the analysis still reports, and says nothing was checked.
     let a = run(&mut s, "cam.analyze", json!({}));
-    let codes = |a: &Value| -> Vec<String> { a["notice"]["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap().to_string()).collect() };
+    let codes =
+        |a: &Value| -> Vec<String> { a["notice"]["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap().to_string()).collect() };
     assert!(codes(&a).contains(&"machine_unknown".to_string()), "{}", a["notice"]);
-    let features = |a: &Value, kind: &str| -> Vec<Value> { a["features"].as_array().unwrap().iter().filter(|f| f["kind"] == kind).cloned().collect() };
+    let features =
+        |a: &Value, kind: &str| -> Vec<Value> { a["features"].as_array().unwrap().iter().filter(|f| f["kind"] == kind).cloned().collect() };
     // The pocket: 8 deep, its sharp corners reported.
     let pockets = features(&a, "pocket");
-    let pocket = pockets.iter().find(|p| (p["values"]["depth_mm"].as_f64().unwrap() - 8.0).abs() < 1e-6).unwrap_or_else(|| panic!("{:#}", a["features"]));
+    let pocket =
+        pockets.iter().find(|p| (p["values"]["depth_mm"].as_f64().unwrap() - 8.0).abs() < 1e-6).unwrap_or_else(|| panic!("{:#}", a["features"]));
     assert!(pocket["values"]["sharp_inside_corners"].as_u64().unwrap() >= 4, "{pocket}");
     assert!(pocket["values"]["largest_roughing_tool_mm"].as_f64().unwrap() > 5.0, "{pocket}");
     assert!(codes(&a).contains(&"sharp_inside_corner".to_string()));
@@ -1146,7 +1273,11 @@ fn the_analysis_finds_the_features_their_access_and_the_machines_limits() {
     assert_eq!(a["limits"]["tool_slots"], 6, "{}", a["limits"]);
     assert!(a["limits"]["smallest_tool_mm"].as_f64().unwrap() <= 5.0 + 1e-6, "{}", a["limits"]);
     // Too big for a Z1 when the stock is a large block.
-    run(&mut s, "cam.setup.create", json!({"machine": "z1", "stock": {"mode": "relative_box", "x_neg": 60, "x_pos": 60, "y_neg": 10, "y_pos": 10, "z_pos": 1}}));
+    run(
+        &mut s,
+        "cam.setup.create",
+        json!({"machine": "z1", "stock": {"mode": "relative_box", "x_neg": 60, "x_pos": 60, "y_neg": 10, "y_pos": 10, "z_pos": 1}}),
+    );
     let a = run(&mut s, "cam.analyze", json!({}));
     assert!(codes(&a).contains(&"exceeds_work_area".to_string()), "{}", a["notice"]);
     // Faces on request, each with its role and the directions that reach it.
@@ -1184,5 +1315,9 @@ fn a_pocket_in_the_bottom_asks_for_the_other_side() {
     run(&mut s, "solid.box", json!({"length": 20, "width": 20, "height": 5, "corner": [20, 10, 0], "operation": "cut", "targets": ["Part"]}));
     let a = run(&mut s, "cam.analyze", json!({"machine": "carvera"}));
     assert_eq!(a["directions"], json!(["+z", "-z"]), "{}", a["notice"]);
-    assert!(a["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "needs_second_side" || i["code"] == "setups_needed"), "{}", a["notice"]);
+    assert!(
+        a["notice"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "needs_second_side" || i["code"] == "setups_needed"),
+        "{}",
+        a["notice"]
+    );
 }

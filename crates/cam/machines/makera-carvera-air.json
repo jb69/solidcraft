@@ -45,7 +45,8 @@
     },
     "tcp": false,
     "linearisation_tolerance": 0.01,
-    "max_rotary_step_deg": 5.0
+    "max_rotary_step_deg": 5.0,
+    "axis_drive": "closed_loop_stepper"
   },
   "options": [
     {
@@ -109,9 +110,18 @@
       ],
       "from": "Makera's published specifications for the Carvera Air 4th-axis module",
       "checked": null
+    },
+    {
+      "fields": [
+        "axis_drive"
+      ],
+      "from": "Makera's buying guides (Z1 vs Z1 Pro; Carvera vs Carvera Air) and the UNSW Making Carvera guide",
+      "checked": "2026-11-06"
     }
   ],
   "notes": [
-    "Tools are changed by hand with the lever; the control pauses at each change."
+    "Tools are changed by hand with the lever; the control pauses at each change.",
+    "An auto tool setter on the bed and a wired probe for auto Z and boundary scanning (Air quick start guide V2.2, p3–6).",
+    "The X and Y drives are closed-loop steppers: lost steps stop the machine. The 4th axis is a NEMA 17 stepper."
   ]
 }

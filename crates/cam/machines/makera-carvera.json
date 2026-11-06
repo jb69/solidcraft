@@ -47,7 +47,8 @@
     },
     "tcp": false,
     "linearisation_tolerance": 0.01,
-    "max_rotary_step_deg": 5.0
+    "max_rotary_step_deg": 5.0,
+    "axis_drive": "servo"
   },
   "options": [
     {
@@ -102,10 +103,7 @@
       "checked": "2026-11-06"
     },
     {
-      "fields": [
-        "collets",
-        "laser"
-      ],
+      "fields": [],
       "from": "Makera's published specifications for the Carvera (makera.com product and specification pages, retailer specification sheets) and the Carvera community documentation",
       "checked": null
     },
@@ -117,6 +115,29 @@
       ],
       "from": "Makera's published specifications for the Carvera 4th-axis module",
       "checked": null
+    },
+    {
+      "fields": [
+        "tool_changer",
+        "collets",
+        "laser"
+      ],
+      "from": "Carvera manual v1.3 (CARVERA_MANUAL_2026.02), pages 16, 27, 46, 52–53",
+      "checked": "2026-11-06"
+    },
+    {
+      "fields": [
+        "collets"
+      ],
+      "from": "Makera's collets for this machine: 1/8\" (standard), 1/4\", 6, 4 and 3 mm (confirmed by the user)",
+      "checked": "2026-11-06"
+    },
+    {
+      "fields": [
+        "axis_drive"
+      ],
+      "from": "Makera's buying guides (Z1 vs Z1 Pro; Carvera vs Carvera Air) and the UNSW Making Carvera guide",
+      "checked": "2026-11-06"
     }
   ],
   "notes": [
@@ -124,6 +145,10 @@
     "The 1/8\" collet is standard; the others are optional collets.",
     "Motion: servo motors on X, Y and Z (400 W in all), 15 mm linear rails and ball screws on X and Z, 25 mm hardened rods and a ball screw on Y.",
     "Spindle runout under 0.01 mm; resolution 0.01 mm.",
-    "The 200 W spindle is the limit when roughing aluminium: a 6 mm two-flute end mill at 15 000 rev/min and 1500 mm/min, 4 mm deep, takes about 170 W at 15 % stepover in 6061."
+    "Makera's starting feeds (manual p54): aluminium and copper 0.1–0.2 mm deep, 300–500 mm/min, 200 mm/min plunge, 12 000 rev/min with a single-flute bit for metal; wood and plastic 0.5–2 mm deep, 500–1000 mm/min at 10 000 rev/min. Heavier cuts are the programmer's choice: the generate notice estimates each roughing operation's spindle load.",
+    "Workholding (manual p45): L-brackets with top clamps for stock under 20 mm, side clamps on the thick bracket above that; a 1–2 mm waste board under through cuts.",
+    "The work origin is set from anchor 1 (lower left) or anchor 2; machine zero is the upper right (manual p26, p31).",
+    "Jogging runs at the G0 speed, 3000 mm/min by default (manual p35).",
+    "Programs call tools T1–T6 with M6 (the wireless probe is the seventh); any other number stops with an alarm (manual p27, p36)."
   ]
 }

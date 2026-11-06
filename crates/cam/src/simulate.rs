@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use solidcore_record::{Vec2, Vec3};
-use solidcraft_geom::{Aabb2, Mesh};
 use solidcraft_geom::prelude::*;
+use solidcraft_geom::{Aabb2, Mesh};
 
 use crate::dropcutter::DropMesh;
 use crate::heightmap::HeightMap;
@@ -282,6 +282,16 @@ pub struct SimulationReport {
     /// Material left above the model (within the stock), mm³.
     pub rest_volume_mm3: f64,
     pub rest_max_mm: f64,
+    /// The same over the part's own outline only (columns where the model stands above the
+    /// floor): what the cuts left on the part, without the frame of stock around it.
+    pub rest_on_part_mm3: f64,
+    pub rest_on_part_max_mm: f64,
+    /// The part's area left more than [`UNCUT_MM`] high in the columns this run cut (a cut that
+    /// stopped short of the surface), counting a column only when its four
+    /// neighbours are too (a column astride a wall reads the wall's height), and the highest
+    /// such column (x, y, how high).
+    pub uncut_area_mm2: f64,
+    pub uncut_at: Option<Vec3>,
     /// Cells cut below the model's surface by more than the tolerance.
     pub gouge_cells: usize,
     pub gouge_max_mm: f64,
@@ -296,6 +306,11 @@ pub struct SimulationReport {
     pub swept_moves: usize,
     pub checked_moves: usize,
 }
+
+/// Material left on the part higher than this (mm) counts as uncut, not as finishing stock.
+pub const UNCUT_MM: f64 = 1.0;
+/// Uncut area (mm²) worth a warning: less is a corner the tool's radius cannot reach.
+pub const UNCUT_WARN_MM2: f64 = 4.0;
 
 /// The model's own Z-map (its top surface) over the stock map's grid, for gouge and rest checks.
 pub fn model_map(model: &DropMesh, grid: &HeightMap, floor: f64) -> HeightMap {
@@ -392,6 +407,8 @@ pub fn simulate(
 ) -> Result<SimulationReport> {
     crate::positive("tolerance", tol)?;
     let before = stock.volume();
+    // The columns this run cuts: a surface is uncut only where the run's tools came down.
+    let start_z = stock.map.z.clone();
     let mut rep = SimulationReport::default();
     if tp.laser {
         // A laser marks or cuts through; the Z-map stock does not model either.
@@ -444,13 +461,23 @@ pub fn simulate(
         let mut rest = 0.0;
         let mut rest_max = 0.0f64;
         let mut gouge_max = 0.0f64;
+        // Columns off the part carry the model map's floor, its lowest value.
+        let floor = model.z.iter().copied().filter(|z| z.is_finite()).fold(f64::INFINITY, f64::min);
+        let (mut on_part, mut on_part_max) = (0.0, 0.0f64);
         for (s, mz) in stock.map.z.iter().zip(&model.z) {
             let d = s - mz;
             if s.is_finite() && d > tol {
                 rest += d;
                 rest_max = rest_max.max(d);
+                if *mz > floor + tol {
+                    on_part += d;
+                    on_part_max = on_part_max.max(d);
+                }
             }
         }
+        rep.rest_on_part_mm3 = on_part * stock.map.cell * stock.map.cell;
+        rep.rest_on_part_max_mm = on_part_max;
+        (rep.uncut_area_mm2, rep.uncut_at) = uncut(stock, &start_z, model, tol);
         for (i, j, depth) in gouges(stock, model, tol) {
             rep.gouge_cells += 1;
             if depth > gouge_max {
@@ -466,6 +493,39 @@ pub fn simulate(
     Ok(rep)
 }
 
+/// The part's area left more than [`UNCUT_MM`] above `model` in the columns cut since `start`
+/// (the stock's heights before): a cut that stopped short of a surface facing the tool. A
+/// column counts only when its four neighbours do too (a column astride a wall reads the
+/// wall's height). Returns the area (mm²) and the highest column (x, y, how high).
+pub fn uncut(stock: &StockMap, start: &[f64], model: &HeightMap, tol: f64) -> (f64, Option<Vec3>) {
+    // Columns off the part carry the model map's floor, its lowest value.
+    let floor = model.z.iter().copied().filter(|z| z.is_finite()).fold(f64::INFINITY, f64::min);
+    let (nx, ny) = (stock.map.nx, stock.map.ny);
+    let high = |i: usize, j: usize| {
+        let k = j * nx + i;
+        let (s, mz) = (stock.map.z.get(k).copied()?, model.z.get(k).copied()?);
+        let cut = start.get(k).is_some_and(|z0| s < z0 - tol);
+        (cut && s.is_finite() && mz > floor + tol && s - mz > UNCUT_MM).then_some(s - mz)
+    };
+    let mut cells = 0usize;
+    let mut at = None;
+    let mut top = 0.0f64;
+    for j in 1..ny.saturating_sub(1) {
+        for i in 1..nx.saturating_sub(1) {
+            let Some(d) = high(i, j) else { continue };
+            if [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)].iter().all(|&(a, b)| high(a, b).is_some()) {
+                cells += 1;
+                if d > top {
+                    top = d;
+                    let p = stock.map.point(i, j);
+                    at = Some(Vec3::new(p.x, p.y, d));
+                }
+            }
+        }
+    }
+    (cells as f64 * stock.map.cell * stock.map.cell, at)
+}
+
 impl SimulationReport {
     pub fn notice(&self) -> Notice {
         let mut n = Notice::new(format!(
@@ -476,6 +536,12 @@ impl SimulationReport {
         n.value("remaining_volume_mm3", r3(self.remaining_volume_mm3));
         n.value("rest_volume_mm3", r3(self.rest_volume_mm3));
         n.value("rest_max_mm", r3(self.rest_max_mm));
+        n.value("rest_on_part_mm3", r3(self.rest_on_part_mm3));
+        n.value("rest_on_part_max_mm", r3(self.rest_on_part_max_mm));
+        n.value("uncut_area_mm2", r3(self.uncut_area_mm2));
+        if let Some(p) = self.uncut_at {
+            n.value("uncut_at", serde_json::json!([r3(p.x), r3(p.y), r3(p.z)]));
+        }
         n.value("gouge_cells", self.gouge_cells);
         n.value("gouge_max_mm", r3(self.gouge_max_mm));
         n.value("rapid_collisions", self.rapid_collisions);
@@ -490,6 +556,20 @@ impl SimulationReport {
                 Issue::error("gouge", format!("{} cells are cut up to {:.3} mm below the model{at}", self.gouge_cells, self.gouge_max_mm))
                     .limit(r3(self.gouge_max_mm))
                     .suggest(serde_json::json!({"gouge_at": self.gouge_at})),
+            );
+        }
+        if let Some(p) = self.uncut_at.filter(|_| self.uncut_area_mm2 > UNCUT_WARN_MM2) {
+            n.issue(
+                Issue::warning(
+                    "uncut",
+                    format!(
+                        "{:.0} mm² of the part's surface facing this setup is left over {UNCUT_MM} mm high, up to {:.1} mm at x {:.2}, y {:.2}: \
+                         the operations stop above it (their bottom height) or no tool reaches it; it stays unless a setup from another side reaches it",
+                        self.uncut_area_mm2, p.z, p.x, p.y
+                    ),
+                )
+                .limit(r3(p.z))
+                .suggest(serde_json::json!({"uncut_at": [r3(p.x), r3(p.y)]})),
             );
         }
         if self.rapid_collisions > 0 {

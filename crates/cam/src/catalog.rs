@@ -38,6 +38,8 @@ const MAX_SIZE_MM: f64 = 100_000.0;
 const MAX_RPM: f64 = 200_000.0;
 const MAX_FEED: f64 = 1_000_000.0;
 const MAX_POWER_W: f64 = 1_000_000.0;
+/// The largest axis force a machine file may give, N.
+const MAX_FORCE_N: f64 = 1_000_000.0;
 
 /// One machine file.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -181,7 +183,9 @@ impl MachineFile {
             ids.push(a);
         }
         text_ok("summary", &self.summary)?;
-        for (what, n) in [("aliases", self.aliases.len()), ("options", self.options.len()), ("sources", self.sources.len()), ("notes", self.notes.len())] {
+        for (what, n) in
+            [("aliases", self.aliases.len()), ("options", self.options.len()), ("sources", self.sources.len()), ("notes", self.notes.len())]
+        {
             if n > MAX_LIST {
                 return Err(CamError::TooLarge(format!("machine file: at most {MAX_LIST} {what}")));
             }
@@ -251,7 +255,9 @@ fn machine_ok(id: &str, m: &Machine) -> Result<()> {
     if m.name.trim().is_empty() || m.name.len() > 120 {
         return Err(CamError::Param(format!("machine `{id}`: a name of 1 to 120 characters")));
     }
-    for (what, v) in [("work_area x", m.work_area.x), ("work_area y", m.work_area.y), ("work_area z", m.work_area.z), ("gantry_clearance", m.gantry_clearance)] {
+    for (what, v) in
+        [("work_area x", m.work_area.x), ("work_area y", m.work_area.y), ("work_area z", m.work_area.z), ("gantry_clearance", m.gantry_clearance)]
+    {
         bad(what, v, MAX_SIZE_MM)?;
     }
     bad("spindle_rpm_min", m.spindle_rpm_min, MAX_RPM)?;
@@ -260,6 +266,7 @@ fn machine_ok(id: &str, m: &Machine) -> Result<()> {
         return Err(CamError::Param(format!("machine `{id}`: spindle_rpm_min is above spindle_rpm_max")));
     }
     bad("spindle_power_w", m.spindle_power_w, MAX_POWER_W)?;
+    bad("axis_force_n", m.axis_force_n, MAX_FORCE_N)?;
     bad("max_feed", m.max_feed, MAX_FEED)?;
     bad("rapid_feed", m.rapid_feed, MAX_FEED)?;
     bad("rotary_rapid_deg_min", m.rotary_rapid_deg_min, MAX_FEED)?;
@@ -309,7 +316,7 @@ pub fn builtin() -> &'static [Entry] {
 /// A machine by id or alias among `entries` (case, spaces and `-` don't matter).
 pub fn find<'a>(entries: &'a [Entry], id: &str) -> Option<&'a Entry> {
     let key = id.trim().to_ascii_lowercase().replace([' ', '-'], "_");
-    entries.iter().find(|e| e.id == key || e.aliases.iter().any(|a| *a == key))
+    entries.iter().find(|e| e.id == key || e.aliases.contains(&key))
 }
 
 #[cfg(test)]
@@ -322,7 +329,7 @@ mod tests {
             let f = MachineFile::parse(t).unwrap_or_else(|e| panic!("{e}: {}", &t[..t.len().min(80)]));
             assert!(f.entries().unwrap().iter().all(|e| !e.machine.name.is_empty()));
         }
-        assert_eq!(builtin().len(), 11, "the four generic machines, three Makera machines and their four options");
+        assert_eq!(builtin().len(), 12, "the four generic machines, three Makera machines and their five options");
     }
 
     #[test]

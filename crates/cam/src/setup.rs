@@ -362,11 +362,15 @@ pub struct Manufacture {
     /// SolidCraft ships; one with a shipped machine's id stands in for it in this design.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub machines: Vec<crate::catalog::MachineFile>,
+    /// The stock's material (`cam.job.set`): the spindle load of each roughing operation is
+    /// estimated for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<crate::kits::Material>,
 }
 
 impl Manufacture {
     pub fn is_empty(&self) -> bool {
-        self.tools.tools.is_empty() && self.setups.is_empty() && self.machines.is_empty()
+        self.tools.tools.is_empty() && self.setups.is_empty() && self.machines.is_empty() && self.material.is_none()
     }
     pub fn next_id(&mut self) -> u64 {
         self.next_id = self.next_id.max(1);

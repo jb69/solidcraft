@@ -25,11 +25,29 @@ use crate::{CamError, Result};
 /// A face's exact surface, where the kernel knows it (in the setup's frame).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Surface {
-    Plane { normal: Vec3 },
-    Cylinder { origin: Vec3, axis: Vec3, radius: f64 },
-    Cone { apex: Vec3, axis: Vec3, half_angle: f64 },
-    Sphere { center: Vec3, radius: f64 },
-    Torus { center: Vec3, axis: Vec3, major: f64, minor: f64 },
+    Plane {
+        normal: Vec3,
+    },
+    Cylinder {
+        origin: Vec3,
+        axis: Vec3,
+        radius: f64,
+    },
+    Cone {
+        apex: Vec3,
+        axis: Vec3,
+        half_angle: f64,
+    },
+    Sphere {
+        center: Vec3,
+        radius: f64,
+    },
+    Torus {
+        center: Vec3,
+        axis: Vec3,
+        major: f64,
+        minor: f64,
+    },
     /// A free-form surface (or one the kernel does not name).
     Other,
 }
@@ -100,8 +118,14 @@ pub struct Analysis {
 }
 
 /// The six directions a setup can face (in the setup's frame).
-const DIRECTIONS: [(&str, [f64; 3]); 6] =
-    [("+z", [0.0, 0.0, 1.0]), ("-z", [0.0, 0.0, -1.0]), ("+x", [1.0, 0.0, 0.0]), ("-x", [-1.0, 0.0, 0.0]), ("+y", [0.0, 1.0, 0.0]), ("-y", [0.0, -1.0, 0.0])];
+const DIRECTIONS: [(&str, [f64; 3]); 6] = [
+    ("+z", [0.0, 0.0, 1.0]),
+    ("-z", [0.0, 0.0, -1.0]),
+    ("+x", [1.0, 0.0, 0.0]),
+    ("-x", [-1.0, 0.0, 0.0]),
+    ("+y", [0.0, 1.0, 0.0]),
+    ("-y", [0.0, -1.0, 0.0]),
+];
 
 /// Common tap drills (metric coarse): drill diameter → thread.
 const TAP_DRILLS: [(f64, &str); 8] = [(1.6, "M2"), (2.05, "M2.5"), (2.5, "M3"), (3.3, "M4"), (4.2, "M5"), (5.0, "M6"), (6.8, "M8"), (8.5, "M10")];
@@ -133,7 +157,8 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
     let mut keys: Vec<(usize, usize)> = Vec::new();
     let mut accs: Vec<Acc> = Vec::new();
     let mut slot: HashMap<(usize, usize), usize> = HashMap::new();
-    let (mut lo, mut hi) = (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+    let (mut lo, mut hi) =
+        (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
     for (bi, b) in bodies.iter().enumerate() {
         for (ti, t) in b.mesh.triangles.iter().enumerate() {
             let Some([p, q, r]) = b.mesh.tri(t) else { continue };
@@ -157,8 +182,8 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
             let a = n2.len() * 0.5;
             let Some(acc) = accs.get_mut(k) else { continue };
             acc.area += a;
-            acc.centroid = acc.centroid + (p + q + r) * (a / 3.0);
-            acc.normal = acc.normal + n2 * 0.5;
+            acc.centroid += (p + q + r) * (a / 3.0);
+            acc.normal += n2 * 0.5;
             for v in [p, q, r] {
                 acc.zmin = acc.zmin.min(v.z);
                 acc.zmax = acc.zmax.max(v.z);
@@ -245,11 +270,7 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
             Surface::Torus { minor, .. } => ("freeform", Some(minor), None),
             Surface::Other => {
                 let c = mean_n.dot(up);
-                if c > 0.999 {
-                    (if (acc.zmax - top).abs() <= flat { "top" } else { "floor" }, None, Some(0.0))
-                } else {
-                    ("freeform", None, None)
-                }
+                if c > 0.999 { (if (acc.zmax - top).abs() <= flat { "top" } else { "floor" }, None, Some(0.0)) } else { ("freeform", None, None) }
             }
         };
         roles.push(role);
@@ -264,10 +285,11 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
             let ks: Vec<usize> = fs.iter().filter_map(|f| slot.get(&(bi, *f as usize)).copied()).collect();
             for &a in &ks {
                 for &c in &ks {
-                    if a != c && adj.get(a).is_some_and(|l| !l.contains(&c)) {
-                        if let Some(l) = adj.get_mut(a) {
-                            l.push(c);
-                        }
+                    if a != c
+                        && adj.get(a).is_some_and(|l| !l.contains(&c))
+                        && let Some(l) = adj.get_mut(a)
+                    {
+                        l.push(c);
                     }
                 }
             }
@@ -321,7 +343,11 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
         // A blind hole's bottom (flat, or a drill point's cone) belongs to it.
         let mut faces = vec![face_ref(k)];
         for &n in adj.get(k).map_or(&[][..], |l| l.as_slice()) {
-            if !taken[n] && matches!(roles[n], "floor" | "chamfer") && (accs[n].zmax - acc.zmin).abs() <= flat.max(d * 0.6) && accs[n].zmin >= acc.zmin - d {
+            if !taken[n]
+                && matches!(roles[n], "floor" | "chamfer")
+                && (accs[n].zmax - acc.zmin).abs() <= flat.max(d * 0.6)
+                && accs[n].zmin >= acc.zmin - d
+            {
                 taken[n] = true;
                 faces.push(face_ref(n));
             }
@@ -345,7 +371,8 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
         }
         let z = accs[k].zmax;
         let sides: Vec<usize> = adj.get(k).map_or_else(Vec::new, |l| l.clone());
-        let drops = |w: &usize| matches!(roles[*w], "wall" | "outside_round" | "slope" | "chamfer") && accs[*w].zmin < z - flat && accs[*w].zmax <= z + flat;
+        let drops =
+            |w: &usize| matches!(roles[*w], "wall" | "outside_round" | "slope" | "chamfer") && accs[*w].zmin < z - flat && accs[*w].zmax <= z + flat;
         let lands_on_floor = |w: &usize| adj.get(*w).is_some_and(|l| l.iter().any(|n| roles[*n] == "floor" && accs[*n].zmax < z - flat));
         if sides.is_empty() || !sides.iter().all(|w| drops(w) && lands_on_floor(w)) {
             continue;
@@ -395,7 +422,8 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
         let drops = adj.get(k).map_or(0, |l| l.iter().filter(|n| !faces.contains(n) && accs[**n].zmin < floor_z - flat).count());
         let kind = if drops == 0 && rises > 0 { "pocket" } else { "step" };
         let depth = top - floor_z;
-        let inside_r: Option<f64> = faces.iter().filter(|f| roles[**f] == "inside_round").filter_map(|f| radii[*f]).fold(None, |m, r| Some(m.map_or(r, |m: f64| m.min(r))));
+        let inside_r: Option<f64> =
+            faces.iter().filter(|f| roles[**f] == "inside_round").filter_map(|f| radii[*f]).fold(None, |m, r| Some(m.map_or(r, |m: f64| m.min(r))));
         let sharp = sharp_inside_corners(bodies, &keys, &accs, &roles, &faces);
         let loops = face_outline(bodies, keys[k].0, &accs[k].tris);
         let widest = largest_inscribed_radius(&loops, tol).map(|r| r * 2.0);
@@ -420,7 +448,9 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
             issues.push(
                 Issue::warning(
                     "sharp_inside_corner",
-                    format!("{id} has {sharp} sharp inside corner(s): a round tool leaves its radius there; ask for a corner radius, or accept the round"),
+                    format!(
+                        "{id} has {sharp} sharp inside corner(s): a round tool leaves its radius there; ask for a corner radius, or accept the round"
+                    ),
                 )
                 .parameter(&id, sharp),
             );
@@ -431,7 +461,12 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
             issues.push(
                 Issue::warning(
                     "deep_narrow",
-                    format!("{id} is {} mm deep for a Ø{} mm tool: it needs {} mm of reach and light cuts", r3(depth), r3(reach_tool), r3(depth + 2.0)),
+                    format!(
+                        "{id} is {} mm deep for a Ø{} mm tool: it needs {} mm of reach and light cuts",
+                        r3(depth),
+                        r3(reach_tool),
+                        r3(depth + 2.0)
+                    ),
                 )
                 .parameter(&id, r3(depth / reach_tool))
                 .limit(4.0),
@@ -510,8 +545,11 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
         }
     }
     // Faces facing down above the bottom (and not already an undercut) are cut from below.
-    let ceilings: Vec<usize> =
-        (0..keys.len()).filter(|k| roles[*k] == "ceiling" && (accs[*k].zmin - bottom).abs() > flat && !under.contains(k) && reach[*k].get(1).is_some_and(|x| *x > 0.5)).collect();
+    let ceilings: Vec<usize> = (0..keys.len())
+        .filter(|k| {
+            roles[*k] == "ceiling" && (accs[*k].zmin - bottom).abs() > flat && !under.contains(k) && reach[*k].get(1).is_some_and(|x| *x > 0.5)
+        })
+        .collect();
     if !under.is_empty() {
         let id = next_id("undercut");
         let mut v = serde_json::Map::new();
@@ -520,7 +558,10 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
         issues.push(
             Issue::warning(
                 "undercut",
-                format!("{id}: {} face(s) no straight tool reaches from any side; a T-slot or dovetail cutter, the 4th axis, or a design change", under.len()),
+                format!(
+                    "{id}: {} face(s) no straight tool reaches from any side; a T-slot or dovetail cutter, the 4th axis, or a design change",
+                    under.len()
+                ),
             )
             .parameter(&id, under.len()),
         );
@@ -567,7 +608,12 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
         issues.push(
             Issue::info(
                 "setups_needed",
-                format!("a 3-axis machine reaches this part from {} sides: {} setups ({})", directions.len(), directions.len(), directions.join(", ")),
+                format!(
+                    "a 3-axis machine reaches this part from {} sides: {} setups ({})",
+                    directions.len(),
+                    directions.len(),
+                    directions.join(", ")
+                ),
             )
             .parameter("directions", directions.len()),
         );
@@ -687,7 +733,11 @@ pub fn analyze(bodies: &[BodyInput], machine: &Machine, stock: Option<(Vec3, Vec
             z_max: r3(accs[k].zmax),
             radius_mm: radii[k].map(r3),
             slope_deg: slopes[k].map(r3),
-            reached_from: DIRECTIONS.iter().enumerate().filter_map(|(d, (n, _))| reach[k].get(d).filter(|x| **x > 0.0).map(|x| (*n, r3(*x)))).collect(),
+            reached_from: DIRECTIONS
+                .iter()
+                .enumerate()
+                .filter_map(|(d, (n, _))| reach[k].get(d).filter(|x| **x > 0.0).map(|x| (*n, r3(*x))))
+                .collect(),
         })
         .collect();
     let mut values = serde_json::Map::new();
@@ -925,11 +975,8 @@ fn access(bodies: &[BodyInput], keys: &[(usize, usize)], accs: &[Acc], lo: Vec3,
     for (d, (_, dir)) in DIRECTIONS.iter().enumerate() {
         let z = Vec3::new(dir[0], dir[1], dir[2]);
         let frame = Frame::from_axis(Vec3::new(0.0, 0.0, 0.0), z)?;
-        let local = Mesh {
-            positions: all.positions.iter().map(|p| frame.to_local(*p)).collect(),
-            triangles: all.triangles.clone(),
-            ..Default::default()
-        };
+        let local =
+            Mesh { positions: all.positions.iter().map(|p| frame.to_local(*p)).collect(), triangles: all.triangles.clone(), ..Default::default() };
         let drop = DropMesh::new(&local);
         let (mut llo, mut lhi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
         let mut floor = f64::INFINITY;

@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
+use solidcore_record::{Vec2, Vec3};
 use solidcraft_cam as cam;
 use solidcraft_cam::frame::Frame;
 use solidcraft_cam::notice::{Issue, Notice, r3};
@@ -19,7 +20,6 @@ use solidcraft_cam::ops::{Context, OpKind, ResolvedGeometry};
 use solidcraft_cam::setup::{Geometry, Operation, Setup, Stock};
 use solidcraft_cam::tool::{Tool, ToolKind};
 use solidcraft_cam::toolpath::{MoveKind, Toolpath, ToolpathStats};
-use solidcore_record::{Vec2, Vec3};
 use solidcraft_geom::prelude::*;
 use solidcraft_geom::{Aabb3, Mesh};
 
@@ -278,6 +278,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.machine.define", "Define Machine", machine_define)
         .icon("cam")
         .params("machine_file: a machine file's content ({format: \"solidcraft-machine/1\", id, aliases?, summary?, machine: {…the cam.machine.list machine fields…}, options?: [{id, aliases?, summary?, machine: {the fields that change}}], kit?, sources?: [{fields, from, checked?}], notes?}; docs/cam-machines.md): checks it and adds the machine and its options to the design, so a setup can name them; one with a shipped machine's id stands in for it in this design"),
+    CommandSpec::new("cam.job.set", "Job", job_set)
+        .icon("cam")
+        .params("material?: aluminium | wood | plastic (the stock's material; aluminium is a 6061-T6 class alloy): what the job is cut from; each roughing operation's generate notice then estimates its spindle load (force, torque, power against the spindle's power at the tool's speed). Returns the job"),
     CommandSpec::new("cam.operation.add", "Add Operation", operation_add)
         .icon("cam")
         .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; boundary?: where an area operation (3D roughing and finishing) may machine: a source name or {source: auto | stock | part | bounding_box | selection | rest, containment: auto | inside | center | outside, offset, clip_to_stock, avoid_fixtures, fixture_clearance} (auto: roughing clears a ring a tool wide around the part's outline, wall finishing runs outside it, surface finishing keeps the tool's centre on the part, a selection bounds it; each notice says which and why); heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
@@ -470,8 +473,7 @@ fn tool_set(s: &mut Session, p: &Value) -> Result<Value> {
     // The operations that use a changed tool lose their toolpaths (they show as not generated);
     // a new name keeps them.
     if (Tool { name: String::new(), ..tool.clone() }) != (Tool { name: String::new(), ..current.clone() }) {
-        let users: Vec<u64> =
-            s.doc.manufacture.setups.iter().flat_map(|st| &st.operations).filter(|o| o.tool == id).map(|o| o.id).collect();
+        let users: Vec<u64> = s.doc.manufacture.setups.iter().flat_map(|st| &st.operations).filter(|o| o.tool == id).map(|o| o.id).collect();
         for o in users {
             s.cam.operations.remove(&o);
         }
@@ -583,7 +585,18 @@ fn setup_json(s: &Session, st: &Setup) -> Value {
         Err(e) => json!({"error": e.to_string()}),
     };
     // A setup whose machine nobody named says so, with the fix.
-    let notice = if st.machine.is_known() { Value::Null } else { Notice { info: None, values: Default::default(), issues: vec![st.machine.unknown_issue().suggest(json!({"command": "cam.machine.set", "setup": st.id, "machine": "<id from cam.machine.list>"}))] }.to_json() };
+    let notice = if st.machine.is_known() {
+        Value::Null
+    } else {
+        Notice {
+            info: None,
+            values: Default::default(),
+            issues: vec![
+                st.machine.unknown_issue().suggest(json!({"command": "cam.machine.set", "setup": st.id, "machine": "<id from cam.machine.list>"})),
+            ],
+        }
+        .to_json()
+    };
     json!({
         "notice": notice,
         "stock_from": from,
@@ -750,8 +763,8 @@ fn place_origin(s: &Session, st: &mut Setup, p: &Value, cmd: &str) -> Result<()>
     match &mut st.stock {
         _ if given => {}
         Stock::FixedBox { min, max } => {
-            *min = *min - d;
-            *max = *max - d;
+            *min -= d;
+            *max -= d;
         }
         Stock::FixedCylinder { axis, start, end, .. } => {
             let (along, across) = match axis {
@@ -865,23 +878,47 @@ fn machine_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let own: Vec<String> = s.doc.manufacture.machines.iter().filter_map(|f| f.entries().ok()).flatten().map(|e| e.id).collect();
     let known = known_machines(s);
     Ok(
-        json!({"machines": known.iter().map(|e| (e, &e.machine)).map(|(e, m)| json!({"preset": e.id, "aliases": e.aliases, "summary": e.summary, "option_of": e.base, "kit": e.kit, "from": if own.contains(&e.id) { "design" } else { "shipped" }, "sources": e.sources, "notes": e.notes, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "laser": m.laser, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS, "format": "docs/cam-machines.md"}),
+        json!({"machines": known.iter().map(|e| (e, &e.machine)).map(|(e, m)| json!({"preset": e.id, "aliases": e.aliases, "summary": e.summary, "option_of": e.base, "kit": e.kit, "from": if own.contains(&e.id) { "design" } else { "shipped" }, "sources": e.sources, "notes": e.notes, "name": m.name, "vendor": m.vendor, "model": m.model, "axes": m.axis_count(), "tcp": m.tcp, "post": m.post, "laser": m.laser, "work_area_mm": m.work_area, "spindle_rpm_max": m.spindle_rpm_max, "spindle_power_w": m.spindle_power_w, "axis_force_n": m.axis_force_n, "axis_drive": m.axis_drive, "max_feed": m.max_feed, "tool_changer": m.tool_changer, "collets_mm": m.collets, "rotary_capacity_mm": m.rotary_capacity, "rotaries": m.rotaries().iter().map(|r| json!({"name": r.name.to_string(), "direction": r.direction, "on_table": r.on_table, "min_deg": r.min_deg, "max_deg": r.max_deg})).collect::<Vec<_>>(), "machine": m})).collect::<Vec<_>>(), "kits": cam::kits::KITS, "format": "docs/cam-machines.md"}),
     )
 }
 
 /// Adds a machine file to the design (`cam.machine.define`): checked, then kept with the
 /// design; one with an id already defined in the design replaces it.
+fn job_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.job.set";
+    if let Some(m) = str_(p, "material") {
+        let material = cam::kits::Material::parse(m).ok_or_else(|| bad(cmd, format!("unknown material `{m}`: aluminium, wood or plastic")))?;
+        s.doc_mut().manufacture.material = Some(material);
+    }
+    let material = s.doc.manufacture.material;
+    let notice = Notice {
+        info: Some(match material {
+            Some(m) => format!("the job is cut from {}: roughing operations report their spindle load when generated", m.name()),
+            None => "no material set: spindle loads are not estimated".into(),
+        }),
+        values: Default::default(),
+        issues: Vec::new(),
+    };
+    Ok(json!({"job": {"material": material}, "notice": notice.to_json()}))
+}
+
 fn machine_define(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.machine.define";
     let v = p.get("machine_file").or_else(|| p.get("file")).filter(|v| v.is_object()).ok_or_else(|| {
-        bad(cmd, "`machine_file` is the machine file's content as an object ({format: \"solidcraft-machine/1\", id, machine, …}; docs/cam-machines.md)")
+        bad(
+            cmd,
+            "`machine_file` is the machine file's content as an object ({format: \"solidcraft-machine/1\", id, machine, …}; docs/cam-machines.md)",
+        )
     })?;
     let file = cam::catalog::MachineFile::from_value(v).map_err(|e| engine_err(cmd, e))?;
     let entries = file.entries().map_err(|e| engine_err(cmd, e))?;
     let shipped: Vec<&str> = entries.iter().filter(|e| cam::catalog::find(cam::catalog::builtin(), &e.id).is_some()).map(|e| e.id.as_str()).collect();
     let mut issues = Vec::new();
     if !shipped.is_empty() {
-        issues.push(Issue::info("replaces_shipped", format!("in this design, {} stand(s) in for the shipped machine(s) of the same id", shipped.join(", "))));
+        issues.push(Issue::info(
+            "replaces_shipped",
+            format!("in this design, {} stand(s) in for the shipped machine(s) of the same id", shipped.join(", ")),
+        ));
     }
     if file.sources.is_empty() {
         issues.push(Issue::warning("no_sources", "the file says nowhere where its numbers came from: add `sources` so they can be checked"));
@@ -1310,6 +1347,7 @@ fn setup_signature_with(s: &Session, st: &Setup, ends: &BTreeMap<u64, (u64, u64)
         serde_json::to_string(&st.wcs),
         serde_json::to_string(&st.stock),
         serde_json::to_string(&st.machine),
+        serde_json::to_string(&s.doc.manufacture.material),
     ] {
         part.unwrap_or_default().hash(&mut h);
     }
@@ -1509,7 +1547,8 @@ fn operation_move(s: &mut Session, p: &Value) -> Result<Value> {
     // The destination's operations without the moved one: the index is into these.
     let others: Vec<u64> = m.setup(to_setup).map(|st| st.operations.iter().map(|o| o.id).filter(|o| *o != id).collect()).unwrap_or_default();
     let n = others.len();
-    let pos_of = |other: u64| others.iter().position(|o| *o == other).ok_or_else(|| bad(cmd, format!("operation {other} cannot be a place to move {id} to")));
+    let pos_of =
+        |other: u64| others.iter().position(|o| *o == other).ok_or_else(|| bad(cmd, format!("operation {other} cannot be a place to move {id} to")));
     let to = if let Some(i) = p.get("to").and_then(Value::as_u64) {
         (i as usize).min(n)
     } else if let Some(b) = p.get("before").and_then(Value::as_u64) {
@@ -1965,6 +2004,7 @@ fn resolve_geometry(
 /// session); [`compute`] turns them into a toolpath on any thread.
 struct Prepared {
     op: Operation,
+    material: Option<cam::kits::Material>,
     setup: u64,
     tool: Tool,
     machine: cam::machine::Machine,
@@ -2030,6 +2070,7 @@ fn prepare_one(
     }
     Ok(Prepared {
         op: op.clone(),
+        material: s.doc.manufacture.material,
         setup: st.id,
         tool,
         machine: st.machine.clone(),
@@ -2051,6 +2092,7 @@ fn prepare_one(
 fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
     let Prepared {
         op,
+        material,
         setup,
         tool,
         machine,
@@ -2126,6 +2168,27 @@ fn compute(pr: Prepared, rest: Option<&cam::simulate::StockMap>) -> Generated {
     // What the machine objects to (speeds, feeds, collets, work area).
     for issue in machine.check(&tool, &tp_wcs) {
         notice.issue(issue);
+    }
+    // What a roughing cut asks of the spindle, for the job's material.
+    if let Some(e) = cam::load::engagement(&op.kind, &tool)
+        && !tp_wcs.is_empty()
+    {
+        match material {
+            Some(m) => {
+                if let Some(load) = cam::load::estimate(&tool, e, m, &machine) {
+                    notice.value("spindle_load", json!(load));
+                    for issue in cam::load::issues(&load, e, &tool, m, machine.axis_drive) {
+                        notice.issue(issue);
+                    }
+                }
+            }
+            None => {
+                notice.issue(
+                    Issue::info("material_unknown", "the job's material is not set, so the spindle load is not estimated")
+                        .suggest(json!({"command": "cam.job.set", "material": "aluminium"})),
+                );
+            }
+        }
     }
     Generated { toolpath: Arc::new(tp_wcs), notice, stats, frame: orient, setup, signature, generation }
 }
@@ -2522,6 +2585,8 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let model_map = cam::simulate::model_map(&model, &stock.map, shape.bounds().min.z - 1.0);
     let initial = stock.volume();
+    // What the setup starts from: a surface is uncut only where its operations came down.
+    let start_z = stock.map.z.clone();
     let mut ops_out = Vec::new();
     let mut total = cam::simulate::SimulationReport::default();
     let mut missing = Vec::new();
@@ -2559,6 +2624,9 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     total.remaining_volume_mm3 = stock.volume();
     total.rest_volume_mm3 = final_rep.rest_volume_mm3;
     total.rest_max_mm = final_rep.rest_max_mm;
+    total.rest_on_part_mm3 = final_rep.rest_on_part_mm3;
+    total.rest_on_part_max_mm = final_rep.rest_on_part_max_mm;
+    (total.uncut_area_mm2, total.uncut_at) = cam::simulate::uncut(&stock, &start_z, &model_map, tol);
     total.gouge_cells = final_rep.gouge_cells;
     total.gouge_max_mm = final_rep.gouge_max_mm;
     let mut notice = total.notice();
@@ -2989,7 +3057,9 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
                 Some(solidcraft_kernel::FaceSurface::Cone { apex, axis, half_angle }) => {
                     cam::analyze::Surface::Cone { apex: wcs.to_local(apex), axis: wcs.dir_to_local(*axis), half_angle }
                 }
-                Some(solidcraft_kernel::FaceSurface::Sphere { center, radius }) => cam::analyze::Surface::Sphere { center: wcs.to_local(center), radius },
+                Some(solidcraft_kernel::FaceSurface::Sphere { center, radius }) => {
+                    cam::analyze::Surface::Sphere { center: wcs.to_local(center), radius }
+                }
                 Some(solidcraft_kernel::FaceSurface::Torus { center, axis, major, minor }) => {
                     cam::analyze::Surface::Torus { center: wcs.to_local(center), axis: wcs.dir_to_local(*axis), major, minor }
                 }

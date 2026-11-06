@@ -1,8 +1,8 @@
 //! Tests of the CAM algorithms against analytic values.
 
 use solidcore_record::{Vec2, Vec3};
-use solidcraft_geom::{Aabb3, Mesh};
 use solidcraft_geom::prelude::*;
+use solidcraft_geom::{Aabb3, Mesh};
 
 use crate::dropcutter::DropMesh;
 use crate::frame::Frame;
@@ -1090,7 +1090,7 @@ fn a_selected_pocket_floor_leaves_its_island_standing() {
     // A 40 × 30 pocket floor at z = 12 with a 10 × 10 island standing to z = 20.
     let floor = box_mesh(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 30.0, 12.0));
     let island = box_mesh(Vec3::new(15.0, 10.0, 0.0), Vec3::new(25.0, 20.0, 20.0));
-    let mesh = DropMesh::from_meshes([&floor, &island].into_iter());
+    let mesh = DropMesh::from_meshes([&floor, &island]);
     let tool = flat(2.0);
     let mut ctx = ctx_3d(&tool, &mesh, heights(20.0, 12.0));
     // The floor face picked: its outline and the island's as a hole.
@@ -1136,10 +1136,12 @@ fn a_round_island_in_a_selected_pocket_is_left_standing() {
     // A 34 × 28 floor at z = 12 with a round island 12 across standing to z = 20, as a joined
     // cylinder comes out of the kernel: a fan of long thin triangles on its top.
     let n = 64;
-    let ring: Vec<Vec2> = (0..n).map(|k| {
-        let a = k as f64 / n as f64 * std::f64::consts::TAU;
-        Vec2::new(25.0 + 6.0 * a.cos(), 22.0 + 6.0 * a.sin())
-    }).collect();
+    let ring: Vec<Vec2> = (0..n)
+        .map(|k| {
+            let a = k as f64 / n as f64 * std::f64::consts::TAU;
+            Vec2::new(25.0 + 6.0 * a.cos(), 22.0 + 6.0 * a.sin())
+        })
+        .collect();
     let mut cyl = Mesh::default();
     cyl.positions.push(Vec3::new(25.0, 22.0, 20.0));
     for p in &ring {
@@ -1153,7 +1155,7 @@ fn a_round_island_in_a_selected_pocket_is_left_standing() {
         cyl.triangles.push([a, b + 1, b]);
     }
     let floor = box_mesh(Vec3::new(8.0, 8.0, 0.0), Vec3::new(42.0, 36.0, 12.0));
-    let mesh = DropMesh::from_meshes([&floor, &cyl].into_iter());
+    let mesh = DropMesh::from_meshes([&floor, &cyl]);
     let tool = flat(2.0);
     // Heights as a setup gives them: from the stock's top (well above) to the model's bottom.
     let mut ctx = ctx_3d(&tool, &mesh, heights(37.0, 0.0));
@@ -1170,4 +1172,52 @@ fn a_round_island_in_a_selected_pocket_is_left_standing() {
         let d = ((m.to.x - 25.0).powi(2) + (m.to.y - 22.0).powi(2)).sqrt();
         assert!(!(d < 6.9 && m.to.z < 20.0 - 1e-6), "cut into the island at {:?} (d = {d})", m.to);
     }
+}
+
+#[test]
+fn spindle_load_of_a_6mm_rough_in_6061_on_a_carvera() {
+    use crate::kits::Material;
+    use crate::load::{Engagement, engagement, estimate, issues};
+    let carvera = Machine::preset("carvera").unwrap();
+    let mut t = flat(6.0);
+    t.flutes = 2;
+    t.flute_length = 22.0;
+    t.feeds.spindle_rpm = 15000.0;
+    t.feeds.cutting = 1500.0;
+    let load = |t: &Tool, ae: f64| estimate(t, Engagement { ae, ap: 4.0, slotting: false }, Material::Aluminium, &carvera).unwrap();
+    let at = |ae: f64| load(&t, ae);
+    // 15 % stepover, 4 mm deep: about 170 W of the 200 W spindle, 36 N on average.
+    let l = at(0.9);
+    assert!(close(l.power_w, 170.0, 3.0) && close(l.force_mean_n, 36.0, 1.0), "{l:?}");
+    assert!(close(l.spindle_share, 0.85, 0.02) && close(l.removal_cm3_min, 5.4, 0.01), "{l:?}");
+    // 20 % is past the spindle: a warning the person may overrule; 10 % has room.
+    let e = Engagement { ae: 1.2, ap: 4.0, slotting: false };
+    let codes = |ae: f64| {
+        issues(&at(ae), Engagement { ae, ..e }, &t, Material::Aluminium, carvera.axis_drive).iter().map(|i| i.code.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(codes(1.2), vec!["spindle_overload"]);
+    assert!(codes(0.6).is_empty());
+    // Half the speed, half the power: the same cut is twice the share.
+    let mut slow = t.clone();
+    slow.feeds.spindle_rpm = 7500.0;
+    slow.feeds.cutting = 750.0;
+    assert!(close(load(&slow, 0.9).spindle_share, 0.85, 0.02), "{:?}", load(&slow, 0.9));
+    // The X/Y drives: the peak force (tangential and radial) against what they take, when the
+    // machine file says; unknown, nothing is claimed.
+    assert!(close(l.axis_force_n, 248.0, 3.0) && l.axis_share == 0.0, "{l:?}");
+    let mut weak = carvera.clone();
+    weak.axis_force_n = 200.0;
+    let w = estimate(&t, Engagement { ae: 0.9, ap: 4.0, slotting: false }, Material::Aluminium, &weak).unwrap();
+    let codes_w: Vec<String> =
+        issues(&w, e, &t, Material::Aluminium, crate::machine::AxisDrive::OpenLoopStepper).iter().map(|i| i.code.clone()).collect();
+    assert!(codes_w.contains(&"axis_overload".to_string()), "{codes_w:?}");
+    assert_eq!(carvera.axis_drive, crate::machine::AxisDrive::Servo);
+    assert_eq!(Machine::preset("z1").unwrap().axis_drive, crate::machine::AxisDrive::OpenLoopStepper);
+    assert_eq!(Machine::preset("z1_pro").unwrap().axis_drive, crate::machine::AxisDrive::ClosedLoopStepper);
+    // An adaptive rough's engagement is its load and stepdown, capped by the flutes; a pocket
+    // starts with a full-width cut; finishing has none.
+    let a = OpKind::Adaptive3d { optimal_load: 0.9, stepdown: 30.0, minimum_radius: 0.0, direction: Default::default(), flat_area_detection: true };
+    assert_eq!(engagement(&a, &t), Some(Engagement { ae: 0.9, ap: 22.0, slotting: false }));
+    let p = OpKind::Pocket3d { stepover: 0.0, stepdown: 0.0, direction: Default::default(), flat_area_detection: true, order_by_depth: false };
+    assert_eq!(engagement(&p, &t).map(|e| (e.ae, e.slotting)), Some((6.0, true)));
 }

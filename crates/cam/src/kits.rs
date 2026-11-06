@@ -45,6 +45,26 @@ impl Material {
         }
     }
 
+    /// Specific cutting force: `kc1.1` (N/mm², the force on a 1 mm × 1 mm chip) and the
+    /// exponent `mc`, for [`crate::load`]. Aluminium is a 6061-T6 class alloy; wood and plastic are
+    /// rough values for hardwood and acrylic or acetal, where the spindle is rarely the limit.
+    pub fn cutting_force(self) -> (f64, f64) {
+        match self {
+            Material::Aluminium => (700.0, 0.25),
+            Material::Wood => (60.0, 0.3),
+            Material::Plastic => (150.0, 0.3),
+        }
+    }
+
+    /// The material's name in messages.
+    pub fn name(self) -> &'static str {
+        match self {
+            Material::Aluminium => "aluminium",
+            Material::Wood => "wood",
+            Material::Plastic => "plastic",
+        }
+    }
+
     /// Axial depth of cut to start with (mm), per millimetre of tool diameter.
     pub fn stepdown_per_diameter(self) -> f64 {
         match self {

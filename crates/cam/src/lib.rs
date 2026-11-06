@@ -31,6 +31,7 @@ pub mod frame;
 pub mod heightmap;
 pub mod kits;
 pub mod linking;
+pub mod load;
 pub mod machine;
 pub mod notice;
 pub mod ops;

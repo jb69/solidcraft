@@ -91,6 +91,21 @@ pub enum ToolChanger {
     Automatic { slots: u32 },
 }
 
+/// What drives the X, Y and Z axes, which decides what happens when a cut pushes too hard.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisDrive {
+    #[default]
+    Unknown,
+    /// Servo motors: a following error stops the machine.
+    Servo,
+    /// Steppers with encoders: lost steps are detected and stop the machine.
+    ClosedLoopStepper,
+    /// Steppers without feedback: a lost step goes unnoticed and the rest of the program is
+    /// cut out of place.
+    OpenLoopStepper,
+}
+
 /// A laser module on the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -135,6 +150,12 @@ pub struct Machine {
     pub spindle_rpm_min: f64,
     pub spindle_rpm_max: f64,
     pub spindle_power_w: f64,
+    /// The cutting force (N) the X and Y drives take without losing position or letting the
+    /// gantry deflect badly (0: not known). Makers rarely publish it; a person who knows their
+    /// machine sets it, and each roughing cut's peak force is checked against it.
+    pub axis_force_n: f64,
+    /// What drives the axes.
+    pub axis_drive: AxisDrive,
     /// The largest feed the control moves at, mm/min (0: unknown). Faster feeds are clamped by
     /// the post, with a warning.
     pub max_feed: f64,
@@ -171,6 +192,8 @@ impl Default for Machine {
             spindle_rpm_min: 0.0,
             spindle_rpm_max: 0.0,
             spindle_power_w: 0.0,
+            axis_force_n: 0.0,
+            axis_drive: AxisDrive::Unknown,
             max_feed: 0.0,
             tool_changer: ToolChanger::Unknown,
             collets: Vec::new(),
@@ -240,6 +263,15 @@ impl Machine {
     }
 
     /// The spindle speed the machine can give for `rpm`, and whether it had to be changed.
+    /// The spindle's power at `rpm` (W; 0: not known). A small spindle's power is rated at its
+    /// top speed and its torque is about constant below it, so the power falls with the speed.
+    pub fn spindle_power_at(&self, rpm: f64) -> f64 {
+        if self.spindle_power_w <= 0.0 {
+            return 0.0;
+        }
+        if self.spindle_rpm_max > 0.0 { self.spindle_power_w * (rpm / self.spindle_rpm_max).clamp(0.0, 1.0) } else { self.spindle_power_w }
+    }
+
     pub fn clamp_rpm(&self, rpm: f64) -> (f64, bool) {
         let mut v = rpm;
         if self.spindle_rpm_max > 0.0 {

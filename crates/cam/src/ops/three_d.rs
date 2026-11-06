@@ -97,6 +97,19 @@ impl Surface {
         (zx * zx + zy * zy).sqrt().atan().to_degrees()
     }
 
+    /// `p` lies in a grid cell with a blocked corner: the waterlines read blocked cells as the
+    /// floor, so a level contour there follows the boundary's edge, not the surface, and on a
+    /// boundary that crosses the part (inside containment) it runs below the surface.
+    fn near_blocked(&self, p: Vec2) -> bool {
+        let m = &self.map;
+        let (fi, fj) = (((p.x - m.origin.x) / m.cell).floor(), ((p.y - m.origin.y) / m.cell).floor());
+        if !(fi.is_finite() && fj.is_finite()) || fi < 0.0 || fj < 0.0 {
+            return true;
+        }
+        let (i, j) = (fi as usize, fj as usize);
+        [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)].iter().any(|&(a, b)| m.get(a, b).is_none_or(|z| !z.is_finite()))
+    }
+
     fn finite_or_floor(&self, p: Vec2) -> f64 {
         let z = self.map.sample_max(p);
         if z.is_finite() { z } else { self.floor }
@@ -105,18 +118,35 @@ impl Surface {
     /// The region where the tool may sit at height `z` without touching the surface: loops of
     /// `{CL < z}` inside the boundary.
     fn free_region(&self, z: f64) -> Vec<Poly> {
-        // contours() returns loops where the map is above the level: negate.
-        let neg = HeightMap {
-            origin: self.map.origin,
-            cell: self.map.cell,
-            nx: self.map.nx,
-            ny: self.map.ny,
-            z: self.map.z.iter().map(|v| if v.is_finite() { -v } else { f64::NEG_INFINITY }).collect(),
-        };
-        let loops: Vec<Poly> = neg.contours(-z).iter().map(|l| polyline::simplify_closed(l, self.map.cell)).filter(|l| l.len() >= 3).collect();
-        // Where the CL surface jumps (a vertical wall), the contour is interpolated between a
-        // free and a blocked cell; one cell of shrink keeps the tool centre on the free side.
-        offset::offset_set(&loops, -self.map.cell, self.map.cell * 0.1).unwrap_or(loops)
+        free_region_of(&self.map, z)
+    }
+
+    /// The part of the free region at `z` where the tool still cuts the rest stock: tool
+    /// positions with material standing above `z + margin` closer than `r - margin` to the tool
+    /// axis. The margin leaves a skin thinner than it (an earlier operation's stock to leave) to
+    /// finishing instead of retracing every wall.
+    fn rest_region(&self, rest: &HeightMap, r: f64, z: f64, margin: f64) -> Vec<Poly> {
+        let near = material_distance(rest, z + margin);
+        let reach = r - margin;
+        let mut map = HeightMap { origin: self.map.origin, cell: self.map.cell, nx: self.map.nx, ny: self.map.ny, z: self.map.z.clone() };
+        for j in 0..map.ny {
+            for i in 0..map.nx {
+                if !map.get(i, j).is_some_and(f64::is_finite) {
+                    continue;
+                }
+                let p = map.point(i, j);
+                let (ri, rj) = (((p.x - rest.origin.x) / rest.cell).round(), ((p.y - rest.origin.y) / rest.cell).round());
+                let d = if ri < 0.0 || rj < 0.0 || ri >= rest.nx as f64 || rj >= rest.ny as f64 {
+                    f64::INFINITY
+                } else {
+                    near.get(rj as usize * rest.nx + ri as usize).copied().unwrap_or(f64::INFINITY)
+                };
+                if d > reach {
+                    map.set(i, j, BLOCKED);
+                }
+            }
+        }
+        free_region_of(&map, z)
     }
 
     /// Level contours of the CL surface at `z` (where the tool touches the surface at this
@@ -156,33 +186,6 @@ impl Surface {
             }
         }
         out
-    }
-
-    /// Cells of the rest stock (`rest`) with material above `z` within the tool radius `r`:
-    /// `false` where the tool at `z` would cut only air.
-    fn has_material(&self, rest: Option<&HeightMap>, p: Vec2, r: f64, z: f64) -> bool {
-        match rest {
-            None => true,
-            Some(m) => {
-                let n = ((r / m.cell).ceil() as i64).max(1);
-                let (i0, j0) = ((((p.x - m.origin.x) / m.cell).round()) as i64, (((p.y - m.origin.y) / m.cell).round()) as i64);
-                for dj in -n..=n {
-                    for di in -n..=n {
-                        let (i, j) = (i0 + di, j0 + dj);
-                        if i < 0 || j < 0 {
-                            continue;
-                        }
-                        if (di * di + dj * dj) as f64 * m.cell * m.cell <= r * r
-                            && let Some(v) = m.get(i as usize, j as usize)
-                            && v > z + 1e-6
-                        {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-        }
     }
 }
 
@@ -267,22 +270,16 @@ fn pocket3d(
     let mut from_z = ctx.heights.feed;
     let mut rings = 0usize;
     let eps = ctx.tolerance * 0.5;
+    let rest_margin = ctx.rest.map_or(0.0, |r| (r.cell * 1.5).max(ctx.tolerance * 5.0));
     // Regions per level, each a set of loops; with order_by_depth, regions are grouped by
     // the area they lie in and each area is cut to the bottom before the next.
     let mut per_level: Vec<(f64, Vec<Poly>)> = Vec::new();
     for z in &zs {
-        let mut region = surf.free_region(z + eps);
-        if ctx.rest.is_some() {
-            // Drop loops that enclose only air in the rest stock: keep a loop when any of its
-            // points has material within the tool radius.
-            let r = tool.radius();
-            let has: Vec<bool> = region
-                .iter()
-                .map(|loop_| polyline::densify(loop_, surf.map.cell * 2.0).iter().any(|p| surf.has_material(ctx.rest, *p, r, *z)))
-                .collect();
-            region = keep_with_islands(&region, &has);
-            region = polyline::normalize_set(&region);
-        }
+        // Rest machining cuts only where the earlier operations left material for this tool.
+        let region = match ctx.rest {
+            Some(rest) => surf.rest_region(rest, tool.radius(), *z, rest_margin),
+            None => surf.free_region(z + eps),
+        };
         if !region.is_empty() {
             per_level.push((*z, region));
         }
@@ -554,6 +551,7 @@ fn waterline(
             }
             let keep = |p: &Vec3| {
                 polyline::set_contains(&surf.boundary, Vec2::new(p.x, p.y))
+                    && !surf.near_blocked(Vec2::new(p.x, p.y))
                     && slope_opt.is_none_or(|(lo, hi)| {
                         let s = surf.slope_deg(Vec2::new(p.x, p.y));
                         s >= lo && s <= hi
@@ -1059,38 +1057,44 @@ pub fn boundary_bounds(ctx: &Context) -> Result<Aabb2> {
     Ok(polyline::bounds_of(&ctx.boundary()?))
 }
 
-/// The loops of a level to cut, from which of them touch material (`has`): an outer loop and
-/// the islands inside it go together, kept while any of them touches material. Dropping an
-/// outer loop but keeping its islands would turn the islands (the part) into areas to clear.
-fn keep_with_islands(region: &[Poly], has: &[bool]) -> Vec<Poly> {
-    let outers: Vec<usize> = (0..region.len()).filter(|i| region.get(*i).is_some_and(|l| polyline::is_ccw(l))).collect();
-    let mut keep = vec![false; region.len()];
-    let mut owner = vec![None; region.len()];
-    for (i, l) in region.iter().enumerate() {
-        if polyline::is_ccw(l) {
-            keep[i] |= has.get(i).copied().unwrap_or(true);
-            continue;
-        }
-        // The smallest outer loop around this island.
-        let Some(at) = l.first() else { continue };
-        let o = outers.iter().copied().filter(|o| region.get(*o).is_some_and(|ol| polyline::contains(ol, *at))).min_by(|a, b| {
-            let area = |k: usize| region.get(k).map_or(0.0, |p| polyline::signed_area2(p).abs());
-            area(*a).total_cmp(&area(*b))
-        });
-        owner[i] = o;
-        if let Some(o) = o
-            && has.get(i).copied().unwrap_or(true)
-        {
-            keep[o] = true;
+/// The region where a tool may sit at height `z` on a CL map: loops of `{CL < z}`.
+fn free_region_of(map: &HeightMap, z: f64) -> Vec<Poly> {
+    // contours() returns loops where the map is above the level: negate.
+    let neg = HeightMap {
+        origin: map.origin,
+        cell: map.cell,
+        nx: map.nx,
+        ny: map.ny,
+        z: map.z.iter().map(|v| if v.is_finite() { -v } else { f64::NEG_INFINITY }).collect(),
+    };
+    let loops: Vec<Poly> = neg.contours(-z).iter().map(|l| polyline::simplify_closed(l, map.cell)).filter(|l| l.len() >= 3).collect();
+    // Where the CL surface jumps (a vertical wall), the contour is interpolated between a
+    // free and a blocked cell; one cell of shrink keeps the tool centre on the free side.
+    offset::offset_set(&loops, -map.cell, map.cell * 0.1).unwrap_or(loops)
+}
+
+/// For each cell of `rest`, the distance (mm) to the nearest cell whose stock stands above
+/// `z`: a two-pass chamfer distance transform, within a few percent of the Euclidean distance.
+fn material_distance(rest: &HeightMap, z: f64) -> Vec<f64> {
+    let (nx, ny) = (rest.nx, rest.ny);
+    let mut d: Vec<f64> = rest.z.iter().map(|v| if v.is_finite() && *v > z { 0.0 } else { f64::INFINITY }).collect();
+    let (a, b) = (rest.cell, rest.cell * std::f64::consts::SQRT_2);
+    let at = |d: &[f64], i: i64, j: i64| -> f64 {
+        if i < 0 || j < 0 || i >= nx as i64 || j >= ny as i64 { f64::INFINITY } else { d[j as usize * nx + i as usize] }
+    };
+    for j in 0..ny as i64 {
+        for i in 0..nx as i64 {
+            let k = j as usize * nx + i as usize;
+            let v = d[k].min(at(&d, i - 1, j) + a).min(at(&d, i, j - 1) + a).min(at(&d, i - 1, j - 1) + b).min(at(&d, i + 1, j - 1) + b);
+            d[k] = v;
         }
     }
-    region
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| match owner.get(*i).copied().flatten() {
-            Some(o) => keep.get(o).copied().unwrap_or(false),
-            None => keep.get(*i).copied().unwrap_or(false),
-        })
-        .map(|(_, l)| l.clone())
-        .collect()
+    for j in (0..ny as i64).rev() {
+        for i in (0..nx as i64).rev() {
+            let k = j as usize * nx + i as usize;
+            let v = d[k].min(at(&d, i + 1, j) + a).min(at(&d, i, j + 1) + a).min(at(&d, i + 1, j + 1) + b).min(at(&d, i - 1, j + 1) + b);
+            d[k] = v;
+        }
+    }
+    d
 }

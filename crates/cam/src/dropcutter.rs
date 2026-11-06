@@ -6,8 +6,8 @@
 //! indexed (3+2) orientations, 4-axis rotary passes (radial frames) and 5-axis surface work.
 
 use solidcore_record::{Vec2, Vec3};
-use solidcraft_geom::{Aabb3, Bvh, Mesh};
 use solidcraft_geom::prelude::*;
+use solidcraft_geom::{Aabb3, Bvh, Mesh};
 
 use crate::frame::Frame;
 use crate::tool::Tool;

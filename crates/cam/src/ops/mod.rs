@@ -16,8 +16,8 @@ pub mod two_d;
 
 use serde::{Deserialize, Serialize};
 use solidcore_record::{Vec2, Vec3};
-use solidcraft_geom::{Aabb2, Aabb3};
 use solidcraft_geom::prelude::*;
+use solidcraft_geom::{Aabb2, Aabb3};
 
 use crate::dropcutter::DropMesh;
 use crate::frame::Frame;

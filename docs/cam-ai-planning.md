@@ -124,8 +124,18 @@ The assistant writes the plan; the engine can propose a starting point.
 step in it has a `why` and the feature ids it covers:
 - the fewest setups that reach every feature;
 - tools chosen from the limits;
-- largest material removal first (face → adaptive rough → rest rough → finish floors and walls
-  → surfaces → holes → chamfers and engraving).
+- workholding first: how the part is held decides the setups, the stock size and the frame or
+  web of stock left to hold it until the last cut;
+- largest material removal first: a clearing pass with the largest tool the part allows → an
+  adaptive rough → flats (flat-area finishing) and verticals (a profile or waterline on faces
+  steeper than about 45° to the tool axis) → parallel finishing on the shallow areas only →
+  holes → chamfers and engraving. Where a ramp or profile cannot reach a near-vertical face,
+  a second parallel pass turned to run along the face finishes it;
+- holes milled with a helix (circular) rather than drilled where a cutter fits: a milled hole
+  holds its size and position better than a drilled one on a light machine;
+- every roughing cut checked against the spindle and the X/Y drives (`spindle_load`,
+  `axis_*` issues), with the nominal load kept well under the limit: adaptive paths load the
+  tool harder in corners, and a Z1 has stalled at about 80 % of its spindle there.
 
 It is a starting point the assistant improves with its skills, the person's priorities and its
 own judgement. It is not the answer.

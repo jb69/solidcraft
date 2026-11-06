@@ -255,23 +255,75 @@ impl StockMap {
 }
 
 /// The lowest height of the tool's bottom over the cell at `p` as the tip travels from `a` to
-/// `b`: the closest point of the segment, and either end when it lies within the radius (a
-/// plunge is lowest at its end; a ramp at its lower end). `None` when the tool never covers `p`.
+/// `b`; `None` when the tool never covers `p`. Over the stretch of the move where the cell is
+/// under the tool, that height is the tip's height plus the tool's profile at the cell's
+/// distance from the axis: for a level move it is lowest where the axis passes closest, but on
+/// a sloped one a ball reaches lower a little downhill of that point (by up to slope² × r / 2),
+/// and taking the closest point there leaves material the cut removes. Every tool's profile
+/// rises convexly from its axis and the distance to a line is convex along it, so the height is
+/// convex along the move: exact for flat and ball ends, a golden-section search for the rest.
 fn lowest_bottom(tool: &Tool, p: Vec2, a: Vec3, b: Vec3, a2: Vec2, b2: Vec2, r: f64) -> Option<f64> {
-    let (d, t) = crate::polyline::point_segment(p, a2, b2);
-    let mut best: Option<f64> = None;
-    let mut consider = |d: f64, t: f64| {
-        if d <= r {
-            let z = a.z + (b.z - a.z) * t + tool.profile(d);
-            if best.is_none_or(|bz| z < bz) {
-                best = Some(z);
-            }
+    let u = b2 - a2;
+    let w = p - a2;
+    let uu = u.dot(u);
+    let dz = b.z - a.z;
+    let height = |t: f64| a.z + dz * t + tool.profile((w - u * t).len().min(r));
+    if uu < 1e-18 {
+        // A plunge (or no move across): lowest at the lower end.
+        return (w.len() <= r).then(|| height(if dz < 0.0 { 1.0 } else { 0.0 }));
+    }
+    // The stretch where the cell is under the tool: |w - t u| <= r.
+    let half_b = w.dot(u);
+    let disc = half_b * half_b - uu * (w.dot(w) - r * r);
+    if disc < 0.0 {
+        return None;
+    }
+    let root = disc.sqrt();
+    let (lo, hi) = (((half_b - root) / uu).max(0.0), ((half_b + root) / uu).min(1.0));
+    if lo > hi {
+        return None;
+    }
+    let closest = (half_b / uu).clamp(lo, hi);
+    if dz.abs() < 1e-12 {
+        return Some(height(closest));
+    }
+    // A convex height's lowest point on the stretch is its lowest point anywhere, clamped to the
+    // stretch. A flat end is level under its whole face: lowest at the downhill end. A ball is
+    // lowest where its sphere touches the cylinder it sweeps: m·√((r² − y²)/(1 + m²)) downhill
+    // of the closest point (m the move's slope, y the cell's distance across it).
+    match tool.kind {
+        crate::tool::ToolKind::FlatEnd => return Some(height(if dz < 0.0 { hi } else { lo })),
+        crate::tool::ToolKind::BallEnd => {
+            let len = uu.sqrt();
+            let slope = dz / len;
+            let along = half_b / len;
+            let across2 = (w.dot(w) - along * along).max(0.0);
+            let shift = slope * ((r * r - across2).max(0.0) / (1.0 + slope * slope)).sqrt();
+            return Some(height(((along - shift) / len).clamp(lo, hi)));
         }
-    };
-    consider(d, t);
-    consider(p.dist(a2), 0.0);
-    consider(p.dist(b2), 1.0);
-    best
+        _ => {}
+    }
+    let (mut x0, mut x1) = (lo, hi);
+    let g = 0.5 * (5f64.sqrt() - 1.0);
+    let (mut c, mut d) = (x1 - g * (x1 - x0), x0 + g * (x1 - x0));
+    let (mut fc, mut fd) = (height(c), height(d));
+    for _ in 0..40 {
+        if (x1 - x0) * uu.sqrt() < 1e-5 {
+            break;
+        }
+        if fc < fd {
+            x1 = d;
+            (d, fd) = (c, fc);
+            c = x1 - g * (x1 - x0);
+            fc = height(c);
+        } else {
+            x0 = c;
+            (c, fc) = (d, fd);
+            d = x0 + g * (x1 - x0);
+            fd = height(d);
+        }
+    }
+    Some([height(lo), height(hi), height(closest), fc, fd].into_iter().fold(f64::INFINITY, f64::min))
 }
 
 /// What the simulation found.
@@ -893,7 +945,7 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
         }
     }
     let kept: Vec<f64> = index.iter().map(|k| if k.is_some() { 1.0 } else { 0.0 }).collect();
-    let blurred = box_blur(&kept, nx, ny, 2);
+    let blurred = blur(&kept, nx, ny, SIGMA);
     let outward = |k: u32| -> Option<Vec3> {
         let &(i, j) = grid_of.get(k as usize)?;
         let b = |di: isize, dj: isize| -> f64 {
@@ -957,7 +1009,7 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
     }
     // Bottom: the top's triangles at the floor under each vertex, facing down.
     let h = m.cell * step as f64;
-    let floor_wide = stock.floor.as_ref().map(|_| box_blur(&(0..nx * ny).map(|k| fl(k % nx, k / nx)).collect::<Vec<_>>(), nx, ny, 2));
+    let floor_wide = stock.floor.as_ref().map(|_| blur(&(0..nx * ny).map(|k| fl(k % nx, k / nx)).collect::<Vec<_>>(), nx, ny, SIGMA));
     let base = mesh.positions.len() as u32;
     for (k, &(i, j)) in grid_of.iter().enumerate() {
         mesh.positions.push(pt(i, j, floors.get(k).copied().unwrap_or(bottom)));
@@ -985,7 +1037,7 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
     }
     // Smooth top normals from the height field (`grid_slope`).
     let heights: Vec<f64> = (0..nx * ny).map(|k| at(k % nx, k / nx).unwrap_or(bottom)).collect();
-    let wide = box_blur(&heights, nx, ny, 2);
+    let wide = blur(&heights, nx, ny, SIGMA);
     for j in 0..ny {
         for i in 0..nx {
             let Some(k) = index[j * nx + i] else { continue };
@@ -1007,11 +1059,11 @@ pub fn stock_mesh(stock: &StockMap, step: usize) -> Mesh {
 }
 
 /// The slope (dz/dx, dz/dy) of a height field on the grid at vertex (`i`, `j`), `z` giving
-/// the heights round it and `wide` the field averaged over 5 x 5 cells (`box_blur`). A 3 x 3
+/// the heights round it and `wide` the field smoothed along the wall (`blur`). A 3 x 3
 /// (Sobel) slope, so the grid's steps on a sloped floor average out instead of shading as
 /// stripes; where it is steep (a wall standing between neighbouring vertices) the staircase
 /// along a curved wall turns the slope between x and y from one vertex to the next, so the wall
-/// faces the way the wider average falls instead.
+/// faces the way the smoothed field falls instead.
 fn grid_slope(z: &dyn Fn(isize, isize) -> f64, wide: &[f64], i: usize, j: usize, nx: usize, ny: usize, h: f64) -> (f64, f64) {
     let gx = (z(1, -1) + 2.0 * z(1, 0) + z(1, 1) - z(-1, -1) - 2.0 * z(-1, 0) - z(-1, 1)) / (8.0 * h);
     let gy = (z(-1, 1) + 2.0 * z(0, 1) + z(1, 1) - z(-1, -1) - 2.0 * z(0, -1) - z(1, -1)) / (8.0 * h);
@@ -1028,17 +1080,33 @@ fn grid_slope(z: &dyn Fn(isize, isize) -> f64, wide: &[f64], i: usize, j: usize,
     if len > 1e-12 { (wx / len * slope, wy / len * slope) } else { (gx, gy) }
 }
 
-/// `field` (`nx` by `ny`) averaged over the (2r + 1)² cells round each cell, the map's edge
-/// clamped.
-fn box_blur(field: &[f64], nx: usize, ny: usize, r: usize) -> Vec<f64> {
+/// How widely (cells) a wall's facing is averaged along a curved staircase: a narrower
+/// Gaussian lets the direction ripple from step to step (7° at 1.5 cells, 3° at 3).
+const SIGMA: f64 = 3.0;
+
+/// `field` (`nx` by `ny`) smoothed by a Gaussian of `sigma` cells, the map's edge clamped. A
+/// Gaussian weighs every direction alike, so the slope of the smoothed field follows a curved
+/// staircase's true direction where a square window would bend it towards the grid's axes.
+fn blur(field: &[f64], nx: usize, ny: usize, sigma: f64) -> Vec<f64> {
+    let reach = (sigma * 3.0).ceil() as isize;
+    let weights: Vec<f64> = (-reach..=reach).map(|k| (-((k * k) as f64) / (2.0 * sigma * sigma)).exp()).collect();
+    let total: f64 = weights.iter().sum();
     let pass = |src: &[f64], along_x: bool| -> Vec<f64> {
         let mut out = vec![0.0; src.len()];
         for j in 0..ny {
             for i in 0..nx {
-                let (c, len) = if along_x { (i, nx) } else { (j, ny) };
-                let (lo, hi) = (c.saturating_sub(r), (c + r).min(len.saturating_sub(1)));
-                let sum: f64 = (lo..=hi).map(|t| if along_x { src[j * nx + t] } else { src[t * nx + i] }).sum();
-                out[j * nx + i] = sum / (hi - lo + 1) as f64;
+                let mut sum = 0.0;
+                for (w, k) in weights.iter().zip(-reach..=reach) {
+                    let (ii, jj) = if along_x {
+                        ((i as isize + k).clamp(0, nx as isize - 1) as usize, j)
+                    } else {
+                        (i, (j as isize + k).clamp(0, ny as isize - 1) as usize)
+                    };
+                    sum += w * src.get(jj * nx + ii).copied().unwrap_or(0.0);
+                }
+                if let Some(o) = out.get_mut(j * nx + i) {
+                    *o = sum / total;
+                }
             }
         }
         out

@@ -1007,6 +1007,40 @@ fn stock_turned_over_keeps_the_first_sides_cuts() {
 }
 
 #[test]
+fn a_ball_moving_down_a_slope_cuts_as_deep_as_its_swept_cylinder() {
+    // A 6 mm ball from (0, 0, 0) to (20, 0, -6): a slope of 0.3. Away from the ends the cut is
+    // the cylinder round the centre line, its lowest line r·√(1 + s²) below the centre's: a
+    // little downhill of the point straight under the cell, 0.13 mm lower than the tip there.
+    let block = StockShape::Box { min: Vec3::new(-10.0, -10.0, -20.0), max: Vec3::new(30.0, 10.0, 5.0) };
+    let mut stock = crate::simulate::StockMap::new(&block, 0.25).unwrap();
+    stock.cut(&ball(6.0), Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, -6.0));
+    let m = &stock.map;
+    let (r, s) = (3.0f64, 0.3f64);
+    let mut worst = 0.0f64;
+    let mut cells = 0;
+    for j in 0..m.ny {
+        for i in 0..m.nx {
+            let p = m.point(i, j);
+            if !(5.0..=15.0).contains(&p.x) || p.y.abs() > 2.0 {
+                continue;
+            }
+            // The cylinder's bottom at (x, y): (z - r + s x)² + (1 + s²) y² = (1 + s²) r².
+            let want = r - s * p.x - ((1.0 + s * s) * (r * r - p.y * p.y)).sqrt();
+            worst = worst.max((m.get(i, j).unwrap() - want).abs());
+            cells += 1;
+        }
+    }
+    assert!(cells > 100);
+    assert!(worst < 1e-4, "the cut is {worst:.4} mm off the swept cylinder");
+    // A bull nose with a 3 mm corner (a ball) takes the general search: the same cut.
+    let mut searched = crate::simulate::StockMap::new(&block, 0.25).unwrap();
+    let bull = Tool::new(3, "bull", ToolKind::BullNose { corner_radius: 3.0 }, 6.0);
+    searched.cut(&bull, Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, -6.0));
+    let apart = stock.map.z.iter().zip(&searched.map.z).filter(|(a, _)| a.is_finite()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+    assert!(apart < 1e-4, "the search and the closed form differ by {apart:.5} mm");
+}
+
+#[test]
 fn the_simulated_stock_shades_a_round_wall_smoothly() {
     // A round bar stood on end: on the grid its side is a staircase of x- and y-facing steps.
     // Each wall vertex is shaded facing out from the axis, not along the step it stands on.
@@ -1024,7 +1058,7 @@ fn the_simulated_stock_shades_a_round_wall_smoothly() {
         walls += 1;
     }
     assert!(walls > 100, "{walls} wall vertices");
-    assert!(worst < 15.0, "a wall vertex is shaded {worst:.1} deg off the radial direction");
+    assert!(worst < 5.0, "a wall vertex is shaded {worst:.1} deg off the radial direction");
     // Every face winds outward: the mesh encloses the bar's volume with a positive sign.
     let volume: f64 = mesh
         .triangles
@@ -1064,7 +1098,7 @@ fn the_simulated_stock_shades_a_round_wall_smoothly() {
         walls += 1;
     }
     assert!(walls > 100, "{walls} pocket wall vertices");
-    assert!(worst < 15.0, "a pocket wall vertex faces {worst:.1} deg off the axis");
+    assert!(worst < 5.0, "a pocket wall vertex faces {worst:.1} deg off the axis");
     // Turned over, the pocket is in the floor: its wall is drawn by the floor's own steps and
     // faces the axis too.
     let block = StockShape::Box { min: Vec3::new(0.0, 0.0, 0.0), max: Vec3::new(30.0, 30.0, 5.0) };
@@ -1087,7 +1121,7 @@ fn the_simulated_stock_shades_a_round_wall_smoothly() {
         walls += 1;
     }
     assert!(walls > 100, "{walls} pocket wall vertices underneath");
-    assert!(worst < 15.0, "a pocket wall vertex underneath faces {worst:.1} deg off the axis");
+    assert!(worst < 5.0, "a pocket wall vertex underneath faces {worst:.1} deg off the axis");
 }
 
 #[test]

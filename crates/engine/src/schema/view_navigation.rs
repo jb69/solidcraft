@@ -34,11 +34,28 @@ pub struct RenderFocus {
     pub on: bool,
 }
 
+/// Pause or resume the current document's live Render preview without saving a setup.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenderLive {
+    /// True pauses refinement; false resumes it using the current visual settings.
+    pub paused: bool,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RenderBrowser {
     /// Open the floating Browser card in a narrow Render window.
     pub open: bool,
+}
+
+/// Latch or release the viewport's Zoom tool. With no flag, the UI toggles it.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ZoomTool {
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub on: Option<bool>,
 }
 
 /// Empty input for the read-only viewport effect query.
@@ -126,6 +143,27 @@ pub struct TabStepParams {}
 pub struct TabStep {
     /// 1: the tab to the right; -1: the tab to the left.
     pub step: i8,
+    /// In the warn parameter-check mode: what the call's parameters got wrong.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
+/// `view.ribbon_tabs_only`: fold the ribbon to its tab row, or show it whole (#10112).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RibbonTabsOnlyParams {
+    /// True folds the ribbon to its tab row, false shows it whole; omitted switches between the two.
+    #[serde(default)]
+    pub on: Option<bool>,
+}
+
+/// What `view.ribbon_tabs_only` returns: the request echoed. The window applies it to its
+/// preference; the design is not changed and nothing is added to undo.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RibbonTabsOnly {
+    /// The requested state; absent when the call asked to switch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
     /// In the warn parameter-check mode: what the call's parameters got wrong.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,

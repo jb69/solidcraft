@@ -461,8 +461,7 @@ fn contour(
     let tab_top = bottom + tabs.2;
     let probe = crate::tool::Tool::new(0, "probe", crate::tool::ToolKind::FlatEnd, 1e-3);
     let floor = ctx.model_bounds.min.z - 1.0;
-    let below = crate::frame::Frame::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 0.0)).ok();
-    let ceiling = -(ctx.model_bounds.max.z + 1.0);
+    let roof = ctx.model_bounds.max.z + 1.0;
     let supported = |i: usize, dense: &[Vec2], d: f64| -> bool {
         let (Some(model), Side::Outside) = (ctx.model, side) else { return true };
         let m = dense.len();
@@ -477,11 +476,7 @@ fn contour(
         let inward = if polyline::is_ccw(dense) { left } else { left * -1.0 };
         let q = dense[i] + inward * (d + 0.5);
         let Some(high) = model.drop_z(&probe, q, floor).map(|c| c.z) else { return false };
-        // Seen from below (the frame turned over: y and z flip), the highest contact is the
-        // part's lowest surface.
-        let Some(low) = below.as_ref().and_then(|f| model.drop(&probe, f, Vec2::new(q.x, -q.y), ceiling)).map(|c| -c.z) else {
-            return false;
-        };
+        let Some(low) = model.rise_z(&probe, q, roof) else { return false };
         high.min(tab_top) - low.max(bottom) >= tabs.2 * 0.5 - ctx.tolerance
     };
     let mut tabs_placed: Option<u32> = None;

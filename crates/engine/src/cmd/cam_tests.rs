@@ -727,35 +727,41 @@ fn rest_roughing_cuts_only_what_the_larger_tool_left() {
 
 #[test]
 fn tabs_go_where_the_part_meets_the_contour() {
-    // Cut round the outline from above, leaving tabs 2 mm high at the bottom: on a block every
-    // tab meets its wall; on a top that overhangs its base all round, none meets anything.
-    let tabs = |overhang: bool| {
+    // A web cut from above, 3 mm deep, leaving tabs 2 mm high at its bottom. Round a block every
+    // tab meets its wall. Round a boss on a wider base, the part's widest outline is the base's,
+    // which ends below the cut: no tab meets anything. The outline within the cut's heights is
+    // the boss's, and every tab holds it.
+    let tabs = |boss: bool, within_heights: bool| {
         let mut s = Session::default();
-        if overhang {
-            run(&mut s, "solid.box", json!({"length": 30, "width": 20, "height": 5, "corner": [10, 5, 0], "body_name": "Part"}));
-            run(&mut s, "solid.box", json!({"length": 50, "width": 30, "height": 5, "corner": [0, 0, 5], "operation": "join", "targets": ["Part"]}));
+        if boss {
+            run(&mut s, "solid.box", json!({"length": 50, "width": 30, "height": 5, "body_name": "Part"}));
+            run(&mut s, "solid.box", json!({"length": 30, "width": 20, "height": 5, "corner": [10, 5, 5], "operation": "join", "targets": ["Part"]}));
         } else {
             run(&mut s, "solid.box", json!({"length": 50, "width": 30, "height": 10, "body_name": "Part"}));
         }
         let tool = add_flat(&mut s, 3.0);
-        run(&mut s, "cam.setup.create", json!({"name": "Top", "machine": *TEST_MILL}));
+        let setup = run(&mut s, "cam.setup.create", json!({"name": "Top", "machine": *TEST_MILL}))["id"].as_u64().unwrap();
         let op = run(
             &mut s,
             "cam.operation.contour2d",
-            json!({"tool": tool, "geometry": {"source": "silhouette"}, "stepdown": 2, "tabs": 4, "tab_width": 4, "tab_height": 2,
-                   "heights": {"bottom": {"from": "model_bottom", "offset": 0}}}),
+            json!({"tool": tool, "geometry": {"source": "silhouette", "within_heights": within_heights}, "stepdown": 1.5, "tabs": 4,
+                   "tab_width": 4, "tab_height": 2, "heights": {"bottom": {"from": "model_top", "offset": -3}}}),
         )["id"]
             .as_u64()
             .unwrap();
         run(&mut s, "cam.generate", json!({}));
         let n = run(&mut s, "cam.notices", json!({}));
+        let sim = run(&mut s, "cam.simulate", json!({"setup": setup}));
+        assert_eq!(sim["total"]["gouge_cells"], 0, "boss {boss}, within heights {within_heights}: {}", sim["notice"]);
         n["notices"].as_array().unwrap().iter().find(|o| o["operation"] == op).cloned().unwrap()
     };
-    let block = tabs(false);
+    let block = tabs(false, false);
     assert_eq!(block["values"]["tabs_placed"], 4, "{block}");
-    let over = tabs(true);
-    assert_eq!(over["values"]["tabs_placed"], 0, "{over}");
-    assert!(over["issues"].as_array().is_some_and(|i| i.iter().any(|x| x["code"] == "tabs_unsupported")), "{over}");
+    let widest = tabs(true, false);
+    assert_eq!(widest["values"]["tabs_placed"], 0, "{widest}");
+    assert!(widest["issues"].as_array().is_some_and(|i| i.iter().any(|x| x["code"] == "tabs_unsupported")), "{widest}");
+    let section = tabs(true, true);
+    assert_eq!(section["values"]["tabs_placed"], 4, "{section}");
 }
 
 #[test]

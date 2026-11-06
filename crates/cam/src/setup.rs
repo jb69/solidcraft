@@ -262,8 +262,13 @@ pub enum Geometry {
     /// The whole stock outline (face, roughing).
     #[default]
     Stock,
-    /// The model's silhouette seen along the tool axis.
-    Silhouette,
+    /// The model's silhouette seen along the tool axis; with `within_heights`, the outline of
+    /// the part between the operation's top and bottom heights (a web cut round a part that is
+    /// narrower there than at its widest).
+    Silhouette {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        within_heights: bool,
+    },
     /// Explicit closed loops in the operation frame's XY (mm).
     Loops { loops: Vec<Poly> },
     /// Closed loops from a sketch feature (its profiles).

@@ -189,7 +189,10 @@ step in it has a `why` and the feature ids it covers:
 - the fewest setups that reach every feature;
 - tools chosen from the limits;
 - workholding first: how the part is held decides the setups, the stock size and the frame or
-  web of stock left to hold it until the last cut;
+  web of stock left to hold it until the last cut. The web cut follows the part's outline at
+  the web's own height (`geometry: {source: silhouette, within_heights: true}`): a part
+  narrower there than at its widest would otherwise be cut round in air, and its tabs would
+  hold nothing (`tabs_placed` 0, `tabs_unsupported`);
 - largest material removal first: a clearing pass with the largest tool the part allows → an
   adaptive rough → flats (flat-area finishing) and verticals (a profile or waterline on faces
   steeper than about 45° to the tool axis) → parallel finishing on the shallow areas only →

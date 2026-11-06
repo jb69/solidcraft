@@ -123,6 +123,13 @@ impl DropMesh {
         self.drop(tool, &Frame::IDENTITY, xy, floor)
     }
 
+    /// The mesh's lowest surface at `xy`, seen from below: the frame turned over (y and z flip),
+    /// a tool pushed up no further than `roof` (above the mesh).
+    pub fn rise_z(&self, tool: &Tool, xy: Vec2, roof: f64) -> Option<f64> {
+        let below = Frame::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 0.0)).ok()?;
+        self.drop(tool, &below, Vec2::new(xy.x, -xy.y), -roof).map(|c| -c.z)
+    }
+
     /// Whether a cylinder (the tool's shank, radius `radius`, from local height `z0` to `z1`
     /// above the tip at `tip`, along `axis`) comes within `gap` of the mesh. Used for collision
     /// checks of the shank and holder in multi-axis work.

@@ -28,7 +28,8 @@ in, the computed numbers out, and a **notice** on every result (`status`, `info`
   leave, rest machining and an optional `orientation` for 3+2 work. A parameter at 0 takes the
   kind's default (40 % of the diameter for a roughing stepover, 10 % for finishing).
 - **Geometry** sources: `stock` (the stock outline), `silhouette` (the model seen along the tool
-  axis), `loops` (explicit polygons), `sketch` (a sketch's profiles), `faces` (points on faces:
+  axis; with `within_heights: true`, the part's outline between the operation's top and bottom
+  heights, for a web cut round a part narrower there than at its widest), `loops` (explicit polygons), `sketch` (a sketch's profiles), `faces` (points on faces:
   planar faces give loops and the floor height, cylindrical faces give holes), `holes` (points
   with a diameter, or on cylindrical faces), `chains` (bottom and top of a wall, for swarf),
   `rails` (two curves, for flow).

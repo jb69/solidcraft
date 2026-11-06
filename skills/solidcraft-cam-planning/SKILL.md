@@ -31,7 +31,8 @@ ring of a pocket, a web cut) take the most power: step down less.
 ## Check
 - `cam.generate`: answer every issue (`tool_too_short`, `spindle_overload`, `axis_overload`).
 - `cam.simulate` each setup: 0 `gouge_cells`, 0 collisions, no `uncut` warning.
-- The web cut reports `tabs_placed`; `tabs_unsupported` means tabs would meet air.
+- The web cut reports `tabs_placed`; `tabs_unsupported` means tabs would meet air. Cut the web
+  round the part's outline at its height: `geometry: {source: silhouette, within_heights: true}`.
 - Show the person the plan and the numbers (time, loads, what is left) before posting.
 
 ## Red flags

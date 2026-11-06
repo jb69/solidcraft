@@ -283,7 +283,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("material?: aluminium | wood | plastic (the stock's material; aluminium is a 6061-T6 class alloy): what the job is cut from; each roughing operation's generate notice then estimates its spindle load (force, torque, power against the spindle's power at the tool's speed). Returns the job"),
     CommandSpec::new("cam.operation.add", "Add Operation", operation_add)
         .icon("cam")
-        .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; boundary?: where an area operation (3D roughing and finishing) may machine: a source name or {source: auto | stock | part | bounding_box | selection | rest, containment: auto | inside | center | outside, offset, clip_to_stock, avoid_fixtures, fixture_clearance} (auto: roughing clears a ring a tool wide around the part's outline, wall finishing runs outside it, surface finishing keeps the tool's centre on the part, a selection bounds it; each notice says which and why); heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
+        .params("setup: id; type: see cam.operation.kinds; tool: id; name?; geometry?: {source: stock} | {source: silhouette, within_heights?: the part's outline between the operation's top and bottom heights} | {source: loops, loops: [[[x,y],…],…]} | {source: sketch, feature} | {source: faces, points: [[x,y,z],…]} | {source: holes, points, diameter?} | {source: chains, bottom: [[x,y,z],…], top: […]} | {source: rails, first, second}; boundary?: where an area operation (3D roughing and finishing) may machine: a source name or {source: auto | stock | part | bounding_box | selection | rest, containment: auto | inside | center | outside, offset, clip_to_stock, avoid_fixtures, fixture_clearance} (auto: roughing clears a ring a tool wide around the part's outline, wall finishing runs outside it, surface finishing keeps the tool's centre on the part, a selection bounds it; each notice says which and why); heights?: {clearance|retract|feed|top|bottom: {from: stock_top|stock_bottom|model_top|model_bottom|origin|absolute, offset} or a number (absolute)}; linking?: {ramp: {type: plunge|helix|zigzag|profile, angle_deg, diameter}, lead_in/lead_out: {radius, sweep_deg, distance}, stay_down_distance, minimum_retract}; tolerance? (0.01); stock_to_leave_radial?, stock_to_leave_axial?; rest_machining?; orientation?: {origin, z, x} relative to the WCS for 3+2 work; plus the kind's own parameters at the top level (stepover, stepdown, direction: climb|conventional|both, …). Returns the operation, with issues for unknown parameters"),
     CommandSpec::new("cam.operation.set", "Edit Operation", operation_set).icon("cam").params("operation: id; any cam.operation.add field (type included): changes an operation; cam.generate again afterwards"),
     CommandSpec::new("cam.operation.remove", "Remove Operation", operation_remove).icon("cam").params("operation: id"),
     CommandSpec::new("cam.toolpath.visibility", "Show/Hide Toolpath", toolpath_visibility)
@@ -1659,7 +1659,7 @@ fn operation_kinds(_s: &mut Session, p: &Value) -> Result<Value> {
         "kinds": kinds,
         "common": {
             "tool": "tool id", "name": "string", "enabled": true,
-            "geometry": "{source: stock | silhouette | loops | sketch | faces | holes | chains | rails, …}",
+            "geometry": "{source: stock | silhouette (within_heights?) | loops | sketch | faces | holes | chains | rails, …}",
             "heights": "{clearance, retract, feed, top, bottom: {from, offset} | absolute number}",
             "linking": cam::linking::Linking::default(),
             "tolerance": 0.01, "stock_to_leave_radial": 0.0, "stock_to_leave_axial": 0.0, "rest_machining": false,
@@ -1816,6 +1816,7 @@ fn resolve_geometry(
     to_op: &dyn Fn(Vec3) -> Vec3,
     dir_to_op: &dyn Fn(Vec3) -> Vec3,
     model: Option<&cam::dropcutter::DropMesh>,
+    band: (f64, f64),
     notice: &mut Notice,
 ) -> Result<ResolvedGeometry> {
     let cmd = "cam.generate";
@@ -1827,9 +1828,13 @@ fn resolve_geometry(
     };
     match &op.geometry {
         Geometry::Stock => {}
-        Geometry::Silhouette => {
+        Geometry::Silhouette { within_heights } => {
             let Some(m) = model else { return Err(bad(cmd, "silhouette geometry needs model bodies in the setup")) };
-            g.loops = cam::boundary::silhouette(m, tol).map_err(|e| engine_err(cmd, e))?;
+            g.loops = if *within_heights {
+                cam::boundary::section(m, band.0, band.1, tol).map_err(|e| engine_err(cmd, e))?
+            } else {
+                cam::boundary::silhouette(m, tol).map_err(|e| engine_err(cmd, e))?
+            };
         }
         Geometry::Loops { loops } => {
             g.loops = cam::polyline::normalize_set(loops);
@@ -2058,8 +2063,9 @@ fn prepare_one(
     let stock = stock_shape(s, st).map_err(|e| bad(cmd, e.to_string()))?;
     let stock_z = stock.z_range_in(&orient);
     let model_z = if model_bounds_op.is_empty() { stock_z } else { (model_bounds_op.min.z, model_bounds_op.max.z) };
-    let geometry = resolve_geometry(s, st, op, &to_op, &dir_to_op, model_mesh.as_ref(), &mut notice)?;
     let mut heights = op.heights.resolve(stock_z, model_z).map_err(|e| engine_err(cmd, e))?;
+    let band = (heights.bottom, heights.top);
+    let geometry = resolve_geometry(s, st, op, &to_op, &dir_to_op, model_mesh.as_ref(), band, &mut notice)?;
     if let Some(fz) = geometry.face_z
         && matches!(op.kind, OpKind::Pocket2d { .. } | OpKind::Adaptive2d { .. } | OpKind::Contour2d { .. })
         && op.heights.bottom == cam::linking::Heights::default().bottom

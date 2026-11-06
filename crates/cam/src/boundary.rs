@@ -372,6 +372,32 @@ pub fn silhouette(mesh: &DropMesh, tol: f64) -> Result<Vec<Poly>> {
     Ok(offset::offset_set(&outer, -cell * 0.5, tol.max(cell * 0.25)).unwrap_or(outer))
 }
 
+/// The outline of the part's material between heights `z0` and `z1`, seen along z: where the
+/// part (between its surface seen from above and from below) fills at least `tol` of the band.
+/// A part narrower at that height than at its widest gets the narrower outline.
+pub fn section(mesh: &DropMesh, z0: f64, z1: f64, tol: f64) -> Result<Vec<Poly>> {
+    let b = mesh.bounds;
+    if b.is_empty() || !(z1 > z0) {
+        return Ok(Vec::new());
+    }
+    let mut b2 = Aabb2::default();
+    b2.add(Vec2::new(b.min.x - 1.0, b.min.y - 1.0));
+    b2.add(Vec2::new(b.max.x + 1.0, b.max.y + 1.0));
+    let cell = (tol * 2.0).max(0.02).max(b2.diagonal() / 1200.0);
+    let probe = Tool::new(0, "probe", ToolKind::FlatEnd, 1e-3);
+    let (floor, roof) = (b.min.z - 1.0, b.max.z + 1.0);
+    let margin = tol.max(0.01);
+    let map = HeightMap::from_fn(b2, cell, |p| {
+        let Some(high) = mesh.drop_z(&probe, p, floor).map(|c| c.z) else { return -1.0 };
+        let Some(low) = mesh.rise_z(&probe, p, roof) else { return -1.0 };
+        high.min(z1) - low.max(z0) - margin
+    })?;
+    let loops: Vec<Poly> = map.contours(0.0).iter().map(|l| polyline::simplify_closed(l, cell * 0.5)).filter(|l| l.len() >= 3).collect();
+    let outer: Vec<Poly> = loops.iter().enumerate().filter(|(i, _)| polyline::nesting_depth(&loops, *i) == 0).map(|(_, l)| l.clone()).collect();
+    let outer = polyline::normalize_set(&outer);
+    Ok(offset::offset_set(&outer, -cell * 0.5, tol.max(cell * 0.25)).unwrap_or(outer))
+}
+
 /// Where the rest stock stands above the part by more than the tolerance.
 fn rest_outline(rest: &HeightMap, model: &DropMesh, tol: f64) -> Result<Vec<Poly>> {
     let probe = Tool::new(0, "probe", ToolKind::FlatEnd, 1e-3);

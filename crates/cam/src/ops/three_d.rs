@@ -128,7 +128,10 @@ impl Surface {
     /// a web). The margin leaves a skin thinner than it (an earlier operation's stock to leave)
     /// to finishing instead of retracing every wall.
     fn rest_region(&self, rest: &HeightMap, floor: Option<&HeightMap>, r: f64, z: f64, roof: f64, margin: f64) -> Vec<Poly> {
-        let near = material_distance(rest, floor, z + margin, roof - margin);
+        // Material hangs into this level's slab where its underside is below the roof. (Not
+        // `roof - margin`: a margin over the step-down would skip the last slab of a web cut
+        // from below and leave a skin as thin as the margin.)
+        let near = material_distance(rest, floor, z + margin, roof - 1e-3);
         let reach = r - margin;
         let mut map = HeightMap { origin: self.map.origin, cell: self.map.cell, nx: self.map.nx, ny: self.map.ny, z: self.map.z.clone() };
         for j in 0..map.ny {
@@ -264,8 +267,17 @@ fn pocket3d(
                 zs.push(f);
             }
         }
-        zs.sort_by(|a, b| b.total_cmp(a));
     }
+    // A level just over the top of each fixture kept clear of (a sprue): the stock standing on
+    // it is cut down to the sprue, not left up to a step-down high.
+    // (A level just under it, where the tool would touch the sprue, gives way to it.)
+    for f in fixture_tops(ctx) {
+        if f > bottom - 1e-6 && f < top - 1e-6 && !zs.iter().any(|z| (z - f).abs() < 1e-9) {
+            zs.retain(|z| !(*z < f && f - *z < ctx.tolerance * 2.0));
+            zs.push(f);
+        }
+    }
+    zs.sort_by(|a, b| b.total_cmp(a));
     let lk = linker(op, ctx);
     let mut tp = Toolpath::new();
     let mut notice = Notice::default();
@@ -1087,6 +1099,24 @@ fn steep_shallow(
 /// The boundary bounds helper for tests.
 pub fn boundary_bounds(ctx: &Context) -> Result<Aabb2> {
     Ok(polyline::bounds_of(&ctx.boundary()?))
+}
+
+/// The heights a tool's tip clears the tops of the fixtures by (their upward faces plus the
+/// clearance), when the operation keeps clear of fixtures at their own heights.
+fn fixture_tops(ctx: &Context) -> Vec<f64> {
+    let plan = &ctx.boundary;
+    let Some(fx) = ctx.fixtures.filter(|f| plan.avoid_fixtures && plan.fixtures_as_solids && !f.is_empty()) else { return Vec::new() };
+    let mut tops: Vec<f64> = fx
+        .tris
+        .iter()
+        .zip(&fx.normals)
+        .filter(|(t, n)| n.z > 0.999 && (t[0].z - t[1].z).abs() < 1e-6 && (t[0].z - t[2].z).abs() < 1e-6)
+        .map(|(t, _)| t[0].z + plan.fixture_clearance + ctx.tolerance * 0.5)
+        .filter(|z| z.is_finite())
+        .collect();
+    tops.sort_by(f64::total_cmp);
+    tops.dedup_by(|a, b| (*a - *b).abs() < ctx.tolerance);
+    tops
 }
 
 /// The region where a tool may sit at height `z` on a CL map: loops of `{CL < z}`.

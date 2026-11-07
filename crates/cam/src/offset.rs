@@ -17,6 +17,9 @@ use solidcraft_geom::prelude::*;
 use crate::polyline::{self, MinMaxPt, Poly, SegmentGrid, arc_segments};
 use crate::{CamError, Result};
 
+/// How many edges ahead a local self-crossing of a loop is looked for (see `polyline::untangle`).
+const UNTANGLE_WINDOW: usize = 8;
+
 /// Most moved edges one offset may produce.
 const MAX_SEGMENTS: usize = 2_000_000;
 
@@ -61,7 +64,11 @@ pub fn offset_set(set: &[Poly], d: f64, tol: f64) -> Result<Vec<Poly>> {
 fn offset_set_once(set: &[Poly], d: f64, tol: f64) -> Result<Vec<Poly>> {
     // Points within the tolerance of their neighbours' chord add nothing the result can show,
     // and a jagged input (sampled contours) would leave arc fragments at every micro-corner.
-    let set: Vec<Poly> = set.iter().map(|p| polyline::simplify_closed(&polyline::clean(p, tol * 0.01), tol * 0.5)).filter(|p| p.len() >= 3).collect();
+    let set: Vec<Poly> = set
+        .iter()
+        .map(|p| polyline::simplify_closed(&polyline::untangle(&polyline::clean(p, tol * 0.01), UNTANGLE_WINDOW), tol * 0.5))
+        .filter(|p| p.len() >= 3)
+        .collect();
     if set.is_empty() {
         return Ok(Vec::new());
     }
@@ -99,7 +106,7 @@ fn offset_set_once(set: &[Poly], d: f64, tol: f64) -> Result<Vec<Poly>> {
     // A loop thinner than the tolerance (area under tolerance × perimeter) is a sliver.
     let loops: Vec<Poly> = loops
         .into_iter()
-        .map(|p| polyline::clean(&p, tol * 0.01))
+        .map(|p| polyline::clean(&polyline::untangle(&p, UNTANGLE_WINDOW), tol * 0.01))
         .filter(|p| p.len() >= 3 && polyline::signed_area(p).abs() > tol * polyline::perimeter(p))
         .collect();
     Ok(polyline::normalize_set(&loops))

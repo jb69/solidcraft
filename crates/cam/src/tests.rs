@@ -1251,6 +1251,9 @@ fn rest_machining_turned_over_cuts_the_web_and_not_the_air_under_it() {
     }
     ctx.rest = Some(&tops);
     ctx.rest_floor = Some(&floor);
+    // The sprue the column stands on, kept clear of.
+    let sprue = DropMesh::new(&box_mesh(Vec3::new(28.0, 8.0, 2.0), Vec3::new(32.0, 12.0, 4.0)));
+    ctx.fixtures = Some(&sprue);
     let kind: OpKind = serde_json::from_value(serde_json::json!({ "type": "adaptive3d", "stepdown": 1.0, "optimal_load": 1.0 })).unwrap();
     ctx.boundary = crate::boundary::Plan::new(
         &crate::boundary::Boundary {
@@ -1269,6 +1272,10 @@ fn rest_machining_turned_over_cuts_the_web_and_not_the_air_under_it() {
     let (tp, _) = generate(&o, &ctx).unwrap();
     let cuts: Vec<Vec3> = tp.moves.iter().filter(|m| m.kind == MoveKind::Cut).map(|m| m.to).collect();
     assert!(cuts.iter().any(|p| p.z > 10.0), "the web is cut");
+    // The column standing on the sprue is cut down to the sprue (top 4, 1 mm clearance), not
+    // left a step-down above it, and never into it.
+    let over = cuts.iter().filter(|p| (28.5..=31.5).contains(&p.x) && (8.5..=11.5).contains(&p.y)).map(|p| p.z).fold(f64::INFINITY, f64::min);
+    assert!((5.0..5.2).contains(&over), "lowest cut over the sprue {over}");
     let deep: Vec<&Vec3> = cuts.iter().filter(|p| p.z < 10.0).collect();
     assert!(!deep.is_empty(), "the column under the sprue is cut");
     for p in deep {
@@ -1497,4 +1504,26 @@ fn spindle_load_of_a_6mm_rough_in_6061_on_a_carvera() {
     assert_eq!(engagement(&a, &t), Some(Engagement { ae: 0.9, ap: 22.0, slotting: false }));
     let p = OpKind::Pocket3d { stepover: 0.0, stepdown: 0.0, direction: Default::default(), flat_area_detection: true, order_by_depth: false };
     assert_eq!(engagement(&p, &t).map(|e| (e.ae, e.slotting)), Some((6.0, true)));
+}
+
+#[test]
+fn a_loop_that_doubles_back_in_a_tiny_zigzag_still_offsets_inward() {
+    // A 20 x 20 square whose bottom edge crosses back over itself 0.05 mm (as a corner-rounded
+    // contour can): the stitched offset must still close, and the rings fill the pocket.
+    let sq: Vec<Vec2> = vec![
+        Vec2::new(0.0, 0.0),
+        Vec2::new(10.0, 0.0),
+        Vec2::new(9.95, 0.03),
+        Vec2::new(9.95, -0.02),
+        Vec2::new(20.0, 0.0),
+        Vec2::new(20.0, 20.0),
+        Vec2::new(0.0, 20.0),
+    ];
+    let clean = polyline::untangle(&sq, 8);
+    assert_eq!(clean.len(), 6, "the little loop is cut out at the crossing: {clean:?}");
+    let inner = offset_set(std::slice::from_ref(&sq), -0.6, 0.01).unwrap();
+    assert_eq!(inner.len(), 1);
+    assert!((polyline::set_area(&inner) - 18.8 * 18.8).abs() < 1.0, "{}", polyline::set_area(&inner));
+    let fam = inward_family(&[sq], 1.0, 0.01, 100).unwrap();
+    assert!(fam.len() > 5, "{}", fam.len());
 }

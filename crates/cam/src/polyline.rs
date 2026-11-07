@@ -223,6 +223,41 @@ pub fn scanline(set: &[Poly], y: f64) -> Vec<(f64, f64)> {
     xs.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).filter(|(a, b)| b > a).collect()
 }
 
+/// Cuts the small loops out of a closed polygon that crosses itself locally: where an edge
+/// crosses one of the next `window` edges, the points between are replaced by the crossing.
+/// (A contour that doubles back on itself in a tiny zigzag stops an offset from closing.)
+pub fn untangle(p: &[Vec2], window: usize) -> Poly {
+    // The first crossing at or after edge `from`: (edge, edges ahead, crossing point).
+    let find = |p: &[Vec2], from: usize| -> Option<(usize, usize, Vec2)> {
+        let n = p.len();
+        let w = window.min(n.saturating_sub(2));
+        (from..n).find_map(|i| {
+            (2..=w).find_map(|k| {
+                let j = (i + k) % n;
+                segments_intersect(p[i], p[(i + 1) % n], p[j], p[(j + 1) % n], 0.0).map(|(t, _)| (i, k, p[i].lerp(p[(i + 1) % n], t)))
+            })
+        })
+    };
+    let mut p = p.to_vec();
+    let mut from = 0usize;
+    for _ in 0..p.len() * 4 + 16 {
+        // Edges i and i+n-1 share a point: at most n-2 apart are compared.
+        if p.len() < 4 {
+            break;
+        }
+        let Some((i, k, x)) = find(&p, from) else { break };
+        if i + k < p.len() {
+            p.splice(i + 1..=i + k, [x]);
+            from = i.saturating_sub(window);
+        } else {
+            p.rotate_left(i);
+            p.splice(1..=k, [x]);
+            from = 0;
+        }
+    }
+    p
+}
+
 /// Removes consecutive duplicate points (within `tol`) and collinear middle points of a closed
 /// polygon.
 pub fn clean(p: &[Vec2], tol: f64) -> Poly {

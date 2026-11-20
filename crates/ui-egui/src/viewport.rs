@@ -817,7 +817,9 @@ fn drawn_plan(app: &SolveApp, b: &solidcraft_engine::doc::ModelBody, opaque: boo
     (shaded && opaque && app.viewport.gpu.is_some_and(|g| g.tess))
         .then(|| refined(app, b).map(|(plan, _)| plan).or_else(|| b.gpu_plan_at(solidcraft_engine::doc::display_quality::current())))
         .flatten()
-        .filter(|plan| plan.vertex_count() <= solidcraft_viewport_gpu::MAX_BATCH)
+        // A plan the GPU can't evaluate (a face with pole nodes, or none of its surfaces) is
+        // drawn from its CPU mesh: handed to the GPU, it would blank its whole chunk of bodies.
+        .filter(|plan| solidcraft_viewport_gpu::plan_drawable(plan))
 }
 
 /// The refined plan and mesh `b` is drawn from, when the view has it drawn finer than the chosen
@@ -4620,7 +4622,7 @@ fn wireframe_highlight_plan(app: &SolveApp, b: &solidcraft_engine::doc::ModelBod
         .is_some_and(|g| g.tess)
         .then(|| refined(app, b).map(|(plan, _)| plan).or_else(|| b.gpu_plan_at(solidcraft_engine::doc::display_quality::current())))
         .flatten()
-        .filter(|plan| plan.vertex_count() <= solidcraft_viewport_gpu::MAX_BATCH)
+        .filter(|plan| solidcraft_viewport_gpu::plan_drawable(plan))
 }
 
 /// Whether the model draws a whole body opaque on the GPU, rather than building it on the CPU:

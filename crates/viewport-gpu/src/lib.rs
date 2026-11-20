@@ -557,6 +557,14 @@ fn push_curve(data: &mut Vec<f32>, c: &EvalCurve) -> Result<(u32, u32)> {
     Ok((knots, ctrl))
 }
 
+/// Whether the GPU can evaluate `plan` on its own: no face with pole nodes, and every face on a
+/// surface of the plan ([`pack`] refuses anything else). A plan that isn't is drawn from its CPU
+/// mesh instead, so one such body can't take the others in its dispatch down with it.
+pub fn plan_drawable(plan: &TessPlan) -> bool {
+    plan.vertex_count() <= MAX_BATCH
+        && plan.faces.iter().all(|f| f.poles.is_empty() && f.surface.is_some_and(|s| (s as usize) < plan.surfaces.len()))
+}
+
 /// Several plans as one: their surfaces one after another, each face's surface index offset by
 /// the surfaces of the plans before it.
 fn pack(plans: &[&TessPlan]) -> Result<PackedPlans> {

@@ -2309,7 +2309,9 @@ impl Batches {
         let mut chunks: Vec<Vec<&PlannedBody>> = Vec::new();
         let mut filled = 0usize;
         let mut open = false;
-        for b in bodies {
+        // A plan the GPU can't evaluate is left out (its caller draws it from the CPU mesh):
+        // in a chunk, its refusal would leave every other body of the chunk undrawn.
+        for b in bodies.iter().filter(|b| crate::plan_drawable(&b.plan)) {
             let n = b.plan.vertex_count();
             match chunks.last_mut() {
                 Some(c) if open && filled + n <= crate::MAX_BATCH && c.first().is_some_and(|f| (f.class, f.closed) == (b.class, b.closed)) => {

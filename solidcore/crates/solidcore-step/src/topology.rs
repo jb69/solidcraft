@@ -1191,9 +1191,125 @@ impl<'b, 'a> Builder<'b, 'a> {
         Ok(id)
     }
 
+    /// Collapse sliver faces: a face of one loop of four edges whose two opposite edges are each
+    /// shorter than the file's tolerance (their two vertices within it) is a strip narrower than
+    /// the file says it can tell apart (Fusion 360 writes them, 2 mm long and 0.002 mm wide). Its
+    /// loop encloses no (u, v) area to the record check, which refused the face and the solid
+    /// with it. The strip's short edges become one vertex each, its two long edges one edge
+    /// (the other face that used the dropped one now uses the kept one), and the face goes.
+    /// Returns the shells with the faces renumbered, and how many faces were collapsed.
+    fn collapse_slivers(&mut self, mut shells: Vec<Vec<(u32, bool)>>) -> (Vec<Vec<(u32, bool)>>, usize) {
+        let tol = self.tol;
+        let mut collapsed = 0;
+        // A face at a time: each collapse changes the edges the next one sees.
+        for _ in 0..64 {
+            let mut uses: HashMap<u32, usize> = HashMap::new();
+            for face in &self.faces {
+                for l in &face.loops {
+                    if let LoopB::Edges(es) = l {
+                        for (e, _) in es {
+                            *uses.entry(*e).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            let point = |b: &Self, v: u32| b.vertices.get(v as usize).map(|x| x.point);
+            let dist = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+            let short = |b: &Self, e: u32| -> Option<f64> {
+                let edge = b.edges.get(e as usize)?;
+                let [v0, v1] = edge.vertices;
+                if v0 == v1 {
+                    return None;
+                }
+                let d = dist(point(b, v0)?, point(b, v1)?);
+                (d <= tol).then_some(d)
+            };
+            // The first sliver: its face, its two short edges and its long edges (kept, dropped).
+            let mut found = None;
+            'faces: for (fi, face) in self.faces.iter().enumerate() {
+                let [LoopB::Edges(es)] = face.loops.as_slice() else { continue };
+                if es.len() != 4 {
+                    continue;
+                }
+                for k in 0..2 {
+                    let (s1, l1, s2, l2) = (es[k].0, es[k + 1].0, es[k + 2].0, es[(k + 3) % 4].0);
+                    if l1 == l2 || s1 == s2 || short(self, l1).is_some() || short(self, l2).is_some() {
+                        continue;
+                    }
+                    let (Some(w1), Some(w2)) = (short(self, s1), short(self, s2)) else { continue };
+                    // Each long edge borders one other face, which takes the kept edge.
+                    if uses.get(&l1).copied() != Some(2) || uses.get(&l2).copied() != Some(2) {
+                        continue;
+                    }
+                    found = Some((fi, [s1, s2], l1, l2, w1.max(w2)));
+                    break 'faces;
+                }
+            }
+            let Some((fi, short_edges, keep, drop, width)) = found else { break };
+            // Each short edge's second vertex becomes its first, everywhere.
+            for s in short_edges {
+                let Some([a, b]) = self.edges.get(s as usize).map(|e| e.vertices) else { continue };
+                for e in &mut self.edges {
+                    for v in &mut e.vertices {
+                        if *v == b {
+                            *v = a;
+                        }
+                    }
+                }
+                if let Some(x) = self.vertices.get_mut(a as usize) {
+                    x.tolerance = x.tolerance.max(2.0 * width);
+                }
+            }
+            let (Some(kv), Some(dv)) = (self.edges.get(keep as usize).map(|e| e.vertices), self.edges.get(drop as usize).map(|e| e.vertices)) else {
+                break;
+            };
+            let same_way = kv == dv;
+            if !same_way && kv != [dv[1], dv[0]] {
+                // The long edges don't end at the same vertices after all: leave it.
+                break;
+            }
+            if let Some(e) = self.edges.get_mut(keep as usize) {
+                e.tolerance = e.tolerance.max(2.0 * width);
+            }
+            // The sliver goes; the face beside the dropped edge uses the kept one, and no loop
+            // keeps a short edge (each is a single vertex now).
+            self.faces.remove(fi);
+            for face in &mut self.faces {
+                for l in &mut face.loops {
+                    if let LoopB::Edges(es) = l {
+                        for (e, fwd) in es.iter_mut() {
+                            if *e == drop {
+                                *e = keep;
+                                if !same_way {
+                                    *fwd = !*fwd;
+                                }
+                            }
+                        }
+                        es.retain(|(e, _)| !short_edges.contains(e));
+                    }
+                }
+            }
+            let fi = fi as u32;
+            for s in &mut shells {
+                s.retain(|(f, _)| *f != fi);
+                for (f, _) in s.iter_mut() {
+                    if *f > fi {
+                        *f -= 1;
+                    }
+                }
+            }
+            collapsed += 1;
+        }
+        (shells, collapsed)
+    }
+
     /// Pcurves, outer loops, domains and the canonical order: the finished record.
     fn finish(mut self, item: u64, name: String, shells: Vec<Vec<(u32, bool)>>, kind: Kind) -> R<Solid> {
         let mut notes = Vec::new();
+        let (shells, slivers) = self.collapse_slivers(shells);
+        if slivers > 0 {
+            notes.push(format!("{slivers} sliver faces narrower than the file's tolerance closed up"));
+        }
         // A face bounded by a slit alone is the whole of its closed surface, closed by its seams
         // (a sphere's frame put on the slit), before anything is measured on the frame or split
         // at its poles.

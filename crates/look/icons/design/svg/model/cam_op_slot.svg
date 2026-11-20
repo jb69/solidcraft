@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Slot</title>
+  <path d="M6 6L58 6L58 58L6 58Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M16 27L48 27C50.761 27 53 29.239 53 32C53 34.761 50.761 37 48 37L16 37C13.239 37 11 34.761 11 32C11 29.239 13.239 27 16 27Z" fill="#e2e8ef" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M16 32L42 32" fill="none" stroke="#328bd3" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/><path d="M50 32L42 37L42 27Z" fill="#236ead" />
+</svg>

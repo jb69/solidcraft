@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>3D Contour</title>
+  <path d="M6 50C18 40 26 42 32 48C38 54 48 52 58 44L58 59L6 59Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M8 38C20 30 26 32 32 37C38 42 48 40 56 32" fill="none" stroke="#328bd3" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/><path d="M12 28C22 21 27 23 32 27C37 31 45 30 52 23" fill="none" stroke="#328bd3" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/><path d="M17 18C24 12 28 14 32 17C36 20 42 19 47 14" fill="none" stroke="#328bd3" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/><path d="M23 8C27 5 30 6 32 7.5C34 9 37 8.5 41 6" fill="none" stroke="#328bd3" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

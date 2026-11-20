@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Engrave</title>
+  <path d="M6 36L22 36L28 46L34 36L58 36L58 58L6 58Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M22 4L34 4L34 12L22 12Z" fill="#8e9faf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M23 12L33 12L33 37L28 44L23 37Z" fill="#328bd3" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M40 46C44 40 48 52 52 46C55 42 57 45 58 44" fill="none" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

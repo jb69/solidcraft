@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Multi-Axis Contour</title>
+  <path d="M6 59L6 40C18 22 46 22 58 40L58 59Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M10 36C20 24 44 24 54 36" fill="none" stroke="#328bd3" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="3 3"/><path d="M21.8 27.9L12.2 15.1L6.6 19.3L16.2 32.1Z" fill="#328bd3" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M35.5 23L35.5 7L28.5 7L28.5 23Z" fill="#328bd3" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M47.8 32.1L57.4 19.3L51.8 15.1L42.2 27.9Z" fill="#328bd3" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

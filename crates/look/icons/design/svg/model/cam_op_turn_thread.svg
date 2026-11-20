@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Turn Thread</title>
+  <path d="M6 24L8 24L11 20L14 24L17 20L20 24L23 20L26 24L29 20L32 24L35 20L38 24L41 20L44 24L47 20L50 24L50 52L6 52Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M4 36L50 36" fill="none" stroke="#8e9faf" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="4 3"/><path d="M34 4L44 4L44 14L34 14Z" fill="#8e9faf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M35 14L43 14L39 21Z" fill="#328bd3" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M10 10L21 10" fill="none" stroke="#236ead" stroke-width="4.25" stroke-linejoin="round" stroke-linecap="round"/><path d="M28 10L20 15L20 5Z" fill="#236ead" />
+</svg>

@@ -216,63 +216,63 @@ fn not_built_run(_s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 pub static COMMANDS: &[CommandSpec] = &[
-    CommandSpec::new("cam.operation.face", "Face", op_face).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.pocket2d", "2D Pocket", op_pocket2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.adaptive2d", "2D Adaptive", op_adaptive2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.contour2d", "2D Contour", op_contour2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.slot", "Slot", op_slot).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.trace", "Trace", op_trace).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.engrave", "Engrave", op_engrave).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.chamfer2d", "2D Chamfer", op_chamfer2d).at("MANUFACTURE", "2D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.bore", "Bore", op_bore).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.circular", "Circular", op_circular).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.thread", "Thread Mill", op_thread).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.drill", "Drill", op_drill).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.tap", "Tap", op_tap).at("MANUFACTURE", "DRILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.pocket3d", "3D Pocket", op_pocket3d).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.adaptive3d", "3D Adaptive", op_adaptive3d).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.parallel", "Parallel", op_parallel).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.contour3d", "3D Contour", op_contour3d).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.steep_shallow", "Steep and Shallow", op_steep_shallow).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.scallop", "Scallop", op_scallop).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.pencil", "Pencil", op_pencil).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.horizontal", "Horizontal", op_horizontal).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.spiral", "Spiral", op_spiral).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.radial", "Radial", op_radial).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.morphed_spiral", "Morphed Spiral", op_morphed_spiral).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.project", "Project", op_project).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.morph", "Morph", op_morph).at("MANUFACTURE", "3D MILLING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.ramp", "Ramp", not_built_run).at("MANUFACTURE", "3D MILLING").icon("cam").enabled(not_built).params("not built yet: waterline finishing that ramps between levels"),
-    CommandSpec::new("cam.operation.geodesic", "Geodesic", not_built_run).at("MANUFACTURE", "3D MILLING").icon("cam").enabled(not_built).params("not built yet: passes at constant geodesic distance over free-form surfaces and undercuts"),
-    CommandSpec::new("cam.operation.rotary", "Rotary", op_rotary).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.swarf", "Swarf", op_swarf).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.multi_axis_contour", "Multi-Axis Contour", op_multi_axis_contour).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.flow", "Flow", op_flow).at("MANUFACTURE", "MULTI-AXIS").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.multi_axis_blend", "Multi-Axis Blend", not_built_run).at("MANUFACTURE", "MULTI-AXIS").icon("cam").enabled(not_built).params("not built yet: surface-normal passes blended between two boundaries"),
-    CommandSpec::new("cam.operation.turn_face", "Turn Face", op_turn_face).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.turn_profile", "Turn Profile", op_turn_profile).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.turn_groove", "Turn Groove", op_turn_groove).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.turn_thread", "Turn Thread", op_turn_thread).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.laser_cut", "Laser Cut", op_laser_cut).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
-    CommandSpec::new("cam.operation.laser_engrave", "Laser Engrave", op_laser_engrave).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.face", "Face", op_face).at("MANUFACTURE", "2D MILLING").icon("cam_op_face").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.pocket2d", "2D Pocket", op_pocket2d).at("MANUFACTURE", "2D MILLING").icon("cam_op_pocket2d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.adaptive2d", "2D Adaptive", op_adaptive2d).at("MANUFACTURE", "2D MILLING").icon("cam_op_adaptive2d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.contour2d", "2D Contour", op_contour2d).at("MANUFACTURE", "2D MILLING").icon("cam_op_contour2d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.slot", "Slot", op_slot).at("MANUFACTURE", "2D MILLING").icon("cam_op_slot").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.trace", "Trace", op_trace).at("MANUFACTURE", "2D MILLING").icon("cam_op_trace").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.engrave", "Engrave", op_engrave).at("MANUFACTURE", "2D MILLING").icon("cam_op_engrave").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.chamfer2d", "2D Chamfer", op_chamfer2d).at("MANUFACTURE", "2D MILLING").icon("cam_op_chamfer2d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.bore", "Bore", op_bore).at("MANUFACTURE", "DRILLING").icon("cam_op_bore").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.circular", "Circular", op_circular).at("MANUFACTURE", "DRILLING").icon("cam_op_circular").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.thread", "Thread Mill", op_thread).at("MANUFACTURE", "DRILLING").icon("cam_op_thread").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.drill", "Drill", op_drill).at("MANUFACTURE", "DRILLING").icon("cam_op_drill").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.tap", "Tap", op_tap).at("MANUFACTURE", "DRILLING").icon("cam_op_tap").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.pocket3d", "3D Pocket", op_pocket3d).at("MANUFACTURE", "3D MILLING").icon("cam_op_pocket3d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.adaptive3d", "3D Adaptive", op_adaptive3d).at("MANUFACTURE", "3D MILLING").icon("cam_op_adaptive3d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.parallel", "Parallel", op_parallel).at("MANUFACTURE", "3D MILLING").icon("cam_op_parallel").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.contour3d", "3D Contour", op_contour3d).at("MANUFACTURE", "3D MILLING").icon("cam_op_contour3d").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.steep_shallow", "Steep and Shallow", op_steep_shallow).at("MANUFACTURE", "3D MILLING").icon("cam_op_steep_shallow").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.scallop", "Scallop", op_scallop).at("MANUFACTURE", "3D MILLING").icon("cam_op_scallop").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.pencil", "Pencil", op_pencil).at("MANUFACTURE", "3D MILLING").icon("cam_op_pencil").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.horizontal", "Horizontal", op_horizontal).at("MANUFACTURE", "3D MILLING").icon("cam_op_horizontal").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.spiral", "Spiral", op_spiral).at("MANUFACTURE", "3D MILLING").icon("cam_op_spiral").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.radial", "Radial", op_radial).at("MANUFACTURE", "3D MILLING").icon("cam_op_radial").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.morphed_spiral", "Morphed Spiral", op_morphed_spiral).at("MANUFACTURE", "3D MILLING").icon("cam_op_morphed_spiral").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.project", "Project", op_project).at("MANUFACTURE", "3D MILLING").icon("cam_op_project").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.morph", "Morph", op_morph).at("MANUFACTURE", "3D MILLING").icon("cam_op_morph").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.ramp", "Ramp", not_built_run).at("MANUFACTURE", "3D MILLING").icon("cam_op_ramp").enabled(not_built).params("not built yet: waterline finishing that ramps between levels"),
+    CommandSpec::new("cam.operation.geodesic", "Geodesic", not_built_run).at("MANUFACTURE", "3D MILLING").icon("cam_op_geodesic").enabled(not_built).params("not built yet: passes at constant geodesic distance over free-form surfaces and undercuts"),
+    CommandSpec::new("cam.operation.rotary", "Rotary", op_rotary).at("MANUFACTURE", "MULTI-AXIS").icon("cam_op_rotary").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.swarf", "Swarf", op_swarf).at("MANUFACTURE", "MULTI-AXIS").icon("cam_op_swarf").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.multi_axis_contour", "Multi-Axis Contour", op_multi_axis_contour).at("MANUFACTURE", "MULTI-AXIS").icon("cam_op_multi_axis_contour").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.flow", "Flow", op_flow).at("MANUFACTURE", "MULTI-AXIS").icon("cam_op_flow").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.multi_axis_blend", "Multi-Axis Blend", not_built_run).at("MANUFACTURE", "MULTI-AXIS").icon("cam_op_multi_axis_blend").enabled(not_built).params("not built yet: surface-normal passes blended between two boundaries"),
+    CommandSpec::new("cam.operation.turn_face", "Turn Face", op_turn_face).at("MANUFACTURE", "TURNING").icon("cam_op_turn_face").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.turn_profile", "Turn Profile", op_turn_profile).at("MANUFACTURE", "TURNING").icon("cam_op_turn_profile").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.turn_groove", "Turn Groove", op_turn_groove).at("MANUFACTURE", "TURNING").icon("cam_op_turn_groove").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.turn_thread", "Turn Thread", op_turn_thread).at("MANUFACTURE", "TURNING").icon("cam_op_turn_thread").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.laser_cut", "Laser Cut", op_laser_cut).at("MANUFACTURE", "LASER").icon("cam_op_laser_cut").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.laser_engrave", "Laser Engrave", op_laser_engrave).at("MANUFACTURE", "LASER").icon("cam_op_laser_engrave").params(OP_PARAMS),
     CommandSpec::new("cam.tool.add", "Add Tool", tool_add).at("MANUFACTURE", "SETUP")
-        .icon("cam")
+        .icon("cam_tool_add")
         .params("name; kind: flat | ball | bull | chamfer | drill | spot | tapered_ball; diameter (mm); corner_radius? (bull); tip_angle_deg? (chamfer, drill, spot; default 90 / 118); tip_radius? and taper_angle_deg? (tapered_ball); number? (T word); flute_length?, overall_length?, shank_diameter?, holder_diameter?, flutes?; feeds?: {spindle_rpm, cutting, plunge, ramp, lead_in, lead_out, retract, clockwise, coolant: flood | mist | air | through_tool | off}: adds a tool to the design's library. Returns the tool with its id"),
     CommandSpec::new("cam.tool.kit", "Tool Kit", tool_kit)
         .at("MANUFACTURE", "SETUP")
-        .icon("cam")
+        .icon("cam_tool_kit")
         .params("kit?: makera_essential (default); material?: aluminium | wood | plastic (default aluminium); machine?: preset (default the setup's machine, else carvera); setup?: id: adds a maker's tool set with feeds and speeds scaled to the machine (chip loads for the material, held within the spindle and feed limits). Returns the tools with their ids and a starting stepdown per diameter"),
     CommandSpec::new("cam.tool.set", "Edit Tool", tool_set).icon("cam").params("tool: id; any cam.tool.add field: changes a tool. Operations using it need cam.generate again"),
     CommandSpec::new("cam.tool.remove", "Remove Tool", tool_remove).icon("cam").params("tool: id: removes an unused tool"),
     CommandSpec::new("cam.tool.list", "Tools", tool_list).icon("cam").params("lists the tool library").noundo(),
     CommandSpec::new("cam.setup.create", "Create Setup", setup_create).at("MANUFACTURE", "SETUP")
-        .icon("cam")
+        .icon("cam_setup_create")
         .params("name?; bodies?: body names to machine (default all); fixtures?: body names to avoid; wcs?: {origin: [x,y,z], z: [x,y,z], x: [x,y,z]} in design coordinates (default the design's origin and axes); stock?: {mode: relative_box, x_neg, x_pos, y_neg, y_pos, z_neg, z_pos} | {mode: fixed_box, min, max} | {mode: relative_cylinder, axis: x|y|z, radial, start, end} | {mode: fixed_cylinder, axis, radius, start, end} | {mode: from_setup, setup?: id (default the setup before)}: what the earlier setup's operations left, for rest machining the other side (default a box 1 mm around the model, flush at the bottom, for the first setup; from_setup for every later one); flip?: x | y: the WCS of the setup before turned over about its x or y axis, the origin at the turned-over stock's front-left top corner (machining the bottom: every operation is measured from this origin); origin?: [x,y,z] | {point: construction point name}: the origin at this coordinate (design coordinates, axes kept; what picking a point on the model gives) or at a point the designer placed; origin_at?: {of: stock | model, x: left | center | right, y: front | center | back, z: top | middle | bottom} (default the stock's top front-left corner): the origin at that point of the stock's or the model's box, in the setup's axes; a fixed stock stays where it is; machine?: three_axis | four_axis_a | trunnion_ac | trunnion_bc | head_head_bc | carvera | carvera_4axis | carvera_air | carvera_air_4axis | z1 | z1_4axis or a machine object (cam.machine.list); program?: name for the post. Returns the setup with its id and the resolved stock"),
     CommandSpec::new("cam.setup.set", "Edit Setup", setup_set).icon("cam").params("setup: id; any cam.setup.create field (flip: x | y turns the setup's WCS over, the origin at the stock's new front-left top corner): changes a setup; its toolpaths, and those of setups that carry its stock over, show as stale"),
     CommandSpec::new("cam.setup.remove", "Remove Setup", setup_remove).icon("cam").params("setup: id: removes a setup and its operations"),
     CommandSpec::new("cam.setup.list", "Setups", setup_list).icon("cam").params("lists the setups with their operations").noundo(),
     CommandSpec::new("cam.machine.set", "Set Machine", machine_set).at("MANUFACTURE", "SETUP")
-        .icon("cam")
+        .icon("cam_machine_set")
         .params("setup: id; machine: a preset (cam.machine.list: three_axis … carvera, carvera_air, z1, each with a _4axis variant) or a full machine object; tcp?: bool (the control has tool-centre-point control); rapid_feed?; linearisation_tolerance?; max_rotary_step_deg?; limits?: {A: [min,max], C: [min,max]}: sets the setup's machine"),
     CommandSpec::new("cam.machine.list", "Machines", machine_list).icon("cam").params("lists every known machine: the ones SolidCraft ships and the design's own, each with its numbers, aliases, options, tool kit, sources and notes").noundo(),
     CommandSpec::new("cam.machine.define", "Define Machine", machine_define)
@@ -295,9 +295,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("operation: id; setup?: id (moves it to another setup, at its end unless to/before/after say where); to?: index | before?: operation id | after?: operation id | up?: true | down?: true: reorders the operations or moves one between setups. Operations are parametric steps: each depends on the ones before it (rest machining sees their stock), so the moved one and those after it go stale"),
     CommandSpec::new("cam.operation.duplicate", "Duplicate Operation", operation_duplicate).icon("cam").params("operation: id: a copy right after it, named \"<name> (copy)\""),
     CommandSpec::new("cam.operation.list", "Operations", operation_list).icon("cam").params("setup?: id: the operations with their status").noundo(),
-    CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "INSPECT").icon("cam").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
+    CommandSpec::new("cam.operation.kinds", "Operation Kinds", operation_kinds).at("MANUFACTURE", "INSPECT").icon("cam_operation_kinds").params("type?: one kind: every operation kind with its parameters and defaults, the axes it needs and whether it reads the model").noundo(),
     CommandSpec::new("cam.generate", "Generate Toolpaths", generate).at("MANUFACTURE", "TOOLPATHS")
-        .icon("cam")
+        .icon("cam_generate")
         .params("setup?: id (default every setup); operation?: id (just that one: the operations below it go stale); chain?: bool with operation (its whole chain: the stale operations above it, it, and every one below it); all?: bool (regenerate every operation, not only the stale ones): computes the toolpaths of the enabled operations in order, simulating the stock as it goes for rest machining. Returns each operation's notice (status, values such as time_s and cutting_length_mm, issues with codes such as no_toolpath, tool_too_large, tool_too_short, below_bottom, tilt_limit) and the setup totals")
         .noundo(),
     CommandSpec::new("cam.toolpath", "Toolpath", toolpath)
@@ -305,20 +305,20 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("operation: id; offset? (0); limit? (2000 moves); coordinates?: wcs | design (default wcs): the generated moves as [kind, x, y, z, feed] with [ax, ay, az] appended when the tool tilts, plus bounds and stats")
         .noundo(),
     CommandSpec::new("cam.simulate", "Simulate", simulate).at("MANUFACTURE", "TOOLPATHS")
-        .icon("cam")
+        .icon("cam_simulate")
         .params("setup?: id (default the only setup); tolerance? (0.05): sweeps the generated toolpaths through a Z-map of the stock: material removed, rest material above the model, gouges, rapids through stock, shank, holder and fixture collisions, per operation and in total")
         .noundo(),
     CommandSpec::new("cam.post", "Post Process", post).at("MANUFACTURE", "TOOLPATHS")
-        .icon("export")
+        .icon("cam_post")
         .params("setup?: id (default the only setup); post?: generic | grbl | fiveaxis | makera | mach3 (default the machine's own post, else by its axes); path?: write the G-code here (.nc); program?: name; line_numbers?: increment; canned_cycles?: bool: writes the setup's program through the machine's kinematics. Returns the G-code (when under 2 MB), line count and notice")
         .noundo(),
     CommandSpec::new("cam.simulate.show", "Show Simulation", simulate_show).at("MANUFACTURE", "TOOLPATHS")
-        .icon("play")
+        .icon("cam_simulate_show")
         .params("setup?: id (default the only setup); progress?: 0..1 of the program's time | time_s? | operation?: id with move?: index | step?: moves to advance from where the simulation stands; cell? (mm, default by the stock size); show_model?: bool (default false: the stock stands in for the bodies); show_path?: bool (default true; false shows the stock's surface alone): sweeps the stock to that moment and shows it in the viewport with the tool where it is and the path so far. Returns where it stands (progress, time_s, operation, move, tip, axis) and the stock volume. cam.simulate.hide ends it")
         .noundo(),
     CommandSpec::new("cam.simulate.hide", "Hide Simulation", simulate_hide).icon("play").params("ends the simulation preview").noundo(),
     CommandSpec::new("cam.post.list", "Post Processors", post_list).icon("export").params("lists the post processors").noundo(),
-    CommandSpec::new("cam.notices", "CAM Notices", notices).at("MANUFACTURE", "INSPECT").icon("cam").params("setup?: id: every operation's notice from the last cam.generate, with stale: true when the design changed since").noundo(),
+    CommandSpec::new("cam.notices", "CAM Notices", notices).at("MANUFACTURE", "INSPECT").icon("cam_notices").params("setup?: id: every operation's notice from the last cam.generate, with stale: true when the design changed since").noundo(),
     CommandSpec::new("cam.analyze", "Analyse Part", analyze)
         .at("MANUFACTURE", "INSPECT")
         .icon("cam")
@@ -329,7 +329,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("cam")
         .params("setup?: id (default the first; its WCS gives the frame: +z is the main tool axis); bodies?: body names; machine?: a machine id to judge against instead of the setup's; material?: aluminium | wood | plastic (default the job's); tool_diameter? (mm, default the largest flat end mill among the tools, else 6): the ring cut round a part held in a frame; finishing_force? (N, default 10); deflection_limit? (mm, default 0.02); strategy?: tabs | sprues | pin | vise | stub | rotary (just that one): compares the ways to hold the part before planning operations — a frame with a web and tabs, a frame with sprues, a pin through a hole of the part with its boss clamped, a vise on the part's parallel faces, a stub of stock in a vise, a stub in a rotary chuck. Each is checked against the part and the machine and costed in points (hand_finish, setups, extra_cut, deflection: how far the far end of a part held at one end bends under a finishing cut, location, fixture), with its setups in order, what is finished by hand, the fixture bodies to add (in design coordinates: boxes and cylinders for solid.box and solid.cylinder, each naming the setups it belongs in) and issues (no_waist, flex, no_rotary…). Best first, with the one recommended. Facts and costs only: nothing is changed")
         .noundo(),
-    CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect).at("MANUFACTURE", "INSPECT").icon("cam").params("the manufacturing model in brief: tools, setups, operations, what is generated and what needs attention").noundo(),
+    CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect).at("MANUFACTURE", "INSPECT").icon("cam_inspect").params("the manufacturing model in brief: tools, setups, operations, what is generated and what needs attention").noundo(),
 ];
 
 fn engine_err(cmd: &str, e: cam::CamError) -> EngineError {

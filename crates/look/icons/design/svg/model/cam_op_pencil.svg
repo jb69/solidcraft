@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Pencil</title>
+  <path d="M6 10L32 46L58 10L58 59L6 59Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M6 10L32 46L58 10" fill="none" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M32 46L32 46" fill="none" stroke="#328bd3" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/><path d="M28 8L36 8L36 36C36 38.209 34.209 40 32 40C29.791 40 28 38.209 28 36Z" fill="#328bd3" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M28 14L36 20" fill="none" stroke="#e2e8ef" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M28 24L36 30" fill="none" stroke="#e2e8ef" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

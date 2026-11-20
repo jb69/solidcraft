@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>2D Contour</title>
+  <path d="M6 6L58 6L58 58L6 58Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M20 18L44 18C46.209 18 48 19.791 48 22L48 42C48 44.209 46.209 46 44 46L20 46C17.791 46 16 44.209 16 42L16 22C16 19.791 17.791 18 20 18Z" fill="#8e9faf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M18 11L46 11C50.971 11 55 15.029 55 20L55 44C55 48.971 50.971 53 46 53L18 53C13.029 53 9 48.971 9 44L9 26" fill="none" stroke="#328bd3" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 18L14 26L4 26Z" fill="#236ead" />
+</svg>

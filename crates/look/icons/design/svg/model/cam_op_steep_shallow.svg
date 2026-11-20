@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Steep and Shallow</title>
+  <path d="M6 50C18 40 26 42 32 48C38 54 48 52 58 44L58 59L6 59Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M8 38L8 8L15 8L15 38L22 38L22 8L29 8L29 38" fill="none" stroke="#328bd3" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/><path d="M38 10L54 10L54 36L38 36Z" fill="none" stroke="#236ead" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/><path d="M43 16L49 16L49 30L43 30Z" fill="none" stroke="#236ead" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

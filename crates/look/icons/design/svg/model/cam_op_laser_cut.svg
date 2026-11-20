@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Laser Cut</title>
+  <path d="M6 46L40 39L58 47L24 56Z" fill="#b8c3cf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M32 47L12 51" fill="none" stroke="#236ead" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="3 3"/><path d="M26 4L38 4L38 15L34 19L30 19L26 15Z" fill="#8e9faf" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/><path d="M32 19L32 45" fill="none" stroke="#328bd3" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/><path d="M32 41L32 52M26.5 46.5L37.5 46.5M28 43L36 50M36 43L28 50" fill="none" stroke="#236ead" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

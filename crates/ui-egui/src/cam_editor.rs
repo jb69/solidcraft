@@ -119,7 +119,8 @@ fn run_title(command: &str) -> &'static str {
 }
 
 /// A tool kind's own sizes, beside the sizes every tool has.
-const TOOL_KIND_KEYS: &[&str] = &["corner_radius", "tip_angle_deg", "wavelength_nm", "tip_radius", "taper_angle_deg"];
+const TOOL_KIND_KEYS: &[&str] =
+    &["corner_radius", "tip_angle_deg", "wavelength_nm", "tip_radius", "taper_angle_deg", "pierce_height", "cut_height", "pierce_delay_s"];
 
 /// The five heights, in the order they are met going down.
 const HEIGHTS: [(&str, &str); 5] = [("clearance", "Clearance"), ("retract", "Retract"), ("feed", "Feed"), ("top", "Top"), ("bottom", "Bottom")];
@@ -1131,6 +1132,7 @@ fn tool_kind_default(kind: &str, diameter: f64) -> Value {
         "chamfer" | "spot_drill" => json!({"tip_angle_deg": 90.0}),
         "drill" => json!({"tip_angle_deg": 118.0}),
         "laser" => json!({"wavelength_nm": 445.0}),
+        "plasma" => json!({"pierce_height": 3.8, "cut_height": 1.5, "pierce_delay_s": 0.5}),
         "tapered_ball" => json!({"tip_radius": (diameter * 0.25).max(0.1), "taper_angle_deg": 5.0}),
         _ => json!({}),
     }

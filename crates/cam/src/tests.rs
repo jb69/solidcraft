@@ -919,6 +919,37 @@ fn laser_post_modes_per_dialect() {
 }
 
 #[test]
+fn plasma_post_fires_waits_and_stops_per_cut() {
+    let torch = Tool {
+        kind: crate::tool::ToolKind::Plasma { pierce_height: 3.8, cut_height: 1.5, pierce_delay_s: 0.5 },
+        ..flat(1.5)
+    };
+    torch.validate().unwrap();
+    // Two cuts: rapid to the pierce height, plunge to the cut height, cut, rapid up.
+    let mut tp = Toolpath::new();
+    tp.plasma = true;
+    tp.pierce_s = 0.5;
+    for y in [0.0, 20.0] {
+        tp.rapid(Vec3::new(0.0, y, 10.0)).unwrap();
+        tp.rapid(Vec3::new(0.0, y, 3.8)).unwrap();
+        tp.push(crate::toolpath::Move::new(MoveKind::Plunge, Vec3::new(0.0, y, 1.5), 300.0)).unwrap();
+        tp.cut(Vec3::new(10.0, y, 1.5), 1500.0).unwrap();
+        tp.rapid(Vec3::new(10.0, y, 10.0)).unwrap();
+    }
+    let ops = [PostOperation { name: "plasma", tool: &torch, toolpath: &tp }];
+    let p = post_program(&Post::mach3(), &Machine::three_axis(), "pl", &ops, 0.01).unwrap();
+    let g = &p.gcode;
+    assert_eq!(g.matches("M3\nG4 P0.5\n").count(), 2, "{g}");
+    // Fired at the pierce height, stopped before leaving the cut.
+    assert!(g.contains("Z3.8\nM3\nG4 P0.5\nG1 Z1.5"), "{g}");
+    assert!(g.contains("X10.0 F1500.0\nM5\nG0 Z10.0"), "{g}");
+    assert!(!g.contains("M6"), "no tool change for the torch: {g}");
+    assert!(!g.contains("S10000"), "no spindle speed for the torch: {g}");
+    // The simulation leaves the stock alone; the machine checks only the feed.
+    assert!(Machine::three_axis().check(&torch, &tp).iter().all(|i| i.code != "spindle_speed"));
+}
+
+#[test]
 fn simulator_clock_agrees_with_seeking_so_playback_moves_forward() {
     // Two operations whose second starts away from where the first ended: the hop between them
     // takes time on the clock the player seeks by, as it does in the sweep.

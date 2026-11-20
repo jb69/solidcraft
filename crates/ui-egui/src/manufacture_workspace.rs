@@ -111,13 +111,13 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
         "cam.tool.kit" => Some(json!({"kit": "makera_essential", "material": "aluminium"})),
         "cam.machine.set" => Some(json!({"setup": setup, "machine": "carvera"})),
         "cam.operation.add" => {
-            let tools: Vec<(u64, bool)> = m.tools.tools.iter().map(|t| (t.id, t.is_laser())).collect();
+            let tools: Vec<(u64, &str)> = m.tools.tools.iter().map(|t| (t.id, tool_class(t))).collect();
             let picked = crate::cam_editor::selection_geometry(app, "pocket3d").map(|x| x.0);
             Some(kind_template("pocket3d", setup, tool, &tools, picked))
         }
         "cam.operation.set" => Some(json!({"operation": null})),
         _ => {
-            let tools: Vec<(u64, bool)> = m.tools.tools.iter().map(|t| (t.id, t.is_laser())).collect();
+            let tools: Vec<(u64, &str)> = m.tools.tools.iter().map(|t| (t.id, tool_class(t))).collect();
             id.strip_prefix("cam.operation.").filter(|k| !matches!(*k, "add" | "remove" | "list" | "kinds")).map(|k| {
                 let picked = crate::cam_editor::selection_geometry(app, if k == "tap" { "drill" } else { k }).map(|x| x.0);
                 kind_template(k, setup, tool, &tools, picked)
@@ -180,7 +180,19 @@ pub fn selected_setup(app: &SolveApp) -> Option<u64> {
 /// A filled-in `cam.operation.<kind>` call: the kind's parameters at their defaults and the
 /// geometry the kind reads (`picked`: from the viewport's selection, when something is selected),
 /// for the command box.
-fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u64, bool)], picked: Option<Value>) -> Value {
+/// What a tool is for: "laser", "plasma" or "cutter", so a new operation starts with a tool of
+/// its own kind.
+fn tool_class(t: &solidcraft_engine::cam::tool::Tool) -> &'static str {
+    if t.is_laser() {
+        "laser"
+    } else if t.is_plasma() {
+        "plasma"
+    } else {
+        "cutter"
+    }
+}
+
+fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u64, &str)], picked: Option<Value>) -> Value {
     use solidcraft_engine::cam::ops::OpKind;
     let (kind_name, extra): (&str, Value) = match kind {
         "tap" => ("drill", json!({"cycle": "tap", "pitch": 1.0})),
@@ -204,7 +216,7 @@ fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u6
         "drill" | "bore" | "circular" | "thread" => json!({"source": "holes", "points": [[0, 0, 0]]}),
         "swarf" => json!({"source": "chains", "bottom": [[0, 0, 0], [10, 0, 0]], "top": [[0, 0, 10], [10, 0, 10]]}),
         "flow" | "morph" => json!({"source": "rails", "first": [[0, 0, 0], [10, 0, 0]], "second": [[0, 10, 0], [10, 10, 0]]}),
-        "laser_cut" => json!({"source": "sketch", "feature": 0}),
+        "laser_cut" | "plasma_cut" => json!({"source": "sketch", "feature": 0}),
         "laser_engrave" => json!({"source": "faces", "points": [[0, 0, 0]]}),
         _ => Value::Null,
     };
@@ -217,8 +229,9 @@ fn kind_template(kind: &str, setup: Option<u64>, tool: Option<u64>, tools: &[(u6
     // Laser work wants the laser tool, turning a vertical cutter: pick the library's first of
     // the kind when there is one.
     let tool = match kind_name {
-        "laser_cut" | "laser_engrave" => tools.iter().find(|t| t.1).map(|t| t.0).or(tool),
-        _ => tools.iter().find(|t| !t.1).map(|t| t.0).or(tool),
+        "laser_cut" | "laser_engrave" => tools.iter().find(|t| t.1 == "laser").map(|t| t.0).or(tool),
+        "plasma_cut" => tools.iter().find(|t| t.1 == "plasma").map(|t| t.0).or(tool),
+        _ => tools.iter().find(|t| t.1 == "cutter").map(|t| t.0).or(tool),
     };
     let mut call = json!({"setup": setup, "tool": tool, "name": kind_name});
     if let (Value::Object(c), Value::Object(p)) = (&mut call, params) {

@@ -9,6 +9,7 @@
 //! [`multi_axis`] (rotary, swarf, multi-axis contour, flow).
 
 pub mod laser;
+pub mod plasma;
 pub mod multi_axis;
 pub mod three_d;
 pub mod turning;
@@ -436,6 +437,25 @@ pub enum OpKind {
         #[serde(default = "yes")]
         air: bool,
     },
+    /// Plasma cutting along curves (geometry: sketch, loops or faces): holes first, then the
+    /// outlines round them, each pierced at the torch's pierce height and cut at its cut height,
+    /// the kerf offset to the chosen side (outside: the part keeps its size).
+    PlasmaCut {
+        /// Cutting feed, mm/min.
+        #[serde(default = "plasma_feed")]
+        feed: f64,
+        #[serde(default)]
+        side: Side,
+        /// Kerf width (0: the torch tool's diameter).
+        #[serde(default)]
+        kerf: f64,
+        /// Closed cuts at most this wide are cut slower (0: none).
+        #[serde(default)]
+        small_hole_mm: f64,
+        /// The share of the feed small holes are cut at.
+        #[serde(default = "plasma_small_hole_feed")]
+        small_hole_feed: f64,
+    },
     /// Turning on the rotary axis: facing the part's end back to `position` (0: the model's
     /// end) in steps of `stepdown`.
     TurnFace {
@@ -508,6 +528,12 @@ fn laser_cut_speed() -> f64 {
 fn laser_engrave_speed() -> f64 {
     2000.0
 }
+fn plasma_feed() -> f64 {
+    1500.0
+}
+fn plasma_small_hole_feed() -> f64 {
+    0.6
+}
 fn side_on() -> Side {
     Side::On
 }
@@ -553,6 +579,7 @@ impl OpKind {
             OpKind::Morph { .. } => "morph",
             OpKind::LaserCut { .. } => "laser_cut",
             OpKind::LaserEngrave { .. } => "laser_engrave",
+            OpKind::PlasmaCut { .. } => "plasma_cut",
             OpKind::TurnFace { .. } => "turn_face",
             OpKind::TurnProfile { .. } => "turn_profile",
             OpKind::TurnGroove { .. } => "turn_groove",
@@ -614,6 +641,7 @@ impl OpKind {
         "morph",
         "laser_cut",
         "laser_engrave",
+        "plasma_cut",
         "turn_face",
         "turn_profile",
         "turn_groove",
@@ -675,6 +703,7 @@ impl OpKind {
                 | OpKind::Circular { .. }
                 | OpKind::LaserCut { .. }
                 | OpKind::LaserEngrave { .. }
+                | OpKind::PlasmaCut { .. }
                 | OpKind::TurnFace { .. }
                 | OpKind::TurnGroove { .. }
                 | OpKind::TurnThread { .. }
@@ -965,6 +994,7 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
         | OpKind::SteepShallow { .. } => three_d::generate(op, ctx)?,
         OpKind::Rotary { .. } | OpKind::Swarf { .. } | OpKind::MultiAxisContour { .. } | OpKind::Flow { .. } => multi_axis::generate(op, ctx)?,
         OpKind::LaserCut { .. } | OpKind::LaserEngrave { .. } => laser::generate(op, ctx)?,
+        OpKind::PlasmaCut { .. } => plasma::generate(op, ctx)?,
         OpKind::TurnFace { .. } | OpKind::TurnProfile { .. } | OpKind::TurnGroove { .. } | OpKind::TurnThread { .. } => turning::generate(op, ctx)?,
     };
     let st = tp.stats(5000.0, None);
@@ -990,6 +1020,7 @@ pub fn generate(op: &Operation, ctx: &Context) -> Result<(Toolpath, Notice)> {
             | OpKind::TurnThread { .. }
             | OpKind::LaserCut { .. }
             | OpKind::LaserEngrave { .. }
+            | OpKind::PlasmaCut { .. }
     );
     if st.min_z < ctx.heights.bottom - 1e-6 && along_z && !matches!(op.kind, OpKind::Drill { .. }) {
         notice.issue(

@@ -497,7 +497,12 @@ pub const SECTIONS: &[Section] = &[
         promoted: 2,
         ids: &["cam.operation.turn_profile", "cam.operation.turn_thread", "cam.operation.turn_face", "cam.operation.turn_groove"],
     },
-    Section { tab: "MANUFACTURE", panel: "LASER", promoted: 2, ids: &["cam.operation.laser_cut", "cam.operation.laser_engrave"] },
+    Section {
+        tab: "MANUFACTURE",
+        panel: "LASER",
+        promoted: 3,
+        ids: &["cam.operation.laser_cut", "cam.operation.laser_engrave", "cam.operation.plasma_cut"],
+    },
     Section { tab: "MANUFACTURE", panel: "TOOLPATHS", promoted: 4, ids: &["cam.generate", "cam.simulate.show", "cam.simulate", "cam.post"] },
     Section { tab: "MANUFACTURE", panel: "INSPECT", promoted: 2, ids: &["cam.inspect", "cam.notices", "cam.operation.kinds"] },
 ];

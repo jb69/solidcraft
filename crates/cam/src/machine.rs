@@ -343,6 +343,27 @@ impl Machine {
             }
             return out;
         }
+        if toolpath.plasma {
+            // A torch has no spindle speed and no shank: only the feed is the machine's business.
+            if self.max_feed > 0.0 {
+                let fastest = toolpath.moves.iter().map(|m| m.feed).fold(0.0, f64::max);
+                if fastest > self.max_feed + 1e-9 {
+                    out.push(
+                        Issue::warning(
+                            "feed_limit",
+                            format!(
+                                "the torch moves at {} mm/min; the {who} moves at {} mm/min at most; the post writes the maximum",
+                                fastest.round(),
+                                self.max_feed.round()
+                            ),
+                        )
+                        .parameter("feed", fastest)
+                        .limit(self.max_feed),
+                    );
+                }
+            }
+            return out;
+        }
         let f = &tool.feeds;
         if self.spindle_rpm_max > 0.0 && f.spindle_rpm > self.spindle_rpm_max + 1e-9 {
             out.push(

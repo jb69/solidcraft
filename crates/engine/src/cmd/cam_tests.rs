@@ -629,6 +629,62 @@ fn every_operation_kind_has_a_command_and_the_new_kinds_cut() {
 }
 
 #[test]
+fn plasma_cuts_holes_first_and_posts_torch_codes_for_mach3() {
+    let mut s = block();
+    let torch = run(
+        &mut s,
+        "cam.tool.add",
+        json!({"name": "Plasma 1.5 kerf", "kind": "plasma", "diameter": 1.5, "flute_length": 5, "overall_length": 50, "pierce_delay_s": 0.8}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    run(&mut s, "cam.setup.create", json!({"name": "Table", "machine": "three_axis"}));
+    // A 100 x 60 plate with a small and a large hole.
+    let loops = json!([
+        [[0, 0], [100, 0], [100, 60], [0, 60]],
+        [[10, 10], [16, 10], [16, 16], [10, 16]],
+        [[50, 15], [80, 15], [80, 45], [50, 45]]
+    ]);
+    let op = run(
+        &mut s,
+        "cam.operation.plasma_cut",
+        json!({"tool": torch, "feed": 2000, "small_hole_mm": 10, "small_hole_feed": 0.5, "geometry": {"source": "loops", "loops": loops}}),
+    );
+    // A cutter cannot run a plasma cut, nor the torch a milling operation.
+    let flat = run(&mut s, "cam.tool.add", json!({"name": "6 flat", "kind": "flat", "diameter": 6, "flute_length": 20, "overall_length": 50}))["id"]
+        .as_u64()
+        .unwrap();
+    let _ = fails(&mut s, "cam.operation.plasma_cut", json!({"tool": flat, "geometry": {"source": "loops", "loops": loops}}));
+    let _ = fails(&mut s, "cam.operation.contour2d", json!({"tool": torch}));
+    let g = run(&mut s, "cam.generate", json!({}));
+    let o = g["setups"][0]["operations"].as_array().unwrap().iter().find(|o| o["id"] == op["id"]).unwrap().clone();
+    // "warning" only for the unnamed test machine.
+    assert_ne!(o["status"], "error", "{o}");
+    assert_eq!(o["notice"]["values"]["cuts"], 3, "{o}");
+    assert_eq!(o["notice"]["values"]["small_holes_slowed"], 1, "{o}");
+    // Holes first: the first two cuts start inside the plate, the outline last.
+    let tp = run(&mut s, "cam.toolpath", json!({"operation": op["id"], "limit": 100000}));
+    let moves = tp["moves"].as_array().unwrap();
+    let starts: Vec<(f64, f64)> = moves
+        .windows(2)
+        .filter(|w| w[0][0] == "rapid" && w[1][0] != "rapid")
+        .map(|w| (w[1][1].as_f64().unwrap(), w[1][2].as_f64().unwrap()))
+        .collect();
+    assert_eq!(starts.len(), 3, "{starts:?}");
+    let inside = |p: &(f64, f64)| p.0 > 5.0 && p.0 < 95.0 && p.1 > 5.0 && p.1 < 55.0;
+    assert!(inside(&starts[0]) && inside(&starts[1]) && !inside(&starts[2]), "{starts:?}");
+    // The stock simulation leaves the torch alone.
+    let sim = run(&mut s, "cam.simulate", json!({}));
+    assert_eq!(sim["notice"]["values"]["gouge_cells"], 0, "{}", sim["notice"]);
+    let post = run(&mut s, "cam.post", json!({"post": "mach3", "allow_unknown_machine": true}));
+    let code = post["gcode"].as_str().unwrap();
+    assert_eq!(code.matches("M3\nG4 P0.8\n").count(), 3, "{code}");
+    assert_eq!(code.matches("\nM5\n").count(), 4, "one off per cut and the program's end: {code}");
+    assert!(!code.contains("M6"), "no tool change for the torch: {code}");
+    assert!(code.contains("F1000.0") && code.contains("F2000.0"), "small hole at half the feed: {code}");
+}
+
+#[test]
 fn laser_programs_post_in_makera_laser_mode() {
     let mut s = block();
     let kit = run(&mut s, "cam.tool.kit", json!({"material": "wood", "machine": "carvera"}));

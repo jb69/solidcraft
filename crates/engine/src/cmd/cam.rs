@@ -200,6 +200,7 @@ op_kind_cmd!(op_multi_axis_contour, "multi_axis_contour");
 op_kind_cmd!(op_flow, "flow");
 op_kind_cmd!(op_laser_cut, "laser_cut");
 op_kind_cmd!(op_laser_engrave, "laser_engrave");
+op_kind_cmd!(op_plasma_cut, "plasma_cut");
 op_kind_cmd!(op_turn_face, "turn_face");
 op_kind_cmd!(op_turn_profile, "turn_profile");
 op_kind_cmd!(op_turn_groove, "turn_groove");
@@ -255,9 +256,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.operation.turn_thread", "Turn Thread", op_turn_thread).at("MANUFACTURE", "TURNING").icon("cam").params(OP_PARAMS),
     CommandSpec::new("cam.operation.laser_cut", "Laser Cut", op_laser_cut).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
     CommandSpec::new("cam.operation.laser_engrave", "Laser Engrave", op_laser_engrave).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
+    CommandSpec::new("cam.operation.plasma_cut", "Plasma Cut", op_plasma_cut).at("MANUFACTURE", "LASER").icon("cam").params(OP_PARAMS),
     CommandSpec::new("cam.tool.add", "Add Tool", tool_add).at("MANUFACTURE", "SETUP")
         .icon("cam")
-        .params("name; kind: flat | ball | bull | chamfer | drill | spot | tapered_ball; diameter (mm); corner_radius? (bull); tip_angle_deg? (chamfer, drill, spot; default 90 / 118); tip_radius? and taper_angle_deg? (tapered_ball); number? (T word); flute_length?, overall_length?, shank_diameter?, holder_diameter?, flutes?; feeds?: {spindle_rpm, cutting, plunge, ramp, lead_in, lead_out, retract, clockwise, coolant: flood | mist | air | through_tool | off}: adds a tool to the design's library. Returns the tool with its id"),
+        .params("name; kind: flat | ball | bull | chamfer | drill | spot | tapered_ball | laser | plasma; diameter (mm; a plasma torch's kerf); pierce_height?, cut_height?, pierce_delay_s? (plasma; default 3.8 mm, 1.5 mm, 0.5 s); corner_radius? (bull); tip_angle_deg? (chamfer, drill, spot; default 90 / 118); tip_radius? and taper_angle_deg? (tapered_ball); number? (T word); flute_length?, overall_length?, shank_diameter?, holder_diameter?, flutes?; feeds?: {spindle_rpm, cutting, plunge, ramp, lead_in, lead_out, retract, clockwise, coolant: flood | mist | air | through_tool | off}: adds a tool to the design's library. Returns the tool with its id"),
     CommandSpec::new("cam.tool.kit", "Tool Kit", tool_kit)
         .at("MANUFACTURE", "SETUP")
         .icon("cam")
@@ -389,11 +391,16 @@ fn tool_kind(p: &Value, cmd: &str, current: Option<ToolKind>) -> Result<ToolKind
         "drill" => ToolKind::Drill { tip_angle_deg: tip(118.0) },
         "spot" | "spot_drill" | "center_drill" | "centre_drill" => ToolKind::SpotDrill { tip_angle_deg: tip(90.0) },
         "laser" | "laser_beam" | "diode" => ToolKind::Laser { wavelength_nm: num(p, "wavelength_nm").unwrap_or(445.0) },
+        "plasma" | "plasma_torch" | "torch" => ToolKind::Plasma {
+            pierce_height: num(p, "pierce_height").unwrap_or(3.8),
+            cut_height: num(p, "cut_height").unwrap_or(1.5),
+            pierce_delay_s: num(p, "pierce_delay_s").unwrap_or(0.5),
+        },
         "tapered_ball" | "taper_ball" | "tapered" => ToolKind::TaperedBall {
             tip_radius: num(p, "tip_radius").ok_or_else(|| bad(cmd, "a tapered ball tool needs `tip_radius`"))?,
             taper_angle_deg: num(p, "taper_angle_deg").unwrap_or(5.0),
         },
-        other => return Err(bad(cmd, format!("unknown tool kind `{other}`: flat | ball | bull | chamfer | drill | spot | tapered_ball | laser"))),
+        other => return Err(bad(cmd, format!("unknown tool kind `{other}`: flat | ball | bull | chamfer | drill | spot | tapered_ball | laser | plasma"))),
     })
 }
 
@@ -990,6 +997,7 @@ fn operation_from(p: &Value, cmd: &str, base: Value, setup: &Setup, tools: &cam:
         "flank" | "flank_milling" => "swarf".to_string(),
         "laser" | "laser_cutting" | "cut_laser" => "laser_cut".to_string(),
         "laser_engraving" | "laser_mark" | "laser_raster" | "engrave_laser" => "laser_engrave".to_string(),
+        "plasma" | "plasma_cutting" | "cut_plasma" | "torch_cut" => "plasma_cut".to_string(),
         "face_turning" | "turning_face" => "turn_face".to_string(),
         "turning" | "turn" | "od_turning" | "profile_turning" | "turning_profile" => "turn_profile".to_string(),
         "grooving" | "groove" | "turning_groove" | "part_off" => "turn_groove".to_string(),
@@ -1095,6 +1103,13 @@ fn operation_from(p: &Value, cmd: &str, base: Value, setup: &Setup, tools: &cam:
     }
     if !laser_op && tool.is_laser() {
         return Err(bad(cmd, format!("a {} operation needs a cutter; T{} {} is a laser", op.kind.type_name(), tool.number, tool.name)));
+    }
+    let plasma_op = matches!(op.kind, OpKind::PlasmaCut { .. });
+    if plasma_op && !tool.is_plasma() {
+        return Err(bad(cmd, format!("a plasma_cut operation needs a plasma torch (kind: plasma); T{} {} is not one", tool.number, tool.name)));
+    }
+    if !plasma_op && tool.is_plasma() {
+        return Err(bad(cmd, format!("a {} operation needs a cutter; T{} {} is a plasma torch", op.kind.type_name(), tool.number, tool.name)));
     }
     if !(op.tolerance.is_finite() && op.tolerance > 0.0 && op.tolerance <= 10.0) {
         return Err(bad(cmd, "`tolerance` must be between 0 and 10 mm"));
@@ -1694,6 +1709,7 @@ fn kind_description(name: &str) -> &'static str {
         "morph" => "3-axis passes morphed between two rails, following the surface (geometry: rails)",
         "laser_cut" => "laser cutting along curves with the kerf offset to a side, in passes (a laser tool; geometry: sketch, loops or faces)",
         "laser_engrave" => "laser engraving: raster fill of the regions inside the loops, then their outline (a laser tool)",
+        "plasma_cut" => "plasma cutting along curves: holes first, each pierced at the torch's pierce height after its delay, cut at its cut height, the kerf offset to a side (a plasma torch; geometry: sketch, loops or faces)",
         "turn_face" => "turning on the rotary axis: faces the part's end back to a position (4-axis machine)",
         "turn_profile" => "turning on the rotary axis: the model's profile along the axis, all the way round (4-axis machine)",
         "turn_groove" => "turning on the rotary axis: a groove at a position, of a width and depth (4-axis machine)",

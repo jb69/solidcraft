@@ -469,6 +469,51 @@ pub fn post_program(post: &Post, machine: &Machine, program_name: &str, ops: &[P
             w.last_xyz = None;
             w.last_g = None;
         }
+        if tp.plasma {
+            // Plasma: no tool change and no spindle. The torch fires (M3) where the first feed
+            // move of a cut starts (at the pierce height), the control waits the pierce delay,
+            // and it stops (M5) before the rapid that leaves the cut.
+            if prev_tool.is_some() {
+                w.line("M5");
+                if post.coolant {
+                    w.line("M9");
+                }
+                prev_tool = None;
+            }
+            w.comment("plasma: torch on M3, off M5; set Z0 on the sheet's top");
+            w.last_xyz = None;
+            w.last_g = None;
+            let mut torch = false;
+            let mut pierces = 0usize;
+            for m in &tp.moves {
+                if m.kind == MoveKind::Rapid {
+                    if torch {
+                        w.line("M5");
+                        torch = false;
+                    }
+                    w.motion("G0", m.to, None, None, None);
+                } else {
+                    if !torch {
+                        w.line("M3");
+                        if tp.pierce_s > 0.0 {
+                            let p = if post.dwell_seconds { post.num(tp.pierce_s) } else { ((tp.pierce_s * 1000.0).round() as i64).to_string() };
+                            w.line(&format!("G4 P{p}"));
+                        }
+                        torch = true;
+                        pierces += 1;
+                        w.last_g = None;
+                    }
+                    let feed = Some(machine.clamp_feed(if m.feed > 0.0 { m.feed } else { machine.rapid_feed }).0);
+                    w.motion("G1", m.to, None, feed, None);
+                }
+            }
+            if torch {
+                w.line("M5");
+            }
+            notice.value("pierces", pierces);
+            total_moves += tp.moves.len();
+            continue;
+        }
         if prev_tool != Some(op.tool.number) {
             if prev_tool.is_some() {
                 w.line("M5");
@@ -632,5 +677,6 @@ fn tool_kind_name(t: &Tool) -> &'static str {
         crate::tool::ToolKind::SpotDrill { .. } => "spot drill",
         crate::tool::ToolKind::TaperedBall { .. } => "tapered ball end mill",
         crate::tool::ToolKind::Laser { .. } => "laser",
+        crate::tool::ToolKind::Plasma { .. } => "plasma torch",
     }
 }

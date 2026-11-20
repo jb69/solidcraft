@@ -34,6 +34,19 @@ pub enum ToolKind {
         /// Wavelength, nm (445 for the blue diodes of desktop machines).
         wavelength_nm: f64,
     },
+    /// A plasma torch: the diameter is the kerf width, there is no body. It pierces at the
+    /// pierce height above the sheet, waits the pierce delay, then cuts at the cut height.
+    Plasma {
+        /// Torch height above the sheet's top while piercing, mm.
+        #[serde(default = "plasma_pierce_height")]
+        pierce_height: f64,
+        /// Torch height above the sheet's top while cutting, mm.
+        #[serde(default = "plasma_cut_height")]
+        cut_height: f64,
+        /// Wait at the pierce height after the torch fires, seconds.
+        #[serde(default = "plasma_pierce_delay")]
+        pierce_delay_s: f64,
+    },
     /// Tapered ball end mill (for deep 5-axis finishing).
     TaperedBall {
         /// Radius of the ball tip; the shank widens above it at the taper angle.
@@ -41,6 +54,16 @@ pub enum ToolKind {
         /// Half angle of the taper, in degrees.
         taper_angle_deg: f64,
     },
+}
+
+fn plasma_pierce_height() -> f64 {
+    3.8
+}
+fn plasma_cut_height() -> f64 {
+    1.5
+}
+fn plasma_pierce_delay() -> f64 {
+    0.5
 }
 
 /// Feeds and speeds for one tool. Feeds are mm/min; spindle speed is rev/min.
@@ -143,7 +166,12 @@ impl Tool {
     /// Corner radius of the profile: 0 for a flat tool, the radius for a ball.
     pub fn corner_radius(&self) -> f64 {
         match self.kind {
-            ToolKind::FlatEnd | ToolKind::Chamfer { .. } | ToolKind::Drill { .. } | ToolKind::SpotDrill { .. } | ToolKind::Laser { .. } => 0.0,
+            ToolKind::FlatEnd
+            | ToolKind::Chamfer { .. }
+            | ToolKind::Drill { .. }
+            | ToolKind::SpotDrill { .. }
+            | ToolKind::Laser { .. }
+            | ToolKind::Plasma { .. } => 0.0,
             ToolKind::BallEnd => self.radius(),
             ToolKind::BullNose { corner_radius } => corner_radius.clamp(0.0, self.radius()),
             ToolKind::TaperedBall { tip_radius, .. } => tip_radius.clamp(0.0, self.radius()),
@@ -162,7 +190,7 @@ impl Tool {
         let r = self.radius();
         let rho = rho.clamp(0.0, r);
         match self.kind {
-            ToolKind::Laser { .. } => 0.0,
+            ToolKind::Laser { .. } | ToolKind::Plasma { .. } => 0.0,
             ToolKind::Chamfer { tip_angle_deg } | ToolKind::Drill { tip_angle_deg } | ToolKind::SpotDrill { tip_angle_deg } => {
                 let half = (tip_angle_deg.clamp(1.0, 179.0) * 0.5).to_radians();
                 rho / half.tan()
@@ -202,6 +230,10 @@ impl Tool {
         matches!(self.kind, ToolKind::Laser { .. })
     }
 
+    pub fn is_plasma(&self) -> bool {
+        matches!(self.kind, ToolKind::Plasma { .. })
+    }
+
     /// Checks the tool's numbers.
     pub fn validate(&self) -> Result<()> {
         positive("tool diameter", self.diameter)?;
@@ -237,6 +269,17 @@ impl Tool {
                     return Err(CamError::Param("the laser's wavelength must be positive".into()));
                 }
             }
+            ToolKind::Plasma { pierce_height, cut_height, pierce_delay_s } => {
+                if !(cut_height.is_finite() && cut_height > 0.0 && cut_height <= 50.0) {
+                    return Err(CamError::Param("the torch's cut height must be above 0 and at most 50 mm".into()));
+                }
+                if !(pierce_height.is_finite() && pierce_height >= cut_height && pierce_height <= 50.0) {
+                    return Err(CamError::Param("the torch's pierce height must be at least its cut height and at most 50 mm".into()));
+                }
+                if !(pierce_delay_s.is_finite() && (0.0..=10.0).contains(&pierce_delay_s)) {
+                    return Err(CamError::Param("the pierce delay must be 0 to 10 seconds".into()));
+                }
+            }
             ToolKind::FlatEnd | ToolKind::BallEnd => {}
         }
         let f = &self.feeds;
@@ -259,7 +302,7 @@ impl Tool {
     /// The tip's effective cutting radius at height `h` above the tip (the shank above the
     /// flutes, the holder above the stick-out), for collision checks.
     pub fn radius_at(&self, h: f64) -> f64 {
-        if h < 0.0 || matches!(self.kind, ToolKind::Laser { .. }) {
+        if h < 0.0 || matches!(self.kind, ToolKind::Laser { .. } | ToolKind::Plasma { .. }) {
             return 0.0;
         }
         if h <= self.flute_length {

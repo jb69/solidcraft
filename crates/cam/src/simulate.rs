@@ -482,8 +482,8 @@ pub fn simulate(
     // The columns this run cuts: a surface is uncut only where the run's tools came down.
     let start_z = stock.map.z.clone();
     let mut rep = SimulationReport::default();
-    if tp.laser {
-        // A laser marks or cuts through; the Z-map stock does not model either.
+    if tp.laser || tp.plasma {
+        // A laser or a plasma torch marks or cuts through; the Z-map stock does not model either.
         rep.remaining_volume_mm3 = before;
         return Ok(rep);
     }
@@ -856,7 +856,7 @@ impl Simulator {
                 let a = from_pt.lerp(m.to, f0);
                 let b = from_pt.lerp(m.to, f1);
                 let vertical = (m.axis - Vec3::new(0.0, 0.0, 1.0)).len() < 1e-6;
-                if vertical && !op.toolpath.laser && m.kind != MoveKind::Rapid && !(m.kind == MoveKind::Retract && m.feed <= 0.0) {
+                if vertical && !op.toolpath.laser && !op.toolpath.plasma && m.kind != MoveKind::Rapid && !(m.kind == MoveKind::Retract && m.feed <= 0.0) {
                     self.stock.cut(&op.tool, a, b);
                 }
                 self.tip = b;

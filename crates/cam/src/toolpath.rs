@@ -76,6 +76,13 @@ pub struct Toolpath {
     /// Air assist on for a laser program.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub air: bool,
+    /// A plasma program: the post fires the torch (M3) before each cut's first feed move,
+    /// waits `pierce_s`, and stops it (M5) before each rapid; the stock simulation leaves it alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plasma: bool,
+    /// Pierce delay of a plasma program, seconds.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pierce_s: f64,
 }
 
 /// A drilling cycle at one hole, for posts that emit canned cycles.
@@ -220,6 +227,8 @@ impl Toolpath {
             cycles: self.cycles.iter().map(|c| DrillCycle { top: f(c.top), axis: g(c.axis), ..*c }).collect(),
             laser: self.laser,
             air: self.air,
+            plasma: self.plasma,
+            pierce_s: self.pierce_s,
         }
     }
 
